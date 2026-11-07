@@ -1,0 +1,57 @@
+# Builds the Windows installers (.exe NSIS + .msi) for this fork and uploads
+# them as workflow artifacts. Manual trigger only.
+#
+# Differences from upstream release.yml, on purpose:
+# - Windows only (no macOS/Linux legs, no draft release, no SignPath).
+# - No updater artifacts: this fork has no updater private key (the public key
+#   in tauri.conf.json belongs to upstream), so the build overrides
+#   bundle.createUpdaterArtifacts to false instead of changing tauri.conf.json.
+# - No code signing: the installers are unsigned, so Windows SmartScreen will
+#   warn on first install ("More info" -> "Run anyway").
+
+name: Build Windows
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          key: windows
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri app (no updater artifacts)
+        shell: bash
+        run: pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: terax-windows-nsis
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Upload MSI installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: terax-windows-msi
+          path: src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
