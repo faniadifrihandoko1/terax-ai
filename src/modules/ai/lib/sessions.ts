@@ -2,6 +2,8 @@ import type { UIMessage } from "@ai-sdk/react";
 import { invoke } from "@tauri-apps/api/core";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { toast } from "sonner";
+import type { PersistedReviewState } from "./reviewPersistence";
+import { parseReviewState } from "./reviewPersistence";
 
 export type SessionMeta = {
   id: string;
@@ -14,6 +16,8 @@ const STORE_PATH = "terax-ai-sessions.json";
 const KEY_SESSIONS = "sessions";
 const KEY_ACTIVE = "activeId";
 const LEGACY_PREFIX = "messages:";
+const REVIEW_PREFIX = "review:";
+const reviewKey = (id: string) => `${REVIEW_PREFIX}${id}`;
 /** A pre-migration copy older than this, with nothing left to migrate, goes. */
 const LEFTOVER_BACKUP_MAX_AGE_SECS = 7 * 24 * 60 * 60;
 const DEFAULT_FLUSH_TIMEOUT_MS = 5_000;
@@ -157,6 +161,8 @@ async function execute(id: string, op: WriteOp): Promise<void> {
   await invoke("ai_session_delete", { id });
   const legacyKey = `${LEGACY_PREFIX}${id}`;
   if (await store.has(legacyKey)) await store.delete(legacyKey);
+  // FR-10: the review state belongs to the session; it goes with it.
+  if (await store.has(reviewKey(id))) await store.delete(reviewKey(id));
 }
 
 function reportFailure(id: string, error: unknown) {
@@ -255,6 +261,47 @@ export async function saveSessionsList(sessions: SessionMeta[]): Promise<void> {
 
 export async function saveActiveId(id: string | null): Promise<void> {
   await serial("$metadata", () => store.set(KEY_ACTIVE, id));
+}
+
+// --- FR-10: per-line review state ------------------------------------------
+// Stored in the same LazyStore as the session metadata, under `review:<id>`.
+// Only the review progress is stored (open proposals, status, line
+// decisions); the reviewed contents are re-derived from the chat messages
+// by the bridge on restore, exactly like on first open.
+
+/** Saves the review state for a session. Invalid ids are ignored. */
+export async function saveReviewState(
+  sessionId: string,
+  state: PersistedReviewState,
+): Promise<void> {
+  if (!VALID_ID.test(sessionId)) return;
+  await serial("$metadata", () => store.set(reviewKey(sessionId), state));
+}
+
+/**
+ * `null` when nothing was stored, or the stored value is not a valid review
+ * state. A damaged entry is dropped (and warned about once) so it cannot
+ * block future saves.
+ */
+export async function loadReviewState(
+  sessionId: string,
+): Promise<PersistedReviewState | null> {
+  if (!VALID_ID.test(sessionId)) return null;
+  const raw = await serial("$metadata", () => store.get(reviewKey(sessionId)));
+  const parsed = parseReviewState(raw);
+  if (raw !== undefined && parsed === null) {
+    await serial("$metadata", () => store.delete(reviewKey(sessionId)));
+    toast.warning("Saved AI review state was damaged", {
+      id: `review-damaged:${sessionId}`,
+      description: "The pending reviews for this session start empty.",
+    });
+  }
+  return parsed;
+}
+
+export async function deleteReviewState(sessionId: string): Promise<void> {
+  if (!VALID_ID.test(sessionId)) return;
+  await serial("$metadata", () => store.delete(reviewKey(sessionId)));
 }
 
 /**
