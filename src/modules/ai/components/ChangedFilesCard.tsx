@@ -20,6 +20,7 @@ import {
   type FileMutation,
   type ToolPartLike,
 } from "../lib/fileMutations";
+import { getCheckpoint } from "../lib/reviewCheckpoint";
 import { useChatStore } from "../store/chatStore";
 
 type AnyPart = UIMessagePart<Record<string, never>, Record<string, never>>;
@@ -28,7 +29,9 @@ export type ChangedFileEntry = {
   key: string;
   path: string;
   approvalId: string | null;
-  kind: "write_file" | "edit" | "multi_edit";
+  kind: "write_file" | "edit" | "multi_edit" | "delete_file" | "rename_file";
+  /** Rename destination. Only set for rename_file entries. */
+  targetPath?: string;
   editCount: number;
   mutation: FileMutation;
   status: AiDiffStatus;
@@ -38,6 +41,9 @@ type Props = {
   parts: AnyPart[];
   reviewStatusByApproval?: Map<string, AiDiffStatus>;
   onOpenFileDiff?: (approvalId: string) => void;
+  /** Approval ids with a checkpoint, so their Restore button can show. */
+  restorableApprovals?: ReadonlySet<string>;
+  onRestoreFile?: (approvalId: string) => void;
 };
 
 /**
@@ -52,6 +58,8 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
   parts,
   reviewStatusByApproval,
   onOpenFileDiff,
+  restorableApprovals,
+  onRestoreFile,
 }: Props) {
   const entries = useMemo(
     () => buildEntries(parts, reviewStatusByApproval),
@@ -60,7 +68,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
   if (entries.length === 0) return null;
 
   const allResolved = entries.every((e) =>
-    ["applied", "rejected", "conflict"].includes(e.status),
+    ["applied", "rejected", "conflict", "restored"].includes(e.status),
   );
 
   return (
@@ -108,6 +116,12 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
               key={entry.key}
               entry={entry}
               onOpenFileDiff={onOpenFileDiff}
+              restorable={
+                entry.approvalId !== null &&
+                entry.status === "applied" &&
+                restorableApprovals?.has(entry.approvalId)
+              }
+              onRestoreFile={onRestoreFile}
             />
           ))}
         </ul>
@@ -119,12 +133,18 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
 const ChangedFileRow = memo(function ChangedFileRow({
   entry,
   onOpenFileDiff,
+  restorable,
+  onRestoreFile,
 }: {
   entry: ChangedFileEntry;
   onOpenFileDiff?: (approvalId: string) => void;
+  restorable?: boolean;
+  onRestoreFile?: (approvalId: string) => void;
 }) {
   const { stats, failed } = useChangedFileStats(entry);
   const clickable = entry.approvalId !== null && onOpenFileDiff !== undefined;
+  const isFileOp =
+    entry.kind === "delete_file" || entry.kind === "rename_file";
   const row = (
     <>
       <HugeiconsIcon
@@ -134,17 +154,31 @@ const ChangedFileRow = memo(function ChangedFileRow({
         className="shrink-0 opacity-60"
       />
       <span className="truncate font-medium text-foreground">
-        {basename(entry.path)}
+        {entry.kind === "rename_file" && entry.targetPath
+          ? `${basename(entry.path)} → ${basename(entry.targetPath)}`
+          : basename(entry.path)}
       </span>
       <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground opacity-60">
-        {entry.path}
+        {entry.kind === "rename_file" && entry.targetPath
+          ? `${entry.path} → ${entry.targetPath}`
+          : entry.path}
       </span>
-      {entry.kind !== "write_file" ? (
+      {!isFileOp && entry.kind !== "write_file" ? (
         <span className="shrink-0 text-[10.5px] text-muted-foreground">
           {entry.editCount} edit{entry.editCount === 1 ? "" : "s"}
         </span>
       ) : null}
-      {stats?.isNewFile ? (
+      {entry.kind === "delete_file" ? (
+        <span className="shrink-0 rounded-full border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-rose-700 dark:text-rose-300">
+          Deleted
+        </span>
+      ) : null}
+      {entry.kind === "rename_file" ? (
+        <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-300">
+          Renamed
+        </span>
+      ) : null}
+      {stats?.isNewFile && entry.kind !== "delete_file" ? (
         <span className="shrink-0 rounded-full border border-border/60 bg-accent/40 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
           New file
         </span>
@@ -171,28 +205,41 @@ const ChangedFileRow = memo(function ChangedFileRow({
       </Badge>
     </>
   );
+  const restoreButton =
+    restorable && entry.approvalId !== null && onRestoreFile ? (
+      <button
+        type="button"
+        onClick={() => onRestoreFile(entry.approvalId as string)}
+        title="Undo this apply: write back the content from before it"
+        className="shrink-0 rounded-md border border-border/60 px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        Restore
+      </button>
+    ) : null;
 
   if (!clickable) {
     return (
       <li className="flex items-center gap-1.5 rounded-md px-1 py-1 font-mono text-[11px] text-muted-foreground">
         {row}
+        {restoreButton}
       </li>
     );
   }
   return (
-    <li>
+    <li className="flex items-center gap-1">
       <button
         type="button"
         onClick={() => onOpenFileDiff(entry.approvalId as string)}
         title={`Review ${entry.path}`}
         className={cn(
-          "flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left font-mono text-[11px] text-muted-foreground",
+          "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left font-mono text-[11px] text-muted-foreground",
           "transition-colors hover:bg-muted/50",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         )}
       >
         {row}
       </button>
+      {restoreButton}
     </li>
   );
 });
@@ -238,20 +285,50 @@ function useChangedFileStats(entry: ChangedFileEntry) {
       const abs = resolveMutationPath(entry.path, live.getCwd());
       const original = await readOriginal(abs);
       if (cancelled) return;
-      const r = deriveProposed(original.content, entry.mutation.derive);
+      let content = original.content;
+      let isNewFile = original.isNewFile;
+      // An applied delete leaves nothing on disk at the old path; the
+      // checkpoint still holds what was removed, so stats come from it.
+      if (entry.kind === "delete_file" && entry.approvalId) {
+        const cp = getCheckpoint(entry.approvalId);
+        if (cp && cp.kind === "delete") {
+          content = cp.contentBefore;
+          isNewFile = false;
+        }
+      }
+      // An applied rename leaves nothing at the old path either; the
+      // content now lives at the target.
+      if (entry.kind === "rename_file" && entry.targetPath) {
+        const target = await readOriginal(
+          resolveMutationPath(entry.targetPath, live.getCwd()),
+        );
+        if (cancelled) return;
+        if (!target.isNewFile) {
+          content = target.content;
+          isNewFile = false;
+        }
+      }
+      const r = deriveProposed(content, entry.mutation.derive);
       if (!r.ok) {
         setFailed(true);
         return;
       }
       setStats({
-        ...computeLineStats(original.content, r.content),
-        isNewFile: original.isNewFile,
+        ...computeLineStats(content, r.content),
+        isNewFile,
       });
     })();
     return () => {
       cancelled = true;
     };
-  }, [entry.path, entry.mutation, live]);
+  }, [
+    entry.path,
+    entry.kind,
+    entry.targetPath,
+    entry.approvalId,
+    entry.mutation,
+    live,
+  ]);
 
   return { stats, failed };
 }
@@ -274,7 +351,11 @@ function buildEntries(
         ? "write_file"
         : type === "tool-edit"
           ? "edit"
-          : "multi_edit";
+          : type === "tool-multi_edit"
+            ? "multi_edit"
+            : type === "tool-delete_file"
+              ? "delete_file"
+              : "rename_file";
     const editCount =
       mutation.derive.kind === "edits" ? mutation.derive.edits.length : 1;
     out.push({
@@ -282,6 +363,9 @@ function buildEntries(
       path: mutation.path,
       approvalId: mutation.approvalId,
       kind,
+      ...(mutation.derive.kind === "rename"
+        ? { targetPath: mutation.derive.to }
+        : {}),
       editCount,
       mutation,
       status: mutation.approvalId

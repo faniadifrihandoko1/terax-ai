@@ -5,19 +5,27 @@ import { AiDiffPane } from "./AiDiffPane";
 type Props = {
   tabs: Tab[];
   activeId: number;
+  /** Owning session, stamped on checkpoints for session-delete cleanup. */
+  sessionId?: string;
   onSetStatus: (approvalId: string, status: AiDiffStatus) => void;
   onSetHunkDecision: (
     approvalId: string,
     hunkIndex: number,
     decision: HunkDecision,
   ) => void;
+  onSetFileDecision: (
+    approvalId: string,
+    decision: "accepted" | "rejected" | "undecided",
+  ) => void;
 };
 
 export function AiDiffStack({
   tabs,
   activeId,
+  sessionId,
   onSetStatus,
   onSetHunkDecision,
+  onSetFileDecision,
 }: Props) {
   const active = tabs.find(
     (t): t is AiDiffTab => t.kind === "ai-diff" && t.id === activeId,
@@ -33,9 +41,16 @@ export function AiDiffStack({
         status={active.status}
         isNewFile={active.isNewFile}
         approvalId={active.approvalId}
+        sessionId={sessionId}
+        mutationKind={active.mutationKind}
+        targetPath={active.targetPath}
+        fileDecision={active.fileDecision}
         hunkDecisions={active.hunkDecisions}
         onSetHunkDecision={(hunkIndex, decision) =>
           onSetHunkDecision(active.approvalId, hunkIndex, decision)
+        }
+        onSetFileDecision={(decision) =>
+          onSetFileDecision(active.approvalId, decision)
         }
         onSetStatus={(status) => onSetStatus(active.approvalId, status)}
       />

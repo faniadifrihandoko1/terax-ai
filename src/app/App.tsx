@@ -5,6 +5,7 @@ import {
 } from "@/components/ui/resizable";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { toast } from "sonner";
 import { consumeLaunchFiles, getLaunchDir } from "@/lib/launchDir";
 import { IS_MAC } from "@/lib/platform";
 import { quoteShellArg } from "@/lib/shellQuote";
@@ -30,7 +31,11 @@ import {
 } from "@/modules/ai";
 import { saveReviewState } from "@/modules/ai/lib/sessions";
 import { snapshotReviewState } from "@/modules/ai/lib/reviewPersistence";
-import { listCheckpoints } from "@/modules/ai/lib/reviewCheckpoint";
+import {
+  getCheckpoint,
+  listCheckpoints,
+  restoreCheckpoint,
+} from "@/modules/ai/lib/reviewCheckpoint";
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
@@ -186,6 +191,7 @@ export default function App() {
     activateAiDiffTab,
     setAiDiffStatus,
     setAiDiffHunkDecision,
+    setAiDiffFileDecision,
     openGitDiffTab,
     openCommitHistoryTab,
     openCommitFileDiffTab,
@@ -401,6 +407,24 @@ export default function App() {
     return m;
   }, [tabs]);
 
+  // Fase 5: approval ids whose applied file can be restored from its
+  // checkpoint, for the Restore button on the Changed Files card. The
+  // memo re-runs when tabs change, which is also when a checkpoint is
+  // saved (apply) or consumed (restore), so it never goes stale.
+  const restorableApprovals = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of tabs) {
+      if (
+        t.kind === "ai-diff" &&
+        t.status === "applied" &&
+        getCheckpoint(t.approvalId) !== undefined
+      ) {
+        s.add(t.approvalId);
+      }
+    }
+    return s;
+  }, [tabs]);
+
   // FR-02: a click on a file in the Changed Files card brings its review
   // forward and marks the file as being reviewed. With inline review on,
   // Review opens the file in the editor at its first undecided hunk
@@ -425,6 +449,31 @@ export default function App() {
       }
     },
     [activateAiDiffTab, aiReviewInline, openFileTab, setAiDiffStatus, tabs],
+  );
+
+  // Fase 5: Restore from the Changed Files card. The guarded restore
+  // refuses when the file changed since the apply; the user can still
+  // force-restore from the ai-diff tab, where the choice is explicit.
+  const handleRestoreFile = useCallback(
+    async (approvalId: string) => {
+      const result = await restoreCheckpoint(approvalId, {});
+      if (result.outcome === "restored") {
+        setAiDiffStatus(approvalId, "restored");
+        toast.success("File restored to its state before the apply");
+      } else if (result.outcome === "conflict") {
+        toast.error("Restore refused: file changed since the apply", {
+          description:
+            "Open the file from the Changed Files card to restore anyway.",
+        });
+      } else if (result.outcome === "restore-failed") {
+        toast.error("Restore failed", { description: result.reason });
+      } else {
+        toast.error("Restore failed", {
+          description: "No checkpoint for this file.",
+        });
+      }
+    },
+    [setAiDiffStatus],
   );
 
   const { hasComposer, keysLoaded } = useAiBootstrap();
@@ -1610,6 +1659,8 @@ export default function App() {
                         onPreviewUrlChange={handlePreviewUrl}
                         onSetAiDiffStatus={setAiDiffStatus}
                         onSetAiDiffHunkDecision={setAiDiffHunkDecision}
+                        onSetAiDiffFileDecision={setAiDiffFileDecision}
+                        aiDiffSessionId={activeSessionId ?? undefined}
                         aiReviewInline={aiReviewInline}
                         onOpenCommitFile={openCommitFileDiffTab}
                         onGitHistorySearchHandle={setGitHistoryHandle}
@@ -1679,6 +1730,8 @@ export default function App() {
               state={miniPresence.state}
               onOpenFileDiff={handleOpenFileDiff}
               reviewStatusByApproval={reviewStatusByApproval}
+              restorableApprovals={restorableApprovals}
+              onRestoreFile={handleRestoreFile}
             />
           ) : null}
           {askPresence.mounted ? (

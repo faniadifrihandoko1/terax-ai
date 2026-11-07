@@ -188,6 +188,8 @@ type Props = {
   stop: () => void | PromiseLike<void>;
   onOpenFileDiff?: (approvalId: string) => void;
   reviewStatusByApproval?: Map<string, AiDiffStatus>;
+  restorableApprovals?: ReadonlySet<string>;
+  onRestoreFile?: (approvalId: string) => void;
 };
 
 export function AiChatView({
@@ -198,6 +200,8 @@ export function AiChatView({
   addToolApprovalResponse,
   onOpenFileDiff,
   reviewStatusByApproval,
+  restorableApprovals,
+  onRestoreFile,
 }: Props) {
   const isBusy = status === "submitted" || status === "streaming";
   const lastMessage = messages[messages.length - 1];
@@ -243,6 +247,8 @@ export function AiChatView({
             deferOffscreen={i < messages.length - LIVE_TAIL_MESSAGES}
             onOpenFileDiff={onOpenFileDiff}
             reviewStatusByApproval={reviewStatusByApproval}
+            restorableApprovals={restorableApprovals}
+            onRestoreFile={onRestoreFile}
           />
         ))}
         {compactionNotice && (
@@ -349,6 +355,8 @@ const RenderedMessage = memo(function RenderedMessage({
   deferOffscreen,
   onOpenFileDiff,
   reviewStatusByApproval,
+  restorableApprovals,
+  onRestoreFile,
 }: {
   message: UIMessage;
   onApproval: (id: string, approved: boolean) => void;
@@ -356,6 +364,8 @@ const RenderedMessage = memo(function RenderedMessage({
   deferOffscreen: boolean;
   onOpenFileDiff?: (approvalId: string) => void;
   reviewStatusByApproval?: Map<string, AiDiffStatus>;
+  restorableApprovals?: ReadonlySet<string>;
+  onRestoreFile?: (approvalId: string) => void;
 }) {
   const deferProps = deferOffscreen
     ? {
@@ -420,6 +430,8 @@ const RenderedMessage = memo(function RenderedMessage({
                     parts={g.parts}
                     reviewStatusByApproval={reviewStatusByApproval}
                     onOpenFileDiff={onOpenFileDiff}
+                    restorableApprovals={restorableApprovals}
+                    onRestoreFile={onRestoreFile}
                   />
                 </PartAppear>
               );

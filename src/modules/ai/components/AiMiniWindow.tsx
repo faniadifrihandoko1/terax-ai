@@ -69,10 +69,14 @@ export function AiMiniWindow({
   state,
   onOpenFileDiff,
   reviewStatusByApproval,
+  restorableApprovals,
+  onRestoreFile,
 }: {
   state: PresenceState;
   onOpenFileDiff?: (approvalId: string) => void;
   reviewStatusByApproval?: Map<string, AiDiffStatus>;
+  restorableApprovals?: ReadonlySet<string>;
+  onRestoreFile?: (approvalId: string) => void;
 }) {
   const closeMini = useChatStore((s) => s.closeMini);
   const sessionId = useChatStore((s) => s.activeSessionId);
@@ -127,6 +131,8 @@ export function AiMiniWindow({
           onHeaderPointerDown={onHeaderPointerDown}
           onOpenFileDiff={onOpenFileDiff}
           reviewStatusByApproval={reviewStatusByApproval}
+          restorableApprovals={restorableApprovals}
+          onRestoreFile={onRestoreFile}
         />
       ) : (
         <EmptyShell
@@ -176,6 +182,8 @@ function Body({
   onHeaderPointerDown,
   onOpenFileDiff,
   reviewStatusByApproval,
+  restorableApprovals,
+  onRestoreFile,
 }: {
   sessionId: string;
   onClose: () => void;
@@ -183,6 +191,8 @@ function Body({
   onHeaderPointerDown: (e: React.PointerEvent) => void;
   onOpenFileDiff?: (approvalId: string) => void;
   reviewStatusByApproval?: Map<string, AiDiffStatus>;
+  restorableApprovals?: ReadonlySet<string>;
+  onRestoreFile?: (approvalId: string) => void;
 }) {
   const focusInput = useChatStore((s) => s.focusInput);
   const step = useChatStore((s) => s.agentMeta.step);
@@ -219,6 +229,8 @@ function Body({
               stop={helpers.stop}
               onOpenFileDiff={onOpenFileDiff}
               reviewStatusByApproval={reviewStatusByApproval}
+              restorableApprovals={restorableApprovals}
+              onRestoreFile={onRestoreFile}
             />
           </div>
         )}

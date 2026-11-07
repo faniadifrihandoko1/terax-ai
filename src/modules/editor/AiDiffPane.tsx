@@ -7,13 +7,19 @@ import {
   AI_DIFF_STATUS_LABEL,
 } from "@/modules/tabs/lib/aiDiffStatus";
 import {
+  applyReviewedDelete,
   applyReviewedEdit,
+  applyReviewedRename,
   checkDiskConflict,
   defaultReviewApplyIo,
   discardReviewedProposal,
   type HunkDecision,
   type HunkDecisions,
 } from "@/modules/ai/lib/reviewApply";
+import {
+  getCheckpoint,
+  restoreCheckpoint,
+} from "@/modules/ai/lib/reviewCheckpoint";
 import {
   clearReviewHistory,
   reviewHistoryFor,
@@ -60,8 +66,19 @@ type Props = {
   status: AiDiffStatus;
   isNewFile: boolean;
   approvalId: string;
+  /** Owning session, stamped on checkpoints for session-delete cleanup. */
+  sessionId?: string;
+  /** Delete/rename proposal (Fase 5). Defaults to "edit". */
+  mutationKind: "edit" | "delete" | "rename";
+  /** Rename destination. Only set when mutationKind is "rename". */
+  targetPath?: string;
+  /** Per-file decision for delete/rename proposals. Absent = undecided. */
+  fileDecision?: "accepted" | "rejected";
   hunkDecisions: Record<number, HunkDecision>;
   onSetHunkDecision: (hunkIndex: number, decision: HunkDecision) => void;
+  onSetFileDecision: (
+    decision: "accepted" | "rejected" | "undecided",
+  ) => void;
   onSetStatus: (status: AiDiffStatus) => void;
 };
 
@@ -117,8 +134,13 @@ export function AiDiffPane({
   status,
   isNewFile,
   approvalId,
+  sessionId,
+  mutationKind,
+  targetPath,
+  fileDecision,
   hunkDecisions,
   onSetHunkDecision,
+  onSetFileDecision,
   onSetStatus,
 }: Props) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
@@ -196,11 +218,18 @@ export function AiDiffPane({
   // --- Review state --------------------------------------------------------
   const reviewable =
     status === "pending" || status === "reviewing" || status === "done";
+  // Delete/rename proposals (Fase 5) have no hunks: the whole file is one
+  // decision, and the merge view below only shows what would be lost.
+  const isFileOp = mutationKind !== "edit";
   const [reviewOpen, setReviewOpen] = useState(true);
   const [showPreview, setShowPreview] = useState(false);
   const [applying, setApplying] = useState(false);
   const [conflict, setConflict] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreConflict, setRestoreConflict] = useState<string | null>(null);
+  const restorable =
+    status === "applied" && getCheckpoint(approvalId) !== undefined;
   const [focusedHunk, setFocusedHunk] = useState<number | null>(null);
   const rowRefs = useRef(new Map<number, HTMLDivElement>());
   // Bumped on every record/undo/redo so the Undo/Redo buttons re-render.
@@ -214,8 +243,10 @@ export function AiDiffPane({
   // Keep the file status in step with the decisions: first decision moves
   // pending to reviewing, the last one moves it to done. Never moves it
   // backwards past reviewing (the card may have set reviewing already).
+  // File operations (Fase 5) have no hunks; their decision sync lives in
+  // decideFile instead.
   useEffect(() => {
-    if (!reviewable || counts.total === 0) return;
+    if (isFileOp || !reviewable || counts.total === 0) return;
     if (counts.decided === counts.total && status !== "done") {
       onSetStatus("done");
     } else if (counts.decided > 0 && status === "pending") {
@@ -223,7 +254,7 @@ export function AiDiffPane({
     } else if (counts.decided < counts.total && status === "done") {
       onSetStatus("reviewing");
     }
-  }, [counts.decided, counts.total, status, reviewable, onSetStatus]);
+  }, [counts.decided, counts.total, status, reviewable, onSetStatus, isFileOp]);
 
   // Re-highlight the preview's decided lines whenever the reconstruction
   // changes (the doc may have shifted under the old decorations).
@@ -302,16 +333,63 @@ export function AiDiffPane({
   };
 
   const handleApply = async () => {
-    if (!allDecided || applying || status === "conflict") return;
+    if (applying || status === "conflict") return;
+    if (isFileOp) {
+      if (!fileDecision) return;
+      setApplying(true);
+      setApplyError(null);
+      try {
+        if (fileDecision === "rejected") {
+          discardReviewedProposal(approvalId);
+          onSetStatus("rejected");
+          return;
+        }
+        const result =
+          mutationKind === "delete"
+            ? await applyReviewedDelete({
+                approvalId,
+                sessionId,
+                path,
+                originalContent,
+              })
+            : await applyReviewedRename({
+                approvalId,
+                sessionId,
+                path,
+                targetPath: targetPath ?? path,
+                originalContent,
+              });
+        if (result.outcome === "applied") {
+          onSetStatus("applied");
+        } else if (result.outcome === "conflict") {
+          setConflict(result.reason);
+          onSetStatus("conflict");
+        } else if (
+          result.outcome === "not-writable" ||
+          result.outcome === "write-failed"
+        ) {
+          setApplyError(result.reason);
+        }
+      } finally {
+        setApplying(false);
+      }
+      return;
+    }
+    if (!allDecided) return;
     setApplying(true);
     setApplyError(null);
     try {
+      const acceptedHunks = [...decisions.entries()]
+        .filter(([, d]) => d === "accepted")
+        .map(([i]) => i);
       const result = await applyReviewedEdit({
         approvalId,
+        sessionId,
         path,
         isNewFile,
         originalContent,
         reconstructedContent: reconstruction.content,
+        appliedHunks: acceptedHunks,
       });
       if (result.outcome === "applied") {
         clearReviewHistory(approvalId);
@@ -327,6 +405,42 @@ export function AiDiffPane({
       }
     } finally {
       setApplying(false);
+    }
+  };
+
+  // --- Fase 5: per-file decision for delete/rename -------------------------
+  // Clicking the same decision again clears it, like the hunk buttons.
+  // A decision moves the file to done; clearing it moves it back to
+  // reviewing so the card reflects that work is left.
+  const decideFile = (decision: "accepted" | "rejected") => {
+    if (!reviewable) return;
+    const next = fileDecision === decision ? "undecided" : decision;
+    onSetFileDecision(next);
+    if (next === "undecided") {
+      if (status === "done") onSetStatus("reviewing");
+    } else {
+      onSetStatus("done");
+    }
+  };
+
+  const handleRestore = async (force: boolean) => {
+    if (restoring) return;
+    setRestoring(true);
+    setApplyError(null);
+    try {
+      const result = await restoreCheckpoint(approvalId, { force });
+      if (result.outcome === "restored") {
+        setRestoreConflict(null);
+        onSetStatus("restored");
+      } else if (result.outcome === "conflict") {
+        setRestoreConflict(result.reason);
+      } else if (result.outcome === "restore-failed") {
+        setApplyError(result.reason);
+      } else {
+        setApplyError("No checkpoint for this file.");
+      }
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -397,27 +511,117 @@ export function AiDiffPane({
               New file
             </span>
           ) : null}
+          {mutationKind === "delete" ? (
+            <span className="shrink-0 rounded-full border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-rose-700 dark:text-rose-300">
+              Deleted
+            </span>
+          ) : null}
+          {mutationKind === "rename" ? (
+            <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-300">
+              Renamed
+            </span>
+          ) : null}
           <span
             className="truncate font-mono text-[11px] text-muted-foreground"
-            title={path}
+            title={
+              mutationKind === "rename" && targetPath
+                ? `${path} → ${targetPath}`
+                : path
+            }
           >
-            {path}
+            {mutationKind === "rename" && targetPath
+              ? `${path} → ${targetPath}`
+              : path}
           </span>
-          <span className="flex shrink-0 items-center gap-1.5 text-[10.5px] tabular-nums">
-            <span className="text-emerald-600 dark:text-emerald-400">
-              +{stats.added}
+          {mutationKind !== "rename" ? (
+            <span className="flex shrink-0 items-center gap-1.5 text-[10.5px] tabular-nums">
+              <span className="text-emerald-600 dark:text-emerald-400">
+                +{stats.added}
+              </span>
+              <span className="text-rose-600 dark:text-rose-400">
+                −{stats.removed}
+              </span>
             </span>
-            <span className="text-rose-600 dark:text-rose-400">
-              −{stats.removed}
-            </span>
-          </span>
-          {counts.total > 0 ? (
+          ) : null}
+          {!isFileOp && counts.total > 0 ? (
             <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
               {counts.decided}/{counts.total} decided
             </span>
           ) : null}
         </div>
-        {reviewable && counts.total > 0 ? (
+        {reviewable && isFileOp ? (
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              size="sm"
+              variant={fileDecision === "accepted" ? "default" : "ghost"}
+              onClick={() => decideFile("accepted")}
+              className="h-7 gap-1"
+              title={
+                fileDecision === "accepted"
+                  ? "Accepted, click to clear"
+                  : mutationKind === "delete"
+                    ? "Accept deleting this file"
+                    : "Accept renaming this file"
+              }
+            >
+              <HugeiconsIcon icon={Tick02Icon} size={13} strokeWidth={2} />
+              Accept
+            </Button>
+            <Button
+              size="sm"
+              variant={fileDecision === "rejected" ? "default" : "ghost"}
+              onClick={() => decideFile("rejected")}
+              className="h-7 gap-1"
+              title={
+                fileDecision === "rejected"
+                  ? "Rejected, click to clear"
+                  : "Reject this proposal"
+              }
+            >
+              <HugeiconsIcon icon={Cancel01Icon} size={13} strokeWidth={2} />
+              Reject
+            </Button>
+            <Button
+              size="sm"
+              variant="default"
+              onClick={handleApply}
+              disabled={!fileDecision || applying}
+              className="h-7 gap-1.5"
+              title={
+                fileDecision
+                  ? fileDecision === "rejected"
+                    ? "Discard the proposal"
+                    : mutationKind === "delete"
+                      ? "Delete the file from disk"
+                      : "Rename the file on disk"
+                  : "Accept or reject the proposal first"
+              }
+            >
+              {applying
+                ? "Applying…"
+                : fileDecision === "rejected"
+                  ? "Discard"
+                  : mutationKind === "delete"
+                    ? "Delete file"
+                    : "Rename file"}
+            </Button>
+          </div>
+        ) : null}
+        {restorable ? (
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handleRestore(false)}
+              disabled={restoring}
+              className="h-7"
+              title="Undo this apply: write back the content from before it"
+            >
+              {restoring ? "Restoring…" : "Restore"}
+            </Button>
+          </div>
+        ) : null}
+        {reviewable && !isFileOp && counts.total > 0 ? (
           <div className="flex shrink-0 items-center gap-1.5">
             <Button
               size="sm"
@@ -502,6 +706,53 @@ export function AiDiffPane({
         ) : null}
       </div>
 
+      {isFileOp ? (
+        <div className="shrink-0 border-b border-border/60 px-3 py-2 text-[12px] text-muted-foreground">
+          {mutationKind === "delete" ? (
+            <span>
+              This proposal deletes the file (
+              {stats.removed} line{stats.removed === 1 ? "" : "s"}). The
+              content below is what would be lost; accepting removes it from
+              disk, and it can be restored afterwards.
+            </span>
+          ) : (
+            <span>
+              This proposal renames the file to{" "}
+              <span className="font-mono">{targetPath}</span>. Content is
+              unchanged.
+            </span>
+          )}
+        </div>
+      ) : null}
+
+      {restoreConflict ? (
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-800 dark:text-amber-200">
+          <span>
+            Restore refused: {restoreConflict}. The file changed since the
+            apply, so restoring would overwrite those changes.
+          </span>
+          <span className="flex shrink-0 items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handleRestore(true)}
+              disabled={restoring}
+              className="h-7"
+            >
+              Restore anyway
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setRestoreConflict(null)}
+              className="h-7"
+            >
+              Dismiss
+            </Button>
+          </span>
+        </div>
+      ) : null}
+
       {conflict ? (
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-800 dark:text-amber-200">
           <span>
@@ -543,7 +794,7 @@ export function AiDiffPane({
         </div>
       ) : null}
 
-      {counts.total > 0 ? (
+      {!isFileOp && counts.total > 0 ? (
         <div className="shrink-0 border-b border-border/60">
           <button
             type="button"
