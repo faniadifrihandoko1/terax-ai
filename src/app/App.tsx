@@ -179,6 +179,7 @@ export default function App() {
     openAiDiffTab,
     activateAiDiffTab,
     setAiDiffStatus,
+    setAiDiffLineDecision,
     openGitDiffTab,
     openCommitHistoryTab,
     openCommitFileDiffTab,
@@ -359,7 +360,6 @@ export default function App() {
   const openPanel = useChatStore((s) => s.openPanel);
   const panelOpen = useChatStore((s) => s.panelOpen);
   const setLive = useChatStore((s) => s.setLive);
-  const respondToApproval = useChatStore((s) => s.respondToApproval);
 
   // Per-file review status for the Changed Files card (FR-01/FR-06),
   // keyed by the tool-call approval id of each ai-diff tab.
@@ -1568,8 +1568,8 @@ export default function App() {
                         onEditorCloseTab={disposeTab}
                         registerPreviewHandle={registerPreviewHandle}
                         onPreviewUrlChange={handlePreviewUrl}
-                        onAiDiffAccept={(id) => respondToApproval(id, true)}
-                        onAiDiffReject={(id) => respondToApproval(id, false)}
+                        onSetAiDiffStatus={setAiDiffStatus}
+                        onSetAiDiffLineDecision={setAiDiffLineDecision}
                         onOpenCommitFile={openCommitFileDiffTab}
                         onGitHistorySearchHandle={setGitHistoryHandle}
                         onSetMarkdownView={setMarkdownView}

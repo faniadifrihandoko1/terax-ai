@@ -1,14 +1,24 @@
-import type { AiDiffTab, Tab } from "@/modules/tabs";
+import type { LineDecision } from "@/modules/ai/lib/reviewApply";
+import type { AiDiffStatus, AiDiffTab, Tab } from "@/modules/tabs";
 import { AiDiffPane } from "./AiDiffPane";
 
 type Props = {
   tabs: Tab[];
   activeId: number;
-  onAccept: (approvalId: string) => void;
-  onReject: (approvalId: string) => void;
+  onSetStatus: (approvalId: string, status: AiDiffStatus) => void;
+  onSetLineDecision: (
+    approvalId: string,
+    index: number,
+    decision: LineDecision,
+  ) => void;
 };
 
-export function AiDiffStack({ tabs, activeId, onAccept, onReject }: Props) {
+export function AiDiffStack({
+  tabs,
+  activeId,
+  onSetStatus,
+  onSetLineDecision,
+}: Props) {
   const active = tabs.find(
     (t): t is AiDiffTab => t.kind === "ai-diff" && t.id === activeId,
   );
@@ -22,8 +32,12 @@ export function AiDiffStack({ tabs, activeId, onAccept, onReject }: Props) {
         proposedContent={active.proposedContent}
         status={active.status}
         isNewFile={active.isNewFile}
-        onAccept={() => onAccept(active.approvalId)}
-        onReject={() => onReject(active.approvalId)}
+        approvalId={active.approvalId}
+        lineDecisions={active.lineDecisions}
+        onSetLineDecision={(index, decision) =>
+          onSetLineDecision(active.approvalId, index, decision)
+        }
+        onSetStatus={(status) => onSetStatus(active.approvalId, status)}
       />
     </div>
   );

@@ -5,8 +5,8 @@ import {
   reconstructFile,
   splitLines,
   splitPairs,
-  type LineDecisions,
 } from "./lineDiff";
+import type { LineDecisions } from "../../ai/lib/reviewApply";
 
 function decide(
   pairs: Array<[number, "accepted" | "rejected"]>,
@@ -294,7 +294,7 @@ describe("reconstruction invariants on random edits", () => {
           propLines.splice(Math.min(at, propLines.length - 1), 1);
         } else if (propLines.length > 0) {
           propLines[Math.min(at, propLines.length - 1)] =
-            alphabet[Math.floor(rand() * alphabet.length)] + "'";
+            `${alphabet[Math.floor(rand() * alphabet.length)]}'`;
         }
       }
       const trailing = rand() < 0.5;
