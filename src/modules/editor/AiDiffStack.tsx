@@ -11,6 +11,8 @@ type Props = {
     index: number,
     decision: LineDecision,
   ) => void;
+  /** FR-11: false renders the per-file Accept/Reject fallback instead. */
+  perLineEnabled: boolean;
 };
 
 export function AiDiffStack({
@@ -18,6 +20,7 @@ export function AiDiffStack({
   activeId,
   onSetStatus,
   onSetLineDecision,
+  perLineEnabled,
 }: Props) {
   const active = tabs.find(
     (t): t is AiDiffTab => t.kind === "ai-diff" && t.id === activeId,
@@ -38,6 +41,7 @@ export function AiDiffStack({
           onSetLineDecision(active.approvalId, index, decision)
         }
         onSetStatus={(status) => onSetStatus(active.approvalId, status)}
+        perLineEnabled={perLineEnabled}
       />
     </div>
   );

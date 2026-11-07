@@ -18,6 +18,7 @@ import type { ThemePref } from "@/modules/settings/store";
 import {
   setAgentNotificationSound,
   setAgentNotifications,
+  setAiReviewPerLine,
   setAutostart,
   setConfirmCloseRunningTerminal,
   setDefaultWorkspaceEnv,
@@ -117,6 +118,7 @@ export function GeneralSection() {
     (s) => s.confirmCloseRunningTerminal,
   );
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
+  const aiReviewPerLine = usePreferencesStore((s) => s.aiReviewPerLine);
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
   const agentNotificationSound = usePreferencesStore(
     (s) => s.agentNotificationSound,
@@ -241,6 +243,19 @@ export function GeneralSection() {
           <Switch
             checked={explorerGitDecorations}
             onCheckedChange={(v) => void setExplorerGitDecorations(v)}
+          />
+        </SettingRow>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label>AI review</Label>
+        <SettingRow
+          title="Review AI edits line by line"
+          description="When on, each changed line in the AI diff tab gets its own Accept/Reject buttons. When off, the diff tab falls back to Accept/Reject for the whole file."
+        >
+          <Switch
+            checked={aiReviewPerLine}
+            onCheckedChange={(v) => void setAiReviewPerLine(v)}
           />
         </SettingRow>
       </div>

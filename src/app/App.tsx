@@ -834,6 +834,9 @@ export default function App() {
   const explorerGitDecorations = usePreferencesStore(
     (s) => s.explorerGitDecorations,
   );
+  // FR-11: per-line AI edit review toggle; AiDiffPane falls back to
+  // per-file Accept/Reject when this is off.
+  const aiReviewPerLine = usePreferencesStore((s) => s.aiReviewPerLine);
   const { sourceControl, toggleSourceControl, openGitGraphFromContext } =
     useSourceControlContext({
       activeTab,
@@ -1570,6 +1573,7 @@ export default function App() {
                         onPreviewUrlChange={handlePreviewUrl}
                         onSetAiDiffStatus={setAiDiffStatus}
                         onSetAiDiffLineDecision={setAiDiffLineDecision}
+                        aiReviewPerLine={aiReviewPerLine}
                         onOpenCommitFile={openCommitFileDiffTab}
                         onGitHistorySearchHandle={setGitHistoryHandle}
                         onSetMarkdownView={setMarkdownView}
