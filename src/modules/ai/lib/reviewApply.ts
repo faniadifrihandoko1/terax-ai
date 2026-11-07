@@ -32,6 +32,16 @@ export type LineDecision = "accepted" | "rejected" | "undecided";
 
 export type LineDecisions = Map<number, LineDecision>;
 
+/**
+ * Per-hunk review decision (Fase 4, Antigravity-style): the hunk — not
+ * the line — is the unit of decision. One decision covers every changed
+ * line inside the hunk.
+ */
+export type HunkDecision = "accepted" | "rejected" | "undecided";
+
+/** Per-hunk decisions, keyed by LineHunk index. */
+export type HunkDecisions = Map<number, HunkDecision>;
+
 /** Input for `apply_reviewed_edit`. */
 export type ReviewApplyInput = {
   /** Approval id of the original edit/write_file call being reviewed. */
@@ -59,6 +69,17 @@ export function allLinesDecided(
 ): boolean {
   return changedLines.every((line) => {
     const d = decisions.get(line);
+    return d === "accepted" || d === "rejected";
+  });
+}
+
+/** True when every hunk has an accept or reject decision (Fase 4). */
+export function allHunksDecided(
+  decisions: HunkDecisions,
+  hunkIndexes: number[],
+): boolean {
+  return hunkIndexes.every((index) => {
+    const d = decisions.get(index);
     return d === "accepted" || d === "rejected";
   });
 }

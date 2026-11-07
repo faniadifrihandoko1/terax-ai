@@ -1,12 +1,17 @@
 import { presentableDiff } from "@codemirror/merge";
-import type { LineDecision, LineDecisions } from "@/modules/ai/lib/reviewApply";
+import type {
+  HunkDecision,
+  HunkDecisions,
+  LineDecision,
+  LineDecisions,
+} from "@/modules/ai/lib/reviewApply";
 
 /**
- * Line-level diff model for per-line review (FR-03).
+ * Line-level diff model for review (FR-03, Fase 2).
  *
  * presentableDiff gives character ranges; this module turns them into
  * whole-line changes grouped into hunks, plus a pure reconstruction of
- * the file that results from the user's per-line decisions. The model is
+ * the file that results from the user's decisions. The model is
  * deliberately independent of React so it can be unit tested without UI.
  *
  * Line identity includes the terminator: a line that only gains or loses
@@ -14,6 +19,11 @@ import type { LineDecision, LineDecisions } from "@/modules/ai/lib/reviewApply";
  * reconstruction exact (accept-all equals the proposal, reject-all
  * equals the original) even for edits at the end of a file without a
  * trailing newline.
+ *
+ * Fase 4 (Antigravity-style): the hunk — not the line — is the unit of
+ * decision. The per-line functions below stay as the reconstruction
+ * engine; `hunkDecisionsToLineDecisions` expands a per-hunk decision
+ * into the per-line decisions the engine consumes.
  */
 
 export type LineChangeKind = "added" | "removed";
@@ -406,6 +416,89 @@ export function reconstructFile(
     out.push(fullLine(origLines[i]));
   }
   return { content: out.join(""), decidedLines };
+}
+
+/**
+ * Expands per-hunk decisions into per-line decisions (Fase 4): a hunk's
+ * decision applies to every changed line inside it. Undecided hunks
+ * leave their lines undecided (absent from the map), so the existing
+ * reconstruction engine keeps working unchanged.
+ */
+export function hunkDecisionsToLineDecisions(
+  changeSet: LineChangeSet,
+  hunkDecisions: HunkDecisions,
+): LineDecisions {
+  const out = new Map<number, LineDecision>();
+  for (const c of changeSet.changes) {
+    const d = hunkDecisions.get(c.hunkIndex);
+    if (d === "accepted" || d === "rejected") out.set(c.index, d);
+  }
+  return out;
+}
+
+/** Rebuilds the file from per-hunk decisions (Fase 4). */
+export function reconstructFileFromHunks(
+  original: string,
+  changeSet: LineChangeSet,
+  hunkDecisions: HunkDecisions,
+): { content: string; decidedLines: number[] } {
+  return reconstructFile(
+    original,
+    changeSet,
+    hunkDecisionsToLineDecisions(changeSet, hunkDecisions),
+  );
+}
+
+/** Decision counts at hunk level (Fase 4). */
+export function countHunkDecisions(
+  hunks: LineHunk[],
+  decisions: HunkDecisions,
+): { decided: number; total: number; accepted: number; rejected: number } {
+  let decided = 0;
+  let accepted = 0;
+  let rejected = 0;
+  for (const hunk of hunks) {
+    const d = decisions.get(hunk.index);
+    if (d === "accepted") {
+      decided++;
+      accepted++;
+    } else if (d === "rejected") {
+      decided++;
+      rejected++;
+    }
+  }
+  return { decided, total: hunks.length, accepted, rejected };
+}
+
+/**
+ * Migrates v1 per-line decisions to per-hunk decisions (Fase 4, FR-10):
+ * a hunk is accepted when every changed line in it was accepted,
+ * rejected when every line was rejected, and undecided otherwise (mixed
+ * decisions, or only part of its lines decided). Undecided hunks are
+ * omitted from the result.
+ */
+export function migrateLineDecisionsToHunks(
+  lineDecisions: Record<number, LineDecision>,
+  changeSet: LineChangeSet,
+): Record<number, HunkDecision> {
+  const perHunk = new Map<number, { total: number; accepted: number; rejected: number }>();
+  for (const c of changeSet.changes) {
+    let entry = perHunk.get(c.hunkIndex);
+    if (!entry) {
+      entry = { total: 0, accepted: 0, rejected: 0 };
+      perHunk.set(c.hunkIndex, entry);
+    }
+    entry.total++;
+    const d = lineDecisions[c.index];
+    if (d === "accepted") entry.accepted++;
+    else if (d === "rejected") entry.rejected++;
+  }
+  const out: Record<number, HunkDecision> = {};
+  for (const [hunkIndex, entry] of perHunk) {
+    if (entry.accepted === entry.total) out[hunkIndex] = "accepted";
+    else if (entry.rejected === entry.total) out[hunkIndex] = "rejected";
+  }
+  return out;
 }
 
 /** Pair ids whose two lines were decided differently (a split pair). */

@@ -356,6 +356,9 @@ export function AiDiffPane({
     if (!perLineEnabled || !reviewable) return;
     const action = reviewKeyAction(e);
     if (!action) return;
+    // Fase 4: undo/redo of review decisions lands with the per-hunk pane
+    // rewrite; until then they must not fall through to accept/reject.
+    if (action === "undo" || action === "redo") return;
     e.preventDefault();
     if (action === "move-next" || action === "move-prev") {
       const next = nextReviewFocus(

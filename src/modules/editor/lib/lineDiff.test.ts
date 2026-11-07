@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   computeLineChanges,
   countDecisions,
+  countHunkDecisions,
+  hunkDecisionsToLineDecisions,
+  migrateLineDecisionsToHunks,
   reconstructFile,
+  reconstructFileFromHunks,
   splitLines,
   splitPairs,
 } from "./lineDiff";
@@ -332,5 +336,83 @@ describe("countDecisions", () => {
       accepted: 0,
       rejected: 0,
     });
+  });
+});
+
+describe("per-hunk decisions (Fase 4)", () => {
+  // Two separated hunks: line 2 changes, line 4 changes.
+  const original = "a\nb\nc\nd\ne\n";
+  const proposed = "a\nB\nc\nD\ne\n";
+
+  it("expands a hunk decision to every line inside the hunk", () => {
+    const cs = computeLineChanges(original, proposed);
+    expect(cs.hunks).toHaveLength(2);
+    const expanded = hunkDecisionsToLineDecisions(
+      cs,
+      new Map([[0, "accepted" as const]]),
+    );
+    const hunk0Lines = cs.changes.filter((c) => c.hunkIndex === 0);
+    const hunk1Lines = cs.changes.filter((c) => c.hunkIndex === 1);
+    expect(hunk0Lines.length).toBeGreaterThan(0);
+    for (const c of hunk0Lines) expect(expanded.get(c.index)).toBe("accepted");
+    for (const c of hunk1Lines) expect(expanded.has(c.index)).toBe(false);
+  });
+
+  it("reconstructs from hunk decisions: accept one hunk, reject the other", () => {
+    const cs = computeLineChanges(original, proposed);
+    const { content } = reconstructFileFromHunks(
+      original,
+      cs,
+      new Map([
+        [0, "accepted" as const],
+        [1, "rejected" as const],
+      ]),
+    );
+    expect(content).toBe("a\nB\nc\nd\ne\n");
+  });
+
+  it("counts hunk decisions", () => {
+    const cs = computeLineChanges(original, proposed);
+    expect(countHunkDecisions(cs.hunks, new Map())).toEqual({
+      decided: 0,
+      total: 2,
+      accepted: 0,
+      rejected: 0,
+    });
+    expect(
+      countHunkDecisions(
+        cs.hunks,
+        new Map([
+          [0, "accepted" as const],
+          [1, "rejected" as const],
+        ]),
+      ),
+    ).toEqual({ decided: 2, total: 2, accepted: 1, rejected: 1 });
+  });
+
+  it("migrates v1 line decisions to hunks", () => {
+    const cs = computeLineChanges(original, proposed);
+    const hunk0 = cs.changes.filter((c) => c.hunkIndex === 0);
+    const hunk1 = cs.changes.filter((c) => c.hunkIndex === 1);
+    // Hunk 0 fully accepted, hunk 1 fully rejected.
+    const full: Record<number, "accepted" | "rejected"> = {};
+    for (const c of hunk0) full[c.index] = "accepted";
+    for (const c of hunk1) full[c.index] = "rejected";
+    expect(migrateLineDecisionsToHunks(full, cs)).toEqual({
+      0: "accepted",
+      1: "rejected",
+    });
+    // A hunk with a split or partial decision stays undecided.
+    const partial: Record<number, "accepted" | "rejected"> = {};
+    for (const c of hunk0) partial[c.index] = "accepted";
+    partial[hunk1[0].index] = "accepted";
+    expect(migrateLineDecisionsToHunks(partial, cs)).toEqual({
+      0: "accepted",
+    });
+    const split: Record<number, "accepted" | "rejected"> = {};
+    split[hunk0[0].index] = "accepted";
+    split[hunk0[1].index] = "rejected";
+    expect(migrateLineDecisionsToHunks(split, cs)).toEqual({});
+    expect(migrateLineDecisionsToHunks({}, cs)).toEqual({});
   });
 });

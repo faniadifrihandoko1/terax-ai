@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  allHunksDecided,
   allLinesDecided,
   applyReviewedEdit,
   checkDiskConflict,
@@ -52,6 +53,20 @@ function makeIo(opts: {
   };
   return { io, calls, written };
 }
+
+describe("allHunksDecided (Fase 4)", () => {
+  it("requires every hunk to be accepted or rejected", () => {
+    const d = new Map([
+      [0, "accepted" as const],
+      [1, "undecided" as const],
+    ]);
+    expect(allHunksDecided(d, [0, 1])).toBe(false);
+    expect(allHunksDecided(d, [0])).toBe(true);
+    d.set(1, "rejected");
+    expect(allHunksDecided(d, [0, 1])).toBe(true);
+    expect(allHunksDecided(new Map(), [])).toBe(true);
+  });
+});
 
 describe("djb2Hash", () => {
   it("is deterministic and distinguishes content", () => {
