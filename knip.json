@@ -1,0 +1,40 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": [
+    "src/components/ui/**",
+    "src/components/ai-elements/**"
+  ],
+  "ignoreDependencies": [
+    "@tauri-apps/plugin-log",
+    "@tauri-apps/plugin-window-state",
+    "@fontsource-variable/inter",
+    "@fontsource/jetbrains-mono",
+    "@smoke-driver"
+  ],
+  "ignoreBinaries": [
+    "footprint",
+    "swiftc"
+  ],
+  "ignoreIssues": {
+    "src/bench/flags.ts": [
+      "exports"
+    ],
+    "packages/ghostty-core/lib/official/types.ts": [
+      "enumMembers"
+    ]
+  },
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/settings/main.tsx",
+        "src/**/*.test.{ts,tsx}",
+        "src/**/*.bench.ts",
+        "scripts/**/*.html",
+        "scripts/**/*.{ts,mjs}"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx,css}"
+      ]
+    }
+  }
+}
