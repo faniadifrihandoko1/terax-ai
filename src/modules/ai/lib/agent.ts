@@ -39,6 +39,9 @@ const TOOL_LABELS: Record<string, (input: Record<string, unknown>) => string> =
     edit: (i) => `Editing ${shortPath(i.path)}`,
     multi_edit: (i) => `Editing ${shortPath(i.path)}`,
     write_file: (i) => `Writing ${shortPath(i.path)}`,
+    delete_file: (i) => `Deleting ${shortPath(i.path)}`,
+    rename_file: (i) =>
+      `Renaming ${shortPath(i.path)} to ${shortPath(i.to)}`,
     create_directory: (i) => `Creating ${shortPath(i.path)}`,
     bash_run: (i) => `Running ${ellipsize(String(i.command ?? ""), 60)}`,
     bash_background: (i) =>

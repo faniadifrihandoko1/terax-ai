@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   Cancel01Icon,
+  Delete02Icon,
   Edit02Icon,
   FileEditIcon,
   FilePlusIcon,
@@ -25,6 +26,8 @@ const TOOL_META: Record<string, { label: string; icon: typeof FilePlusIcon }> =
     write_file: { label: "Write file", icon: FilePlusIcon },
     edit: { label: "Edit file", icon: FileEditIcon },
     multi_edit: { label: "Edit file (batch)", icon: Edit02Icon },
+    delete_file: { label: "Delete file", icon: Delete02Icon },
+    rename_file: { label: "Rename file", icon: FileEditIcon },
     create_directory: { label: "Create directory", icon: FolderAddIcon },
     bash_run: { label: "Run shell command", icon: TerminalIcon },
     bash_background: { label: "Spawn background process", icon: TerminalIcon },
@@ -171,6 +174,28 @@ function PreviewBlock({
     return (
       <div className="font-mono text-[11px] text-muted-foreground">
         {String(input.path ?? "")}
+      </div>
+    );
+  }
+  if (toolName === "delete_file") {
+    return (
+      <div className="space-y-0.5 font-mono text-[11px]">
+        <div className="text-muted-foreground">{String(input.path ?? "")}</div>
+        <div className="text-[10.5px] text-muted-foreground/80">
+          file will be deleted · review in the diff tab
+        </div>
+      </div>
+    );
+  }
+  if (toolName === "rename_file") {
+    return (
+      <div className="space-y-0.5 font-mono text-[11px]">
+        <div className="text-muted-foreground">
+          {String(input.path ?? "")} → {String(input.to ?? "")}
+        </div>
+        <div className="text-[10.5px] text-muted-foreground/80">
+          review in the diff tab
+        </div>
       </div>
     );
   }

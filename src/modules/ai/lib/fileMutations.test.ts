@@ -35,6 +35,41 @@ describe("extractFileMutation", () => {
     });
   });
 
+  it("reads a delete_file proposal", () => {
+    const m = extractFileMutation(
+      part({ type: "tool-delete_file", input: { path: "x.ts" } }),
+    );
+    expect(m?.path).toBe("x.ts");
+    expect(m?.derive).toEqual({ kind: "delete" });
+  });
+
+  it("reads a rename_file proposal with its target", () => {
+    const m = extractFileMutation(
+      part({
+        type: "tool-rename_file",
+        input: { path: "x.ts", to: "y.ts" },
+      }),
+    );
+    expect(m?.path).toBe("x.ts");
+    expect(m?.derive).toEqual({ kind: "rename", to: "y.ts" });
+  });
+
+  it("drops a rename without a target", () => {
+    expect(
+      extractFileMutation(
+        part({ type: "tool-rename_file", input: { path: "x.ts" } }),
+      ),
+    ).toBeNull();
+  });
+
+  it("drops a delete without a path", () => {
+    expect(
+      extractFileMutation(
+        part({ type: "tool-delete_file", input: {} }),
+      ),
+    ).toBeNull();
+  });
+
   it("drops multi_edit ops with an empty old_string", () => {
     const m = extractFileMutation(
       part({
@@ -102,6 +137,29 @@ describe("deriveProposed", () => {
     expect(m && deriveProposed("old", m.derive)).toEqual({
       ok: true,
       content: "new",
+    });
+  });
+
+  it("derives empty content for a delete", () => {
+    const m = extractFileMutation(
+      part({ type: "tool-delete_file", input: { path: "x.ts" } }),
+    );
+    expect(m && deriveProposed("old", m.derive)).toEqual({
+      ok: true,
+      content: "",
+    });
+  });
+
+  it("derives the original content for a rename", () => {
+    const m = extractFileMutation(
+      part({
+        type: "tool-rename_file",
+        input: { path: "x.ts", to: "y.ts" },
+      }),
+    );
+    expect(m && deriveProposed("old", m.derive)).toEqual({
+      ok: true,
+      content: "old",
     });
   });
 });

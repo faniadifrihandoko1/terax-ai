@@ -29,6 +29,20 @@ export type FileMutation =
       approvalId: string | null;
       path: string;
       derive: { kind: "edits"; edits: EditOp[] };
+    }
+  | {
+      state: string;
+      approvalId: string | null;
+      path: string;
+      /** The file is gone after the apply; proposed content is "". */
+      derive: { kind: "delete" };
+    }
+  | {
+      state: string;
+      approvalId: string | null;
+      path: string;
+      /** Content unchanged; the file moves to `to`. */
+      derive: { kind: "rename"; to: string };
     };
 
 export type ToolPartLike = {
@@ -42,7 +56,11 @@ export type ToolPartLike = {
 /** True for the tool parts that mutate a file and can appear in a diff. */
 export function isFileMutationPart(type: string): boolean {
   return (
-    type === "tool-write_file" || type === "tool-edit" || type === "tool-multi_edit"
+    type === "tool-write_file" ||
+    type === "tool-edit" ||
+    type === "tool-multi_edit" ||
+    type === "tool-delete_file" ||
+    type === "tool-rename_file"
   );
 }
 
@@ -96,6 +114,17 @@ export function extractFileMutation(
     if (edits.length === 0) return null;
     return { state, approvalId, path, derive: { kind: "edits", edits } };
   }
+  if (type === "tool-delete_file") {
+    const path = typeof input.path === "string" ? input.path : "";
+    if (!path) return null;
+    return { state, approvalId, path, derive: { kind: "delete" } };
+  }
+  if (type === "tool-rename_file") {
+    const path = typeof input.path === "string" ? input.path : "";
+    const to = typeof input.to === "string" ? input.to : "";
+    if (!path || !to) return null;
+    return { state, approvalId, path, derive: { kind: "rename", to } };
+  }
   return null;
 }
 
@@ -131,6 +160,12 @@ export function deriveProposed(
 ): { ok: true; content: string } | { ok: false } {
   if (derive.kind === "literal") {
     return { ok: true, content: derive.content };
+  }
+  if (derive.kind === "delete") {
+    return { ok: true, content: "" };
+  }
+  if (derive.kind === "rename") {
+    return { ok: true, content: original };
   }
   return applyEditsLocally(original, derive.edits);
 }

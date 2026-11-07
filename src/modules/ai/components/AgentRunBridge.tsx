@@ -7,10 +7,12 @@ import { toast } from "sonner";
 import {
   deriveProposed,
   extractFileMutation,
+  isFileMutationPart,
   readOriginal,
   resolveMutationPath,
-  type EditOp,
+  type FileMutation,
 } from "../lib/fileMutations";
+import { saveCheckpoint } from "../lib/reviewCheckpoint";
 import {
   clearAllReviewedApplies,
   clearReviewedApply,
@@ -44,7 +46,8 @@ import { getOrCreateChat } from "../store/chatRuntime";
  *  - Auto-opens the mini-window when an approval is pending — the user has
  *    to act on it; hiding it would be hostile.
  *  - For pending `write_file` calls, opens an AI diff tab in the editor area
- *    so the user can review the proposed change before approving.
+ *    so the user can review the proposed change before approving. The same
+ *    tab opens for edit, delete and rename proposals (Fase 5).
  *  - Persists messages of the active session on every change.
  */
 
@@ -56,6 +59,12 @@ export type DiffOpenInput = {
   isNewFile: boolean;
   /** FR-10: restored review progress; defaults to a fresh pending tab. */
   status?: AiDiffStatus;
+  /** Delete/rename proposal (Fase 5). Defaults to "edit". */
+  mutationKind?: "edit" | "delete" | "rename";
+  /** Rename destination. Only used when mutationKind is "rename". */
+  targetPath?: string;
+  /** Restored per-file decision for delete/rename proposals. */
+  fileDecision?: "accepted" | "rejected";
   hunkDecisions?: Record<number, HunkDecision>;
   /** False when inline review is on: the tab opens in the background. */
   activate?: boolean;
@@ -170,22 +179,24 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
 
   // Cheap fingerprint of file-mutation tool parts only. The diff-tab effect
   // is the most expensive thing on the streaming path, so we skip it when
-  // only text/reasoning tokens have arrived (the common case).
+  // only text/reasoning tokens have arrived (the common case). The path
+  // and rename target are part of the fingerprint so a changed input
+  // re-runs the effect instead of reusing a stale proposal.
   const fileMutationFingerprint = useMemo(() => {
     let fp = "";
     for (const m of messages) {
       if (m.role !== "assistant") continue;
       for (const p of m.parts as AnyPart[]) {
         const t = (p as { type?: string }).type;
-        if (
-          t === "tool-write_file" ||
-          t === "tool-edit" ||
-          t === "tool-multi_edit"
-        ) {
-          const state = (p as { state?: string }).state ?? "";
-          const id = (p as { approval?: { id?: string } }).approval?.id ?? "";
-          fp += `${id}:${state}|`;
-        }
+        if (!t || !isFileMutationPart(t)) continue;
+        const state = (p as { state?: string }).state ?? "";
+        const id = (p as { approval?: { id?: string } }).approval?.id ?? "";
+        const input = (p as { input?: unknown }).input as
+          | { path?: unknown; to?: unknown }
+          | undefined;
+        const path = typeof input?.path === "string" ? input.path : "";
+        const to = typeof input?.to === "string" ? input.to : "";
+        fp += `${id}:${state}:${path}:${to}|`;
       }
     }
     return fp;
@@ -195,13 +206,10 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
     type Pending = {
       approvalId: string;
       path: string;
-      /**
-       * Either a literal proposed content (write_file), or a function that
-       * derives proposed content from the on-disk original (edit/multi_edit).
-       */
-      derive:
-        | { kind: "literal"; content: string }
-        | { kind: "edits"; edits: EditOp[] };
+      derive: FileMutation["derive"];
+      /** Delete/rename proposals carry no hunks, only a file decision. */
+      mutationKind: "edit" | "delete" | "rename";
+      targetPath?: string;
     };
     if (fileMutationFingerprint === fileMutationFingerprintRef.current) {
       return;
@@ -220,7 +228,21 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
         if (!approvalId) continue;
         if (state === "approval-requested") {
           if (!openedRef.current.has(approvalId)) {
-            pending.push({ approvalId, path, derive });
+            const mutationKind =
+              derive.kind === "delete"
+                ? "delete"
+                : derive.kind === "rename"
+                  ? "rename"
+                  : "edit";
+            pending.push({
+              approvalId,
+              path,
+              derive,
+              mutationKind,
+              ...(derive.kind === "rename"
+                ? { targetPath: derive.to }
+                : {}),
+            });
           }
         } else if (
           state === "approval-responded" ||
@@ -304,6 +326,9 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
               hunkDecisions[Number(hunkIndex)] = decision;
             }
           }
+          // v3: an applied proposal restores its checkpoint, so Restore
+          // still works after a restart.
+          if (saved.checkpoint) saveCheckpoint(saved.checkpoint);
           restoredCount += 1;
         }
         openAiDiffTab({
@@ -313,11 +338,23 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
           approvalId: p.approvalId,
           isNewFile: original.isNewFile,
           status: saved ? restoreStatus(saved.status) : undefined,
+          mutationKind: p.mutationKind,
+          ...(p.targetPath !== undefined
+            ? { targetPath: resolveMutationPath(p.targetPath, cwd) }
+            : {}),
+          ...(saved?.fileDecision !== undefined
+            ? { fileDecision: saved.fileDecision }
+            : {}),
           hunkDecisions: saved ? hunkDecisions : undefined,
           // Fase 4: with inline review on, the proposal shows in the
           // editor; the ai-diff tab opens in the background as the
           // side-by-side alternative instead of stealing focus.
-          activate: !usePreferencesStore.getState().aiReviewInline,
+          // Delete/rename proposals (Fase 5) have no inline view, so
+          // their tab always activates.
+          activate:
+            p.mutationKind === "edit"
+              ? !usePreferencesStore.getState().aiReviewInline
+              : true,
         });
       }
       if (restoredCount > 0 && !reviewToastShownRef.current.has(sessionId)) {

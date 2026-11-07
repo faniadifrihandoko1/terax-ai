@@ -2,6 +2,11 @@ import { tool } from "ai";
 import { z } from "zod";
 import { native } from "../lib/native";
 import {
+  checkDeleteGuard,
+  checkRenameGuard,
+  isPathInside,
+} from "../lib/fileOpGuards";
+import {
   checkReadableCanonical,
   checkWritableCanonical,
 } from "../lib/security";
@@ -208,6 +213,165 @@ export function buildFsTools(ctx: ToolContext) {
         try {
           await native.createDir(abs);
           return { path: abs, ok: true };
+        } catch (e) {
+          return { error: String(e), path: abs };
+        }
+      },
+    }),
+
+    delete_file: tool({
+      description:
+        "Delete a file. Always asks the user before running, and the deletion is reviewed in the AI diff tab like an edit: the user accepts or rejects it there. Requires a prior read_file on the path in this session, and refuses when the file changed since that read. Never use for directories.",
+      inputSchema: z.object({
+        path: z.string(),
+        reason: z
+          .string()
+          .optional()
+          .describe("Why the file should be deleted."),
+      }),
+      needsApproval: true,
+      execute: async ({ path }) => {
+        const reqPath = resolvePath(path, ctx.getCwd());
+        const safety = await checkWritableCanonical(reqPath, native.canonicalize);
+        if (!safety.ok) return { error: safety.reason, path: reqPath };
+        const abs = safety.canonical;
+
+        if (usePlanStore.getState().active) {
+          return {
+            error:
+              "delete_file is not supported in plan mode: deletes are reviewed per file, not queued.",
+            path: abs,
+          };
+        }
+
+        const seen = ctx.readCache.get(abs) ?? null;
+        let exists = false;
+        let currentHash: number | null = null;
+        try {
+          const r = await native.readFile(abs);
+          if (r.kind === "text") {
+            exists = true;
+            currentHash = djb2(r.content);
+          } else {
+            return { error: "file is not readable as text", path: abs };
+          }
+        } catch {
+          exists = false;
+        }
+        const guard = checkDeleteGuard({
+          exists,
+          currentHash,
+          seenHash: seen?.hash ?? null,
+        });
+        if (!guard.ok) return { error: guard.reason, path: abs };
+
+        try {
+          await native.deleteFile(abs);
+          ctx.readCache.delete(abs);
+          return { path: abs, ok: true };
+        } catch (e) {
+          return { error: String(e), path: abs };
+        }
+      },
+    }),
+
+    rename_file: tool({
+      description:
+        "Rename or move a file. Always asks the user before running, and the rename is reviewed in the AI diff tab like an edit. Refuses when the target already exists or the target is outside the workspace. Never use for directories.",
+      inputSchema: z.object({
+        path: z.string(),
+        to: z
+          .string()
+          .describe(
+            "New path, absolute or relative to the active terminal cwd.",
+          ),
+        reason: z
+          .string()
+          .optional()
+          .describe("Why the file should be renamed."),
+      }),
+      needsApproval: true,
+      execute: async ({ path, to }) => {
+        const reqPath = resolvePath(path, ctx.getCwd());
+        const reqTo = resolvePath(to, ctx.getCwd());
+        const sourceSafety = await checkWritableCanonical(
+          reqPath,
+          native.canonicalize,
+        );
+        if (!sourceSafety.ok)
+          return { error: sourceSafety.reason, path: reqPath };
+        const abs = sourceSafety.canonical;
+        const targetSafety = await checkWritableCanonical(
+          reqTo,
+          native.canonicalize,
+        );
+        if (!targetSafety.ok)
+          return { error: targetSafety.reason, path: reqTo };
+        const absTo = targetSafety.canonical;
+
+        if (usePlanStore.getState().active) {
+          return {
+            error:
+              "rename_file is not supported in plan mode: renames are reviewed per file, not queued.",
+            path: abs,
+          };
+        }
+
+        let sourceExists = false;
+        try {
+          const r = await native.readFile(abs);
+          sourceExists = r.kind === "text";
+        } catch {
+          sourceExists = false;
+        }
+        let targetExists = false;
+        try {
+          await native.readFile(absTo);
+          targetExists = true;
+        } catch {
+          targetExists = false;
+        }
+
+        const root = ctx.getWorkspaceRoot();
+        if (!root) {
+          return {
+            error:
+              "cannot rename: no workspace root to verify the target against",
+            path: abs,
+          };
+        }
+        let targetInside = false;
+        try {
+          const canonRoot = await native.canonicalize(root);
+          // absTo already carries a canonical parent (checkWritableCanonical
+          // resolved it for a not-yet-existing target), so its parent dir
+          // is the canonical form to compare against the root.
+          const lastSep = Math.max(
+            absTo.lastIndexOf("/"),
+            absTo.lastIndexOf("\\"),
+          );
+          const canonParent =
+            lastSep > 0 ? absTo.slice(0, lastSep) : absTo;
+          targetInside = isPathInside(canonRoot, canonParent);
+        } catch {
+          targetInside = false;
+        }
+
+        const guard = checkRenameGuard({
+          sourceExists,
+          targetExists,
+          targetInsideWorkspace: targetInside,
+        });
+        if (!guard.ok) return { error: guard.reason, path: abs };
+
+        try {
+          await native.renameFile(abs, absTo);
+          const cached = ctx.readCache.get(abs);
+          if (cached) {
+            ctx.readCache.delete(abs);
+            ctx.readCache.set(absTo, cached);
+          }
+          return { path: abs, to: absTo, ok: true };
         } catch (e) {
           return { error: String(e), path: abs };
         }

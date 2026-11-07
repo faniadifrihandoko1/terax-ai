@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import {
   ArrowRight01Icon,
   CheckListIcon,
+  Delete02Icon,
   Edit02Icon,
   EyeIcon,
   File01Icon,
@@ -39,6 +40,8 @@ const TOOL_META: Record<string, { label: string; icon: typeof File01Icon }> = {
   create_directory: { label: "Create dir", icon: FolderAddIcon },
   edit: { label: "Edit", icon: FileEditIcon },
   multi_edit: { label: "Edit", icon: Edit02Icon },
+  delete_file: { label: "Delete", icon: Delete02Icon },
+  rename_file: { label: "Rename", icon: FileEditIcon },
   bash_run: { label: "Run", icon: TerminalIcon },
   bash_background: { label: "Spawn", icon: TerminalIcon },
   bash_logs: { label: "Logs", icon: TerminalIcon },
@@ -83,9 +86,15 @@ function deriveSummary(toolName: string, input: unknown): string | null {
     case "write_file":
     case "edit":
     case "multi_edit":
+    case "delete_file":
     case "create_directory":
     case "list_directory":
       return str("path");
+    case "rename_file": {
+      const from = str("path");
+      const to = str("to");
+      return from && to ? `${from} → ${to}` : (from ?? to);
+    }
     case "bash_run":
     case "bash_background":
       return str("command");
@@ -290,6 +299,7 @@ function renderInputPreview(
   if (
     toolName === "read_file" ||
     toolName === "list_directory" ||
+    toolName === "delete_file" ||
     toolName === "create_directory" ||
     toolName === "open_preview"
   ) {
@@ -297,6 +307,18 @@ function renderInputPreview(
     if (!path) return null;
     return (
       <div className="font-mono text-[11px] text-muted-foreground">{path}</div>
+    );
+  }
+  if (toolName === "rename_file") {
+    const from = str("path");
+    const to = str("to");
+    if (!from && !to) return null;
+    return (
+      <div className="font-mono text-[11px] text-muted-foreground">
+        {from}
+        {from && to ? " → " : ""}
+        {to}
+      </div>
     );
   }
   if (toolName === "grep") {

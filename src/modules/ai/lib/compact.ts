@@ -66,10 +66,18 @@ function collectMutationPaths(messages: ModelMessage[]): Set<string> {
         name === "edit" ||
         name === "multi_edit" ||
         name === "write_file" ||
-        name === "create_directory"
+        name === "create_directory" ||
+        name === "delete_file" ||
+        name === "rename_file"
       ) {
         const p = pathOfInput(part.input);
         if (p) paths.add(p);
+        if (name === "rename_file") {
+          const input = part.input as Record<string, unknown> | null;
+          const to =
+            input && typeof input.to === "string" ? input.to : null;
+          if (to) paths.add(to);
+        }
       }
     }
   }
