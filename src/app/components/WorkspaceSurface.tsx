@@ -29,6 +29,7 @@ type Props = {
   onPreviewUrlChange: PreviewStackProps["onUrlChange"];
   onSetAiDiffStatus: AiDiffStackProps["onSetStatus"];
   onSetAiDiffHunkDecision: AiDiffStackProps["onSetHunkDecision"];
+  aiReviewInline: EditorStackProps["aiReviewInline"];
   onOpenCommitFile: GitHistoryStackProps["onOpenCommitFile"];
   onGitHistorySearchHandle: GitHistoryStackProps["onSearchHandle"];
   onSetMarkdownView: EditorStackProps["onSetMarkdownView"];
@@ -60,6 +61,7 @@ export function WorkspaceSurface({
   onPreviewUrlChange,
   onSetAiDiffStatus,
   onSetAiDiffHunkDecision,
+  aiReviewInline,
   onOpenCommitFile,
   onGitHistorySearchHandle,
   onSetMarkdownView,
@@ -104,6 +106,8 @@ export function WorkspaceSurface({
           onDirtyChange={onEditorDirtyChange}
           onCloseTab={onEditorCloseTab}
           onSetMarkdownView={onSetMarkdownView}
+          onSetAiDiffHunkDecision={onSetAiDiffHunkDecision}
+          aiReviewInline={aiReviewInline}
         />
       </div>
       <div

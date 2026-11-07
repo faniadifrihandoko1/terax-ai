@@ -27,6 +27,7 @@ import {
   restoreStatus,
   type PersistedReviewState,
 } from "../lib/reviewPersistence";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   flushPersist,
   useChatStore,
@@ -56,6 +57,8 @@ export type DiffOpenInput = {
   /** FR-10: restored review progress; defaults to a fresh pending tab. */
   status?: AiDiffStatus;
   hunkDecisions?: Record<number, HunkDecision>;
+  /** False when inline review is on: the tab opens in the background. */
+  activate?: boolean;
 };
 
 export type AgentRunBridgeProps = {
@@ -311,6 +314,10 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
           isNewFile: original.isNewFile,
           status: saved ? restoreStatus(saved.status) : undefined,
           hunkDecisions: saved ? hunkDecisions : undefined,
+          // Fase 4: with inline review on, the proposal shows in the
+          // editor; the ai-diff tab opens in the background as the
+          // side-by-side alternative instead of stealing focus.
+          activate: !usePreferencesStore.getState().aiReviewInline,
         });
       }
       if (restoredCount > 0 && !reviewToastShownRef.current.has(sessionId)) {

@@ -1,8 +1,11 @@
 import { endpointIdFromCompatModel } from "@/modules/ai/config";
 import { getCustomEndpointKey, getKey } from "@/modules/ai/lib/keyring";
+import { reviewHistoryFor } from "@/modules/ai/lib/reviewHistory";
+import type { HunkDecision, HunkDecisions } from "@/modules/ai/lib/reviewApply";
 import { lspFormatDocument, useLspExtension } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { onKeysChanged } from "@/modules/settings/store";
+import type { AiDiffTab } from "@/modules/tabs";
 import { acceptCompletion, startCompletion } from "@codemirror/autocomplete";
 import { redo, undo } from "@codemirror/commands";
 import {
@@ -34,6 +37,13 @@ import {
   inlineCompletion,
   triggerInlineCompletion,
 } from "./lib/autocomplete/inlineExtension";
+import {
+  anchorPosition,
+  firstUndecidedHunk,
+  inlineReviewExtension,
+  setInlineReviewEffect,
+} from "./lib/inlineReview";
+import { computeLineChanges } from "./lib/lineDiff";
 import { diagnosticsReporter } from "./lib/diagnosticsReporter";
 import { useDiagnosticsStore } from "./lib/diagnosticsStore";
 import {
@@ -92,6 +102,17 @@ type Props = {
   onDirtyChange?: (dirty: boolean) => void;
   onSaved?: () => void;
   onClose?: () => void;
+  /** True when this editor tab is the active one. */
+  visible?: boolean;
+  /** Pending AI proposal for this file, if any (Fase 4 inline review). */
+  reviewTab?: AiDiffTab | null;
+  onSetAiDiffHunkDecision?: (
+    approvalId: string,
+    hunkIndex: number,
+    decision: HunkDecision,
+  ) => void;
+  /** Fase 4: false keeps review in the side-by-side ai-diff tab. */
+  aiReviewInline?: boolean;
 };
 
 // Above this, syntax highlighting and LSP are disabled: a multi-MB lezer
@@ -108,7 +129,17 @@ function formatBytes(n: number): string {
 // skip re-rendering entirely when App re-renders (terminal events, tab churn).
 export const EditorPane = memo(
   forwardRef<EditorPaneHandle, Props>(function EditorPane(props, ref) {
-    const { path, overrideLanguage, onDirtyChange, onSaved, onClose } = props;
+    const {
+      path,
+      overrideLanguage,
+      onDirtyChange,
+      onSaved,
+      onClose,
+      visible,
+      reviewTab,
+      onSetAiDiffHunkDecision,
+      aiReviewInline,
+    } = props;
 
     const { doc, onChange, save, reload, adoptDiskText, openAnyway } =
       useDocument({
@@ -334,6 +365,9 @@ export const EditorPane = memo(
         languageCompartment.of([]),
         lspCompartment.of([]),
         diagnosticsReporter(() => pathRef.current),
+        // Fase 4: inline AI review decorations. Static: without review
+        // data the field is null and the extension renders nothing.
+        inlineReviewExtension(),
         // Before inlineCompletion so an open popup wins Tab over the ghost.
         Prec.highest(keymap.of([{ key: "Tab", run: acceptCompletion }])),
         inlineCompletion({
@@ -417,6 +451,112 @@ export const EditorPane = memo(
         ),
       });
     }, [doc]);
+
+    // --- Fase 4: inline AI review ------------------------------------------
+    // The editor buffer keeps showing the on-disk content; the pending
+    // proposal is overlaid as decorations. The change set is memoized on
+    // the contents, not the tab object, so deciding a hunk does not
+    // recompute the diff. Reviewable statuses only: once the proposal is
+    // applied or rejected the overlay clears. Deliberately no guard
+    // against mid-review edits to the buffer: the decorations map through
+    // edits via CodeMirror range mapping (approximately right), and the
+    // ai-diff tab stays the authoritative review surface; the FR-07
+    // conflict guard still protects the actual write at Apply time.
+    const reviewOriginal = reviewTab?.originalContent;
+    const reviewProposed = reviewTab?.proposedContent;
+    const reviewChangeSet = useMemo(
+      () =>
+        reviewOriginal !== undefined && reviewProposed !== undefined
+          ? computeLineChanges(reviewOriginal, reviewProposed)
+          : null,
+      [reviewOriginal, reviewProposed],
+    );
+    const reviewDecisions = useMemo<HunkDecisions>(() => {
+      const m = new Map<number, HunkDecision>();
+      if (reviewTab) {
+        for (const [k, v] of Object.entries(reviewTab.hunkDecisions)) {
+          m.set(Number(k), v);
+        }
+      }
+      return m;
+    }, [reviewTab]);
+    const [inlineFocusedHunk, setInlineFocusedHunk] = useState<number | null>(
+      null,
+    );
+    const reviewable =
+      reviewTab?.status === "pending" ||
+      reviewTab?.status === "reviewing" ||
+      reviewTab?.status === "done";
+
+    useEffect(() => {
+      const view = cmRef.current?.view;
+      if (!view || doc.status !== "ready") return;
+      if (!aiReviewInline || !reviewTab || !reviewChangeSet || !reviewable) {
+        view.dispatch({ effects: setInlineReviewEffect.of(null) });
+        return;
+      }
+      view.dispatch({
+        effects: setInlineReviewEffect.of({
+          changeSet: reviewChangeSet,
+          decisions: reviewDecisions,
+          focusedHunk: inlineFocusedHunk,
+          callbacks: {
+            onDecideHunk: (hunkIndex, decision) => {
+              const current = reviewDecisions.get(hunkIndex) ?? "undecided";
+              const next = current === decision ? "undecided" : decision;
+              if (next === current) return;
+              onSetAiDiffHunkDecision?.(reviewTab.approvalId, hunkIndex, next);
+              reviewHistoryFor(reviewTab.approvalId).record([
+                { hunkIndex, prev: current, next },
+              ]);
+            },
+            onFocusHunk: (hunkIndex) => setInlineFocusedHunk(hunkIndex),
+          },
+        }),
+      });
+    }, [
+      aiReviewInline,
+      reviewTab,
+      reviewChangeSet,
+      reviewDecisions,
+      reviewable,
+      inlineFocusedHunk,
+      onSetAiDiffHunkDecision,
+      doc.status,
+    ]);
+
+    // First time this editor becomes visible with a pending proposal
+    // (e.g. Review from the Changed Files card), focus the first
+    // undecided hunk and scroll to it. Only once per proposal: switching
+    // tabs must not yank the scroll position back.
+    const lastReviewFocusRef = useRef<string | null>(null);
+    useEffect(() => {
+      if (!visible || !aiReviewInline || !reviewTab || !reviewChangeSet) {
+        return;
+      }
+      if (doc.status !== "ready") return;
+      if (lastReviewFocusRef.current === reviewTab.approvalId) return;
+      const first = firstUndecidedHunk(reviewChangeSet, reviewDecisions);
+      if (first === null) return;
+      lastReviewFocusRef.current = reviewTab.approvalId;
+      setInlineFocusedHunk(first);
+      const view = cmRef.current?.view;
+      if (view) {
+        view.dispatch({
+          effects: EditorView.scrollIntoView(
+            anchorPosition(view.state.doc, reviewChangeSet.hunks[first]),
+            { y: "center" },
+          ),
+        });
+      }
+    }, [
+      visible,
+      aiReviewInline,
+      reviewTab,
+      reviewChangeSet,
+      reviewDecisions,
+      doc.status,
+    ]);
 
     const lspExt = useLspExtension(path, langId, doc.status === "ready");
     useEffect(() => {
@@ -627,7 +767,8 @@ export const EditorPane = memo(
         );
       }
 
-      const canForce = doc.status === "toolarge" && doc.size <= FORCE_READ_LIMIT;
+      const canForce =
+        doc.status === "toolarge" && doc.size <= FORCE_READ_LIMIT;
       return (
         <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
           <div className="text-sm text-foreground">

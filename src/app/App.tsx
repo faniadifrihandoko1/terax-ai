@@ -394,20 +394,28 @@ export default function App() {
     return m;
   }, [tabs]);
 
-  // FR-02: a click on a file in the Changed Files card brings its ai-diff
-  // tab forward and marks the file as being reviewed.
+  // FR-02: a click on a file in the Changed Files card brings its review
+  // forward and marks the file as being reviewed. With inline review on,
+  // Review opens the file in the editor at its first undecided hunk
+  // (Fase 4, Antigravity-style); otherwise it activates the ai-diff tab.
+  const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
   const handleOpenFileDiff = useCallback(
     (approvalId: string) => {
-      if (!activateAiDiffTab(approvalId)) return;
       const tab = tabs.find(
         (t): t is AiDiffTab =>
           t.kind === "ai-diff" && t.approvalId === approvalId,
       );
-      if (tab && tab.status === "pending") {
+      if (!tab) return;
+      if (aiReviewInline) {
+        openFileTab(tab.path, true);
+      } else if (!activateAiDiffTab(approvalId)) {
+        return;
+      }
+      if (tab.status === "pending") {
         setAiDiffStatus(approvalId, "reviewing");
       }
     },
-    [activateAiDiffTab, setAiDiffStatus, tabs],
+    [activateAiDiffTab, aiReviewInline, openFileTab, setAiDiffStatus, tabs],
   );
 
   const { hasComposer, keysLoaded } = useAiBootstrap();
@@ -1593,6 +1601,7 @@ export default function App() {
                         onPreviewUrlChange={handlePreviewUrl}
                         onSetAiDiffStatus={setAiDiffStatus}
                         onSetAiDiffHunkDecision={setAiDiffHunkDecision}
+                        aiReviewInline={aiReviewInline}
                         onOpenCommitFile={openCommitFileDiffTab}
                         onGitHistorySearchHandle={setGitHistoryHandle}
                         onSetMarkdownView={setMarkdownView}

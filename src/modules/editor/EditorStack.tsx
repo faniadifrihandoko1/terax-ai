@@ -1,8 +1,10 @@
 import { cn, isMarkdownPath } from "@/lib/utils";
+import type { HunkDecision } from "@/modules/ai/lib/reviewApply";
 import { MarkdownViewToggle } from "@/modules/markdown";
 import type { EditorTab, Tab } from "@/modules/tabs";
 import { useEffect, useRef } from "react";
 import { EditorPane, type EditorPaneHandle } from "./EditorPane";
+import { reviewTabFor } from "./lib/reviewTab";
 
 type Props = {
   tabs: Tab[];
@@ -11,6 +13,13 @@ type Props = {
   registerHandle: (id: number, handle: EditorPaneHandle | null) => void;
   onCloseTab: (id: number) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
+  onSetAiDiffHunkDecision: (
+    approvalId: string,
+    hunkIndex: number,
+    decision: HunkDecision,
+  ) => void;
+  /** Fase 4: false keeps review in the side-by-side ai-diff tab. */
+  aiReviewInline: boolean;
 };
 
 export function EditorStack({
@@ -20,6 +29,8 @@ export function EditorStack({
   registerHandle,
   onCloseTab,
   onSetMarkdownView,
+  onSetAiDiffHunkDecision,
+  aiReviewInline,
 }: Props) {
   const editors = tabs.filter(
     (t): t is EditorTab => t.kind === "editor" && !t.cold,
@@ -117,6 +128,10 @@ export function EditorStack({
                 overrideLanguage={t.overrideLanguage}
                 onDirtyChange={getDirtyCallback(t.id)}
                 onClose={getCloseCallback(t.id)}
+                visible={visible}
+                reviewTab={reviewTabFor(tabs, t.path)}
+                onSetAiDiffHunkDecision={onSetAiDiffHunkDecision}
+                aiReviewInline={aiReviewInline}
               />
             </div>
           </div>
