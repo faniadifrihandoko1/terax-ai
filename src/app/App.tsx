@@ -190,6 +190,7 @@ export default function App() {
     setOverrideLanguage,
     openAiDiffTab,
     activateAiDiffTab,
+    updateAiDiffTab,
     setAiDiffStatus,
     setAiDiffHunkDecision,
     setAiDiffFileDecision,
@@ -1754,7 +1755,7 @@ export default function App() {
             <>
               <AgentRunBridge
                 openAiDiffTab={openAiDiffTab}
-                setAiDiffStatus={setAiDiffStatus}
+                updateAiDiffTab={updateAiDiffTab}
               />
               <LocalAgentNotificationsBridge />
             </>

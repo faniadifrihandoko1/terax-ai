@@ -50,6 +50,8 @@ export type ToolPartLike = {
   state?: string;
   approval?: { id: string };
   input?: unknown;
+  /** Tool result, present once the call finished (Fase 6). */
+  output?: unknown;
   toolCallId?: string;
 };
 

@@ -6,17 +6,17 @@ import { useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import {
   deriveProposed,
-  extractFileMutation,
   isFileMutationPart,
   readOriginal,
   resolveMutationPath,
-  type FileMutation,
 } from "../lib/fileMutations";
+import { collectPendingFileProposals } from "../lib/fileProposals";
+import {
+  clearAllPendingProposals,
+  getPendingProposal,
+} from "../lib/pendingProposals";
 import { saveCheckpoint } from "../lib/reviewCheckpoint";
 import {
-  clearAllReviewedApplies,
-  clearReviewedApply,
-  isReviewedApply,
   type HunkDecision,
   type LineDecision,
 } from "../lib/reviewApply";
@@ -44,11 +44,20 @@ import { getOrCreateChat } from "../store/chatRuntime";
  * Side effects:
  *  - Patches `agentMeta` on every status / approvals change.
  *  - Auto-opens the mini-window when an approval is pending — the user has
- *    to act on it; hiding it would be hostile.
- *  - For pending `write_file` calls, opens an AI diff tab in the editor area
- *    so the user can review the proposed change before approving. The same
- *    tab opens for edit, delete and rename proposals (Fase 5).
+ *    to act on it; hiding it would be hostile. Since Fase 6 only terminal
+ *    commands (and managed-agent spawns) are approval-gated.
+ *  - For finished file-mutation tool calls, opens an AI diff tab in the
+ *    editor area so the user can review the proposed change. File tools
+ *    are not approval-gated (Fase 6): their execute only records a
+ *    proposal, so the tab opens once the tool call finished — the run
+ *    never blocks waiting for the user. Edit proposals for one file
+ *    compose into a single tab; delete/rename proposals open their own.
  *  - Persists messages of the active session on every change.
+ *
+ * The review tab owns the proposal's status (pending → reviewing → done
+ * → applied / rejected / conflict / restored). The bridge never records
+ * a status from an approval answer: file proposals have no approval to
+ * answer anymore.
  */
 
 export type DiffOpenInput = {
@@ -72,7 +81,8 @@ export type DiffOpenInput = {
 
 export type AgentRunBridgeProps = {
   openAiDiffTab: (input: DiffOpenInput) => number | null;
-  setAiDiffStatus: (approvalId: string, status: AiDiffStatus) => void;
+  /** Absorbs a newer composed proposal into an existing tab (Fase 6). */
+  updateAiDiffTab: (approvalId: string, proposedContent: string) => boolean;
 };
 
 export function AgentRunBridge(props: AgentRunBridgeProps) {
@@ -85,7 +95,7 @@ type BridgeProps = { sessionId: string } & AgentRunBridgeProps;
 
 type AnyPart = UIMessagePart<Record<string, never>, Record<string, never>>;
 
-function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
+function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
   const { status, messages, addToolApprovalResponse } = useChat<UIMessage>({
     chat,
@@ -95,15 +105,11 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
   const persistMessages = useChatStore((s) => s.persistMessages);
   const setApprovalResponder = useChatStore((s) => s.setApprovalResponder);
 
-  // Expose the approval responder so the diff tab can resolve approvals.
-  // We keep it in a ref-stable closure so identity is stable per render.
-  // Every answer is also recorded: it is the only place that knows whether
-  // an approval was accepted or rejected.
-  const decisionsRef = useRef(new Map<string, boolean>());
-  const statusRecordedRef = useRef(new Set<string>());
+  // Expose the approval responder so the approval card can resolve
+  // approvals. Only terminal commands (and managed-agent spawns) are
+  // approval-gated since Fase 6; file proposals have no approval.
   useEffect(() => {
     setApprovalResponder((id, approved) => {
-      decisionsRef.current.set(id, approved);
       addToolApprovalResponse({ id, approved });
     });
     return () => setApprovalResponder(null);
@@ -155,9 +161,12 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
   }, [approvalsPending, openMini]);
 
   // ---- AI diff tab management ----------------------------------------------
-  // We track which approvalIds have already opened a tab so re-renders don't
-  // open duplicates. Reset when the session changes.
+  // We track which proposal ids have already opened a tab so re-renders
+  // don't open duplicates, and which tab each path's composed proposal
+  // lives in so later proposals for the same file update it. Reset when
+  // the session changes.
   const openedRef = useRef<Set<string>>(new Set());
+  const tabByPathRef = useRef<Map<string, string>>(new Map());
   const fileMutationFingerprintRef = useRef<string>("");
   // FR-10: saved review state for this session, loaded once (the bridge
   // re-derives the reviewed contents from the messages; only the status
@@ -170,18 +179,18 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
   // biome-ignore lint/correctness/useExhaustiveDependencies(sessionId): sessionId is a manual reset trigger — the per-session caches reset when the session changes
   useEffect(() => {
     openedRef.current = new Set();
+    tabByPathRef.current = new Map();
     fileMutationFingerprintRef.current = "";
-    decisionsRef.current = new Map();
-    statusRecordedRef.current = new Set();
     reviewStateCacheRef.current = null;
-    clearAllReviewedApplies();
+    clearAllPendingProposals();
   }, [sessionId]);
 
   // Cheap fingerprint of file-mutation tool parts only. The diff-tab effect
   // is the most expensive thing on the streaming path, so we skip it when
   // only text/reasoning tokens have arrived (the common case). The path
   // and rename target are part of the fingerprint so a changed input
-  // re-runs the effect instead of reusing a stale proposal.
+  // re-runs the effect instead of reusing a stale proposal. The id is
+  // the tool call id (Fase 6) or a legacy approval id.
   const fileMutationFingerprint = useMemo(() => {
     let fp = "";
     for (const m of messages) {
@@ -190,7 +199,10 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
         const t = (p as { type?: string }).type;
         if (!t || !isFileMutationPart(t)) continue;
         const state = (p as { state?: string }).state ?? "";
-        const id = (p as { approval?: { id?: string } }).approval?.id ?? "";
+        const id =
+          (p as { toolCallId?: string }).toolCallId ??
+          (p as { approval?: { id?: string } }).approval?.id ??
+          "";
         const input = (p as { input?: unknown }).input as
           | { path?: unknown; to?: unknown }
           | undefined;
@@ -203,76 +215,20 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
   }, [messages]);
 
   useEffect(() => {
-    type Pending = {
-      approvalId: string;
-      path: string;
-      derive: FileMutation["derive"];
-      /** Delete/rename proposals carry no hunks, only a file decision. */
-      mutationKind: "edit" | "delete" | "rename";
-      targetPath?: string;
-    };
     if (fileMutationFingerprint === fileMutationFingerprintRef.current) {
       return;
     }
     fileMutationFingerprintRef.current = fileMutationFingerprint;
 
-    const pending: Pending[] = [];
-    const toResolve = new Set<string>();
-
+    const allParts: AnyPart[] = [];
     for (const m of messages) {
       if (m.role !== "assistant") continue;
-      for (const part of m.parts as AnyPart[]) {
-        const info = extractFileMutation(part as unknown as ToolPartLike);
-        if (!info) continue;
-        const { state, approvalId, path, derive } = info;
-        if (!approvalId) continue;
-        if (state === "approval-requested") {
-          if (!openedRef.current.has(approvalId)) {
-            const mutationKind =
-              derive.kind === "delete"
-                ? "delete"
-                : derive.kind === "rename"
-                  ? "rename"
-                  : "edit";
-            pending.push({
-              approvalId,
-              path,
-              derive,
-              mutationKind,
-              ...(derive.kind === "rename"
-                ? { targetPath: derive.to }
-                : {}),
-            });
-          }
-        } else if (
-          state === "approval-responded" ||
-          state === "output-available" ||
-          state === "output-error"
-        ) {
-          if (openedRef.current.has(approvalId)) toResolve.add(approvalId);
-        }
-      }
+      allParts.push(...(m.parts as AnyPart[]));
     }
-
-    // The diff tab stays open until the user closes it, so the change can
-    // be re-opened from the Changed Files card after the task finishes
-    // (FR-02). The recorded decision becomes the file's review status.
-    for (const id of toResolve) {
-      if (statusRecordedRef.current.has(id)) continue;
-      // A reviewed apply answers the approval false on purpose, so the
-      // agent tool never writes; the pane owns the real outcome. Skip the
-      // bridge's own applied/rejected recording for those ids, and
-      // consume the registry entry.
-      if (isReviewedApply(id)) {
-        clearReviewedApply(id);
-        continue;
-      }
-      const approved = decisionsRef.current.get(id);
-      if (approved === undefined) continue;
-      statusRecordedRef.current.add(id);
-      setAiDiffStatus(id, approved ? "applied" : "rejected");
-    }
-
+    const pending = collectPendingFileProposals(
+      allParts as unknown as ToolPartLike[],
+      openedRef.current,
+    );
     if (pending.length === 0) return;
 
     let cancelled = false;
@@ -291,19 +247,52 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
       for (const p of pending) {
         if (cancelled) return;
         // Mark as opened up-front so a re-render mid-await doesn't double-open.
-        openedRef.current.add(p.approvalId);
-        const abs = resolveMutationPath(p.path, cwd);
+        openedRef.current.add(p.proposalId);
+        const abs = p.resultPath ?? resolveMutationPath(p.path, cwd);
+
+        // Fase 6: edit proposals compose per file. The registry holds the
+        // accumulated content; the tab for the path absorbs it so the
+        // user reviews one diff per file, not one tab per tool call.
+        if (p.mutationKind === "edit") {
+          const registry = getPendingProposal(abs);
+          if (registry) {
+            const existingId = tabByPathRef.current.get(abs);
+            if (
+              existingId !== undefined &&
+              updateAiDiffTab(existingId, registry.proposedContent)
+            ) {
+              continue;
+            }
+            openAiDiffTab({
+              path: abs,
+              originalContent: registry.originalContent,
+              proposedContent: registry.proposedContent,
+              approvalId: p.proposalId,
+              isNewFile: registry.isNewFile,
+              mutationKind: "edit",
+              // Fase 4: with inline review on, the proposal shows in the
+              // editor; the ai-diff tab opens in the background as the
+              // side-by-side alternative instead of stealing focus.
+              activate: !usePreferencesStore.getState().aiReviewInline,
+            });
+            tabByPathRef.current.set(abs, p.proposalId);
+            continue;
+          }
+        }
+
+        // Fallback: no registry entry (session restore, or a delete/rename
+        // proposal, which never composes). Derive from the on-disk content.
         const original = await readOriginal(abs);
         if (cancelled) return;
         const r = deriveProposed(original.content, p.derive);
         if (!r.ok) {
           // Edit precondition failed (string not found / not unique).
-          // Skip opening the tab; the approval modal will surface the error.
+          // Skip opening the tab; the tool result already told the model.
           continue;
         }
         const proposed = r.content;
         const saved = restored?.proposals.find(
-          (pr) => pr.approvalId === p.approvalId,
+          (pr) => pr.approvalId === p.proposalId,
         );
         // v2 states carry hunk decisions; v1 states carry line decisions,
         // migrated to hunks against the re-derived change set.
@@ -335,7 +324,7 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
           path: abs,
           originalContent: original.content,
           proposedContent: proposed,
-          approvalId: p.approvalId,
+          approvalId: p.proposalId,
           isNewFile: original.isNewFile,
           status: saved ? restoreStatus(saved.status) : undefined,
           mutationKind: p.mutationKind,
@@ -356,6 +345,7 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
               ? !usePreferencesStore.getState().aiReviewInline
               : true,
         });
+        tabByPathRef.current.set(abs, p.proposalId);
       }
       if (restoredCount > 0 && !reviewToastShownRef.current.has(sessionId)) {
         reviewToastShownRef.current.add(sessionId);
@@ -376,7 +366,7 @@ function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
     messages,
     fileMutationFingerprint,
     openAiDiffTab,
-    setAiDiffStatus,
+    updateAiDiffTab,
     sessionId,
   ]);
 
