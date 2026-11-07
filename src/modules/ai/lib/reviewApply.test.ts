@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   allHunksDecided,
   allLinesDecided,
@@ -6,10 +6,8 @@ import {
   applyReviewedEdit,
   applyReviewedRename,
   checkDiskConflict,
-  clearReviewedApply,
   discardReviewedProposal,
   djb2Hash,
-  isReviewedApply,
   type HunkDecisions,
   type LineDecisions,
   type ReviewApplyIo,
@@ -42,8 +40,8 @@ function makeIo(
   const checkpoints: FileCheckpoint[] = [];
   const disk = new Map(Object.entries(opts.disk ?? {}));
   const io: ReviewApplyIo = {
-    respondToApproval: (id, approved) => {
-      calls.push(`respond:${id}:${approved}`);
+    clearPendingProposal: (path) => {
+      calls.push(`clear-pending:${path}`);
     },
     readFile: async (path) => {
       calls.push(`read:${path}`);
@@ -162,19 +160,15 @@ describe("applyReviewedEdit", () => {
     reconstructedContent: "a\nB\n",
   };
 
-  afterEach(() => {
-    clearReviewedApply("ap1");
-  });
-
-  it("answers the approval false, then writes the reconstruction", async () => {
+  it("writes the reconstruction and clears the pending proposal", async () => {
     const { io, calls, written } = makeIo({ disk: { "/x/a.ts": "a\nb\n" } });
     const result = await applyReviewedEdit(input, io);
     expect(result).toEqual({ outcome: "applied", path: "/x/a.ts" });
     expect(written.get("/x/a.ts")).toBe("a\nB\n");
-    expect(calls.indexOf("respond:ap1:false")).toBeLessThan(
+    // The pending proposal is cleared only after the write succeeds.
+    expect(calls.indexOf("clear-pending:/x/a.ts")).toBeGreaterThan(
       calls.indexOf("write:/x/a.ts"),
     );
-    expect(isReviewedApply("ap1")).toBe(true);
   });
 
   it("discards without writing when nothing changed", async () => {
@@ -185,17 +179,17 @@ describe("applyReviewedEdit", () => {
     );
     expect(result).toEqual({ outcome: "discarded", path: "/x/a.ts" });
     expect(written.size).toBe(0);
-    expect(calls).toContain("respond:ap1:false");
+    expect(calls).toContain("clear-pending:/x/a.ts");
   });
 
-  it("blocks the write and leaves the approval unanswered on conflict", async () => {
+  it("blocks the write on conflict and keeps the proposal pending", async () => {
     const { io, calls, written } = makeIo({
       disk: { "/x/a.ts": "a\nCHANGED\n" },
     });
     const result = await applyReviewedEdit(input, io);
     expect(result.outcome).toBe("conflict");
     expect(written.size).toBe(0);
-    expect(calls).not.toContain("respond:ap1:false");
+    expect(calls).not.toContain("clear-pending:/x/a.ts");
   });
 
   it("blocks the write when the file was deleted", async () => {
@@ -215,24 +209,24 @@ describe("applyReviewedEdit", () => {
     expect(written.get("/x/a.ts")).toBe("a\nB\n");
   });
 
-  it("reports write-failed after answering false", async () => {
+  it("reports write-failed and keeps the proposal pending for retry", async () => {
     const { io, calls } = makeIo({
       disk: { "/x/a.ts": "a\nb\n" },
       writeFails: true,
     });
     const result = await applyReviewedEdit(input, io);
     expect(result.outcome).toBe("write-failed");
-    expect(calls).toContain("respond:ap1:false");
+    expect(calls).not.toContain("clear-pending:/x/a.ts");
   });
 
-  it("reports not-writable without answering", async () => {
+  it("reports not-writable and keeps the proposal pending", async () => {
     const { io, calls } = makeIo({
       disk: { "/x/a.ts": "a\nb\n" },
       writable: false,
     });
     const result = await applyReviewedEdit(input, io);
     expect(result.outcome).toBe("not-writable");
-    expect(calls).not.toContain("respond:ap1:false");
+    expect(calls).not.toContain("clear-pending:/x/a.ts");
   });
 
   it("saves a checkpoint before the write, with the accepted hunks", async () => {
@@ -276,11 +270,7 @@ describe("applyReviewedDelete (Fase 5)", () => {
     originalContent: "gone soon\n",
   };
 
-  afterEach(() => {
-    clearReviewedApply("del1");
-  });
-
-  it("answers false, checkpoints, then deletes", async () => {
+  it("checkpoints, deletes, then clears the pending proposal", async () => {
     const { io, calls, deleted, checkpoints } = makeIo({
       disk: { "/x/a.ts": "gone soon\n" },
     });
@@ -295,10 +285,10 @@ describe("applyReviewedDelete (Fase 5)", () => {
       contentBefore: "gone soon\n",
       contentAfter: null,
     });
-    expect(calls.indexOf("respond:del1:false")).toBeLessThan(
-      calls.indexOf("checkpoint:del1"),
-    );
     expect(calls.indexOf("checkpoint:del1")).toBeLessThan(
+      calls.indexOf("delete:/x/a.ts"),
+    );
+    expect(calls.indexOf("clear-pending:/x/a.ts")).toBeGreaterThan(
       calls.indexOf("delete:/x/a.ts"),
     );
   });
@@ -320,14 +310,14 @@ describe("applyReviewedDelete (Fase 5)", () => {
     expect(deleted).toHaveLength(0);
   });
 
-  it("reports write-failed after answering false", async () => {
+  it("reports write-failed and keeps the proposal pending for retry", async () => {
     const { io, calls } = makeIo({
       disk: { "/x/a.ts": "gone soon\n" },
       deleteFails: true,
     });
     const result = await applyReviewedDelete(input, io);
     expect(result.outcome).toBe("write-failed");
-    expect(calls).toContain("respond:del1:false");
+    expect(calls).not.toContain("clear-pending:/x/a.ts");
   });
 });
 
@@ -339,11 +329,7 @@ describe("applyReviewedRename (Fase 5)", () => {
     originalContent: "same\n",
   };
 
-  afterEach(() => {
-    clearReviewedApply("ren1");
-  });
-
-  it("answers false, checkpoints, then renames", async () => {
+  it("checkpoints, renames, then clears the pending proposal", async () => {
     const { io, calls, renamed, checkpoints } = makeIo({
       disk: { "/ws/old.ts": "same\n" },
     });
@@ -358,10 +344,10 @@ describe("applyReviewedRename (Fase 5)", () => {
       targetPath: "/ws/new.ts",
       contentBefore: "same\n",
     });
-    expect(calls.indexOf("respond:ren1:false")).toBeLessThan(
-      calls.indexOf("checkpoint:ren1"),
-    );
     expect(calls.indexOf("checkpoint:ren1")).toBeLessThan(
+      calls.indexOf("rename:/ws/old.ts:/ws/new.ts"),
+    );
+    expect(calls.indexOf("clear-pending:/ws/old.ts")).toBeGreaterThan(
       calls.indexOf("rename:/ws/old.ts:/ws/new.ts"),
     );
   });
@@ -409,12 +395,10 @@ describe("applyReviewedRename (Fase 5)", () => {
 });
 
 describe("discardReviewedProposal", () => {
-  it("marks the approval and answers false", () => {
+  it("drops the pending proposal for the path", () => {
     const { io, calls } = makeIo();
-    discardReviewedProposal("ap9", io);
-    expect(calls).toContain("respond:ap9:false");
-    expect(isReviewedApply("ap9")).toBe(true);
-    clearReviewedApply("ap9");
+    discardReviewedProposal("/x/a.ts", io);
+    expect(calls).toContain("clear-pending:/x/a.ts");
   });
 });
 

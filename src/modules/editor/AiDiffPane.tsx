@@ -340,7 +340,7 @@ export function AiDiffPane({
       setApplyError(null);
       try {
         if (fileDecision === "rejected") {
-          discardReviewedProposal(approvalId);
+          discardReviewedProposal(path);
           onSetStatus("rejected");
           return;
         }
@@ -458,7 +458,7 @@ export function AiDiffPane({
   };
 
   const handleDiscard = () => {
-    discardReviewedProposal(approvalId);
+    discardReviewedProposal(path);
     clearReviewHistory(approvalId);
     setConflict(null);
     onSetStatus("rejected");

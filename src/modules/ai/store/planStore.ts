@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { clearPendingProposal } from "../lib/pendingProposals";
 import { native } from "../lib/native";
 
 export type QueuedEdit = {
@@ -55,6 +56,10 @@ export const usePlanStore = create<PlanState>((set, get) => ({
         } else {
           await native.writeFile(q.path, q.proposedContent);
         }
+        // The disk changed under any pending review proposal for this
+        // path, so its composed content is stale: drop it rather than
+        // letting a later agent edit build on it.
+        clearPendingProposal(q.path);
         results.push({ id: q.id, ok: true });
       } catch (e) {
         results.push({ id: q.id, ok: false, error: String(e) });
