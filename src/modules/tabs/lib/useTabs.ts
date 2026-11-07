@@ -904,6 +904,9 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       proposedContent: string;
       approvalId: string;
       isNewFile: boolean;
+      /** FR-10: restored review progress; defaults to a fresh pending tab. */
+      status?: AiDiffStatus;
+      lineDecisions?: Record<number, LineDecision>;
     }) => {
       let targetId: number | null = null;
       setTabs((curr) => {
@@ -928,9 +931,9 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             originalContent: input.originalContent,
             proposedContent: input.proposedContent,
             approvalId: input.approvalId,
-            status: "pending",
+            status: input.status ?? "pending",
             isNewFile: input.isNewFile,
-            lineDecisions: {},
+            lineDecisions: input.lineDecisions ?? {},
           },
         ];
       });

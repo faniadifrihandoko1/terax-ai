@@ -28,6 +28,8 @@ import {
   useChatStore,
   useSelectionAskAi,
 } from "@/modules/ai";
+import { saveReviewState } from "@/modules/ai/lib/sessions";
+import { snapshotReviewState } from "@/modules/ai/lib/reviewPersistence";
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
@@ -150,6 +152,9 @@ const BenchBridge = __TERAX_BENCH__
   ? lazy(() => import("@/bench/BenchBridge"))
   : null;
 
+// FR-10: debounce for persisting open AI review proposals per session.
+const REVIEW_SAVE_DEBOUNCE_MS = 500;
+
 export default function App() {
   const {
     tabs,
@@ -256,12 +261,30 @@ export default function App() {
 
   const activeSpaceId = useSpaces((s) => s.activeId);
   const spacesHydrated = useSpaces((s) => s.hydrated);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
   const activeSpaceIdRef = useRef(activeSpaceId);
   useLayoutEffect(() => {
     tabsRef.current = tabs;
     activeIdRef.current = activeId;
     activeSpaceIdRef.current = activeSpaceId;
   }, [tabs, activeId, activeSpaceId]);
+
+  // FR-10: persist open AI review proposals (status + line decisions) per
+  // session, debounced so a burst of line decisions writes once. The
+  // reviewed contents are NOT stored — the bridge re-derives them from the
+  // chat messages on restore, exactly like on first open.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const timer = setTimeout(() => {
+      const aiDiffTabs = tabs.filter((t) => t.kind === "ai-diff");
+      if (aiDiffTabs.length === 0) return;
+      void saveReviewState(
+        activeSessionId,
+        snapshotReviewState(activeSessionId, aiDiffTabs),
+      ).catch(() => {});
+    }, REVIEW_SAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [tabs, activeSessionId]);
   const sourceControlSpaceId = activeSpaceId ?? DEFAULT_SPACE_ID;
 
   const handleWorkspaceChange = useCallback(

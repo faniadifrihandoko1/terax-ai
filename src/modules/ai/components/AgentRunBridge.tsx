@@ -3,6 +3,7 @@ import type { UIMessagePart } from "ai";
 import type { AiDiffStatus } from "@/modules/tabs";
 import type { ToolPartLike } from "../lib/fileMutations";
 import { useEffect, useMemo, useRef } from "react";
+import { toast } from "sonner";
 import {
   deriveProposed,
   extractFileMutation,
@@ -14,7 +15,10 @@ import {
   clearAllReviewedApplies,
   clearReviewedApply,
   isReviewedApply,
+  type LineDecision,
 } from "../lib/reviewApply";
+import { loadReviewState } from "../lib/sessions";
+import { restoreStatus, type PersistedReviewState } from "../lib/reviewPersistence";
 import {
   flushPersist,
   useChatStore,
@@ -41,6 +45,9 @@ export type DiffOpenInput = {
   proposedContent: string;
   approvalId: string;
   isNewFile: boolean;
+  /** FR-10: restored review progress; defaults to a fresh pending tab. */
+  status?: AiDiffStatus;
+  lineDecisions?: Record<number, LineDecision>;
 };
 
 export type AgentRunBridgeProps = {
@@ -138,11 +145,20 @@ function Bridge({
   // open duplicates. Reset when the session changes.
   const openedRef = useRef<Set<string>>(new Set());
   const fileMutationFingerprintRef = useRef<string>("");
+  // FR-10: saved review state for this session, loaded once (the bridge
+  // re-derives the reviewed contents from the messages; only the status
+  // and line decisions are restored).
+  const reviewStateCacheRef = useRef<{
+    sessionId: string;
+    state: PersistedReviewState | null;
+  } | null>(null);
+  const reviewToastShownRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     openedRef.current = new Set();
     fileMutationFingerprintRef.current = "";
     decisionsRef.current = new Map();
     statusRecordedRef.current = new Set();
+    reviewStateCacheRef.current = null;
     clearAllReviewedApplies();
   }, [sessionId]);
 
@@ -235,6 +251,16 @@ function Bridge({
     let cancelled = false;
     void (async () => {
       const cwd = useChatStore.getState().live.getCwd();
+      // FR-10: load the saved review state once per session so reopened
+      // proposals carry their status and line decisions.
+      if (reviewStateCacheRef.current?.sessionId !== sessionId) {
+        reviewStateCacheRef.current = {
+          sessionId,
+          state: await loadReviewState(sessionId).catch(() => null),
+        };
+      }
+      const restored = reviewStateCacheRef.current.state;
+      let restoredCount = 0;
       for (const p of pending) {
         if (cancelled) return;
         // Mark as opened up-front so a re-render mid-await doesn't double-open.
@@ -249,13 +275,37 @@ function Bridge({
           continue;
         }
         const proposed = r.content;
+        const saved = restored?.proposals.find(
+          (pr) => pr.approvalId === p.approvalId,
+        );
+        const lineDecisions: Record<number, LineDecision> = {};
+        if (saved) {
+          for (const [index, decision] of Object.entries(
+            saved.lineDecisions,
+          )) {
+            lineDecisions[Number(index)] = decision;
+          }
+          restoredCount += 1;
+        }
         openAiDiffTab({
           path: abs,
           originalContent: original.content,
           proposedContent: proposed,
           approvalId: p.approvalId,
           isNewFile: original.isNewFile,
+          status: saved ? restoreStatus(saved.status) : undefined,
+          lineDecisions: saved ? lineDecisions : undefined,
         });
+      }
+      if (restoredCount > 0 && !reviewToastShownRef.current.has(sessionId)) {
+        reviewToastShownRef.current.add(sessionId);
+        toast.info(
+          `Restored ${restoredCount} pending AI review${restoredCount === 1 ? "" : "s"} from the last session`,
+          {
+            description:
+              "Open a file from the Changed Files card to continue reviewing.",
+          },
+        );
       }
     })();
 
