@@ -3,6 +3,7 @@ import {
   type AgentInstanceCount,
   createAgentPanePlan,
 } from "@/modules/agents/lib/launcher";
+import type { LineDecision } from "@/modules/ai/lib/reviewApply";
 import {
   findLeafCwd,
   hasLeaf,
@@ -109,6 +110,12 @@ export type AiDiffTab = TabBase & {
   approvalId: string;
   status: AiDiffStatus;
   isNewFile: boolean;
+  /**
+   * Per-line review decisions (FR-03), keyed by LineChange index.
+   * Lives on the tab, not in pane-local state, because AiDiffStack only
+   * renders the active ai-diff tab and switching tabs unmounts the pane.
+   */
+  lineDecisions: Record<number, LineDecision>;
 };
 
 export type GitDiffTab = TabBase & {
@@ -923,6 +930,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             approvalId: input.approvalId,
             status: "pending",
             isNewFile: input.isNewFile,
+            lineDecisions: {},
           },
         ];
       });
@@ -958,6 +966,27 @@ export function useTabs(initial?: Partial<TerminalTab>) {
         curr.map((t) =>
           t.kind === "ai-diff" && t.approvalId === approvalId
             ? { ...t, status }
+            : t,
+        ),
+      );
+    },
+    [],
+  );
+
+  /**
+   * Records one per-line decision (FR-03) on the ai-diff tab. The tab
+   * owns the decisions because the pane unmounts when the user switches
+   * tabs; the pane reads them back from the tab props on every render.
+   */
+  const setAiDiffLineDecision = useCallback(
+    (approvalId: string, index: number, decision: LineDecision) => {
+      setTabs((curr) =>
+        curr.map((t) =>
+          t.kind === "ai-diff" && t.approvalId === approvalId
+            ? {
+                ...t,
+                lineDecisions: { ...t.lineDecisions, [index]: decision },
+              }
             : t,
         ),
       );
@@ -1471,6 +1500,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     openCommitHistoryTab,
     openCommitFileDiffTab,
     setAiDiffStatus,
+    setAiDiffLineDecision,
     closeAiDiffTab,
     closeTab,
     closeTabs,

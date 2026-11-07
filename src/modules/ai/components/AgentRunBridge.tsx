@@ -11,6 +11,11 @@ import {
   type EditOp,
 } from "../lib/fileMutations";
 import {
+  clearAllReviewedApplies,
+  clearReviewedApply,
+  isReviewedApply,
+} from "../lib/reviewApply";
+import {
   flushPersist,
   useChatStore,
   type AgentRunStatus,
@@ -138,6 +143,7 @@ function Bridge({
     fileMutationFingerprintRef.current = "";
     decisionsRef.current = new Map();
     statusRecordedRef.current = new Set();
+    clearAllReviewedApplies();
   }, [sessionId]);
 
   // Cheap fingerprint of file-mutation tool parts only. The diff-tab effect
@@ -210,6 +216,14 @@ function Bridge({
     // (FR-02). The recorded decision becomes the file's review status.
     for (const id of toResolve) {
       if (statusRecordedRef.current.has(id)) continue;
+      // A reviewed apply answers the approval false on purpose, so the
+      // agent tool never writes; the pane owns the real outcome. Skip the
+      // bridge's own applied/rejected recording for those ids, and
+      // consume the registry entry.
+      if (isReviewedApply(id)) {
+        clearReviewedApply(id);
+        continue;
+      }
       const approved = decisionsRef.current.get(id);
       if (approved === undefined) continue;
       statusRecordedRef.current.add(id);
