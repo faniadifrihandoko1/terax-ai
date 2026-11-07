@@ -73,8 +73,11 @@ const DIFF_THEME = EditorView.theme({
 
 const STATUS_LABEL: Record<AiDiffStatus, string> = {
   pending: "Pending review",
-  approved: "Applied",
+  reviewing: "Reviewing",
+  done: "Reviewed",
+  applied: "Applied",
   rejected: "Rejected",
+  conflict: "Conflict",
 };
 
 const STATUS_BADGE: Record<
@@ -82,8 +85,11 @@ const STATUS_BADGE: Record<
   "outline" | "secondary" | "destructive"
 > = {
   pending: "outline",
-  approved: "secondary",
+  reviewing: "secondary",
+  done: "secondary",
+  applied: "secondary",
   rejected: "destructive",
+  conflict: "destructive",
 };
 
 export function AiDiffPane({
