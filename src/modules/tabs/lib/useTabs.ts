@@ -79,7 +79,23 @@ export type MarkdownTab = TabBase & {
   path: string;
 };
 
-export type AiDiffStatus = "pending" | "approved" | "rejected";
+/**
+ * Review state of one AI-proposed file change (FR-06).
+ * pending: approval requested, not looked at yet.
+ * reviewing: the diff tab was opened from the Changed Files card.
+ * done: every line decision recorded, apply not run yet (Fase 2 only;
+ * Fase 1 applies immediately, so it moves straight to applied/rejected).
+ * applied: the change was written to disk.
+ * rejected: the change was declined, nothing was written.
+ * conflict: the on-disk file changed since the proposal (Fase 2 guard).
+ */
+export type AiDiffStatus =
+  | "pending"
+  | "reviewing"
+  | "done"
+  | "applied"
+  | "rejected"
+  | "conflict";
 
 export type AiDiffTab = TabBase & {
   id: number;
@@ -916,6 +932,26 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     [],
   );
 
+  /**
+   * Activates the ai-diff tab for an approval, if it exists. Used by the
+   * Changed Files card (FR-02): the tab is opened by AgentRunBridge, the
+   * card only brings it to the front. Returns false when there is no tab
+   * for the approval yet.
+   */
+  const activateAiDiffTab = useCallback((approvalId: string) => {
+    let targetId: number | null = null;
+    setTabs((curr) => {
+      const target = curr.find(
+        (t) => t.kind === "ai-diff" && t.approvalId === approvalId,
+      );
+      if (!target) return curr;
+      targetId = target.id;
+      return curr;
+    });
+    if (targetId !== null) setActiveId(targetId);
+    return targetId !== null;
+  }, []);
+
   const setAiDiffStatus = useCallback(
     (approvalId: string, status: AiDiffStatus) => {
       setTabs((curr) =>
@@ -939,7 +975,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       if (fallback === null) {
         return curr.map((t) =>
           t.kind === "ai-diff" && t.approvalId === approvalId
-            ? { ...t, status: "approved" as AiDiffStatus }
+            ? { ...t, status: "applied" as AiDiffStatus }
             : t,
         );
       }
@@ -1430,6 +1466,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     newMarkdownTab,
     setMarkdownView,
     openAiDiffTab,
+    activateAiDiffTab,
     openGitDiffTab,
     openCommitHistoryTab,
     openCommitFileDiffTab,
