@@ -402,7 +402,7 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
 - **Voice input**: streamed transcription pipeline. Toggled from the composer.
 - **Live context bridge**: `App.tsx` calls `setLive({ getCwd, getTerminalContext, … })` so tools can read the *currently active* terminal's cwd + last 300 lines of buffer. Lazy by design - don't pre-snapshot.
 
-- **AI review, Antigravity-style (fork, Fase 1)**: after a task finishes, the
+- **AI review, Antigravity-style (fork, Fase 1+2)**: after a task finishes, the
   chat shows a `ChangedFilesCard` (`src/modules/ai/components/ChangedFilesCard.tsx`)
   listing every file the agent proposed to change, with +added/-removed counts
   (shared `computeLineStats` in `src/modules/editor/lib/diffStats.ts`) and a
@@ -414,12 +414,27 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   `src/modules/ai/lib/fileMutations.ts`, the same functions `AgentRunBridge`
   uses to open the tab. An answered approval no longer closes the ai-diff
   tab; the decision is recorded with `setAiDiffStatus` instead, so the tab
-  stays open until the user closes it. The write path is unchanged in Fase 1
-  (per-file approval flow). Fase 2 adds per-line decisions and the
-  `apply_reviewed_edit` tool; its contract lives in
-  `src/modules/ai/lib/reviewApply.ts`.
+  stays open until the user closes it. Per-line review (Fase 2): the ai-diff
+  tab breaks the proposal into per-line changes (`src/modules/editor/lib/lineDiff.ts`:
+  `computeLineChanges`, `reconstructFile`, `countDecisions`, `splitPairs`),
+  each line decided Accept/Reject in the review list, per hunk, or per file
+  (Accept all / Reject all / Reject remaining); decisions live on the tab
+  (`AiDiffTab.lineDecisions`, `setAiDiffLineDecision`) because the pane
+  unmounts on tab switch. Apply is enabled only when every line is decided
+  and writes the reconstruction via `applyReviewedEdit`
+  (`src/modules/ai/lib/reviewApply.ts`): it answers the original approval
+  `false` first so the agent tool never writes, guards the write with a
+  djb2 hash of the on-disk content vs `originalContent` (mismatch sets the
+  tab `conflict` and blocks the write; "Check again" re-runs the guard,
+  "Discard proposal" answers false), and writes atomically through
+  `native.writeFile`. A read-only result preview shows the reconstruction
+  side by side with the diff, decided lines highlighted. The reviewed-apply
+  registry (`mark/is/clearReviewedApply`) lets `AgentRunBridge` skip its own
+  applied/rejected recording for these approvals; it is cleared on session
+  change. `apply_reviewed_edit` is deliberately not an AI SDK tool: only the
+  review UI may invoke it, never the model.
 - **Tools** (`tools/tools.ts`): `read_file`, `list_directory`, `fs_search`, `fs_grep` auto-execute. `write_file`, `create_directory`, `rename`, `delete`, `run_command`, `shell_session_run`, `shell_bg_spawn` set `needsApproval: true` and the AI SDK pauses for an in-UI confirmation card. Auto-send after approval uses `lastAssistantMessageIsCompleteWithApprovalResponses`. `lib/security.ts` is a deny-list refusing obvious secret paths (`.env*`, `.ssh/`, credentials, keychain dirs) - apply on **both** read and write paths and don't bypass it.
-- **Edit diffs**: AI-proposed edits open in a side-by-side diff tab (`ai-diff` tab kind); user accepts/rejects per hunk before the write tool actually runs.
+- **Edit diffs**: AI-proposed edits open in a side-by-side diff tab (`ai-diff` tab kind); the user reviews them line by line (see AI review above) before anything is written. The old per-file Accept/Reject buttons are gone; the composer card's Approve still writes the whole proposal unchanged.
 - **Prompt snippets** (`#handle`): reusable prompt fragments surfaced in the composer. Do not describe these as skills; a reusable tool-bundled skills system is not implemented yet.
 
 ### UI conventions
