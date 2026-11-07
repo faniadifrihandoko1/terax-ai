@@ -14,6 +14,7 @@ function aiDiffTab(
     proposedContent: "b\n",
     status: "pending",
     isNewFile: false,
+    mutationKind: "edit",
     hunkDecisions: {},
     ...overrides,
   } as AiDiffTab;
@@ -63,5 +64,23 @@ describe("reviewTabFor (Fase 4)", () => {
       { id: 9, kind: "editor", path: "/work/a.ts" } as unknown as Tab,
     ];
     expect(reviewTabFor(tabs, "/work/a.ts")).toBeNull();
+  });
+
+  it("ignores delete/rename proposals, which have no inline editor view", () => {
+    const tabs: Tab[] = [
+      aiDiffTab({
+        approvalId: "del",
+        path: "/work/a.ts",
+        mutationKind: "delete",
+      }),
+      aiDiffTab({
+        approvalId: "ren",
+        path: "/work/a.ts",
+        mutationKind: "rename",
+        targetPath: "/work/b.ts",
+      }),
+    ];
+    expect(reviewTabFor(tabs, "/work/a.ts")).toBeNull();
+    expect(reviewTabFor(tabs, "/work/b.ts")).toBeNull();
   });
 });
