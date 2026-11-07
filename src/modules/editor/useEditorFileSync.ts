@@ -29,7 +29,7 @@ export function useEditorFileSync({ tabs, tabsRef, editorRefs }: Params) {
   useEffect(() => {
     for (const t of tabs) {
       if (t.kind !== "ai-diff") continue;
-      if (t.status !== "approved") continue;
+      if (t.status !== "applied") continue;
       if (appliedDiffsRef.current.has(t.approvalId)) continue;
       appliedDiffsRef.current.add(t.approvalId);
       for (const e of tabs) {

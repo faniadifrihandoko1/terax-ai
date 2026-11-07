@@ -282,10 +282,9 @@ function buildEntries(
       kind,
       editCount,
       mutation,
-      status:
-        (mutation.approvalId &&
-          reviewStatusByApproval?.get(mutation.approvalId)) ??
-        "pending",
+      status: mutation.approvalId
+        ? (reviewStatusByApproval?.get(mutation.approvalId) ?? "pending")
+        : "pending",
     });
   }
   return out;

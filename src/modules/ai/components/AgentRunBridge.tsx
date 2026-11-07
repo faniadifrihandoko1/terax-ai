@@ -1,6 +1,7 @@
 import { useChat, type UIMessage } from "@ai-sdk/react";
-import type { ToolUIPart, UIMessagePart } from "ai";
+import type { UIMessagePart } from "ai";
 import type { AiDiffStatus } from "@/modules/tabs";
+import type { ToolPartLike } from "../lib/fileMutations";
 import { useEffect, useMemo, useRef } from "react";
 import {
   deriveProposed,
@@ -49,13 +50,6 @@ export function AgentRunBridge(props: AgentRunBridgeProps) {
 }
 
 type BridgeProps = { sessionId: string } & AgentRunBridgeProps;
-
-type WriteFileInput = { path?: unknown; content?: unknown };
-
-type ToolPartLike = ToolUIPart & {
-  approval?: { id: string };
-  input?: WriteFileInput;
-};
 
 type AnyPart = UIMessagePart<Record<string, never>, Record<string, never>>;
 
@@ -193,7 +187,7 @@ function Bridge({
     for (const m of messages) {
       if (m.role !== "assistant") continue;
       for (const part of m.parts as AnyPart[]) {
-        const info = extractFileMutation(part);
+        const info = extractFileMutation(part as unknown as ToolPartLike);
         if (!info) continue;
         const { state, approvalId, path, derive } = info;
         if (!approvalId) continue;

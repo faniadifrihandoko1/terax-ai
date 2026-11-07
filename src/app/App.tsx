@@ -83,7 +83,7 @@ import {
   useWorkspaceCwd,
 } from "@/modules/tabs";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
-import type { AiDiffStatus } from "@/modules/tabs";
+import type { AiDiffStatus, AiDiffTab } from "@/modules/tabs";
 import {
   clearFocusedTerminal,
   disposeSession,
@@ -377,7 +377,8 @@ export default function App() {
     (approvalId: string) => {
       if (!activateAiDiffTab(approvalId)) return;
       const tab = tabs.find(
-        (t) => t.kind === "ai-diff" && t.approvalId === approvalId,
+        (t): t is AiDiffTab =>
+          t.kind === "ai-diff" && t.approvalId === approvalId,
       );
       if (tab && tab.status === "pending") {
         setAiDiffStatus(approvalId, "reviewing");

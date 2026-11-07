@@ -5,7 +5,7 @@ import {
   AI_DIFF_STATUS_BADGE,
   AI_DIFF_STATUS_LABEL,
 } from "@/modules/tabs/lib/aiDiffStatus";
-import { presentableDiff, unifiedMergeView } from "@codemirror/merge";
+import { unifiedMergeView } from "@codemirror/merge";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { Cancel01Icon, Tick02Icon } from "@hugeicons/core-free-icons";

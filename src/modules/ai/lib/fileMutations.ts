@@ -35,7 +35,7 @@ export type ToolPartLike = {
   type?: string;
   state?: string;
   approval?: { id: string };
-  input?: Record<string, unknown>;
+  input?: unknown;
   toolCallId?: string;
 };
 
@@ -52,7 +52,7 @@ export function extractFileMutation(
   const type = part.type ?? "";
   const state = part.state ?? "";
   const approvalId = part.approval?.id ?? null;
-  const input = part.input ?? {};
+  const input = (part.input ?? {}) as Record<string, unknown>;
 
   if (type === "tool-write_file") {
     const path = typeof input.path === "string" ? input.path : "";
@@ -158,7 +158,11 @@ export async function readOriginal(
 }
 
 /** Resolves a mutation's relative path against the agent cwd. */
-export function resolveMutationPath(path: string, cwd: string): string {
+export function resolveMutationPath(
+  path: string,
+  cwd: string | null,
+): string {
+  if (!cwd) return path;
   try {
     return resolvePath(path, cwd);
   } catch {

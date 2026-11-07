@@ -27,10 +27,22 @@ export function AgentRunBridge(props: AgentRunBridgeProps) {
   );
 }
 
-export function AiMiniWindow({ state }: { state: PresenceState }) {
+export function AiMiniWindow({
+  state,
+  onOpenFileDiff,
+  reviewStatusByApproval,
+}: {
+  state: PresenceState;
+  onOpenFileDiff?: (approvalId: string) => void;
+  reviewStatusByApproval?: Map<string, import("@/modules/tabs").AiDiffStatus>;
+}) {
   return (
     <Suspense fallback={null}>
-      <AiMiniWindowInner state={state} />
+      <AiMiniWindowInner
+        state={state}
+        onOpenFileDiff={onOpenFileDiff}
+        reviewStatusByApproval={reviewStatusByApproval}
+      />
     </Suspense>
   );
 }
