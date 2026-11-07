@@ -507,6 +507,21 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   the tool, with no checkpoint (same as an edit approved there); only the
   reviewed-apply path in the ai-diff tab is restorable. Delete/rename
   proposals never render inline in the editor.
+  Click fix (after Fase 5): a click on a Changed Files row never does
+  nothing. The ai-diff tab is created by `AgentRunBridge` after the
+  proposal lands, while the row already appears from the message parts,
+  so a click while the agent is still working used to return silently.
+  Now the row passes its resolved absolute path to `handleOpenFileDiff`
+  (`src/app/App.tsx`), which decides through the pure helper
+  `decideOpenFileDiff` (`src/modules/tabs/lib/openFileDiffAction.ts`):
+  tab exists + inline on + edit opens the file in the editor; otherwise
+  it activates the ai-diff tab; no tab yet opens the file in the editor
+  and toasts honestly that the review is not ready yet (inline
+  decorations sync from the ai-diff tab, so without a tab there is
+  nothing to decorate); a failed activation toasts an error. Known
+  limit: clicking while the agent is still working opens the file in the
+  editor, but the review decorations only appear once the ai-diff tab
+  has been created; click the row again after the agent finishes.
 - **Tools** (`tools/tools.ts`): `read_file`, `list_directory`, `fs_search`, `fs_grep` auto-execute. `write_file`, `edit`, `multi_edit`, `create_directory`, `delete_file`, `rename_file`, `run_command` (`bash_run` / `bash_background` in `tools/shell.ts`), `spawn_coding_agent`, `send_to_agent` set `needsApproval: true` and the AI SDK pauses for an in-UI confirmation card. `delete_file` and `rename_file` are fork additions (Fase 5, see AI review above): they propose, never execute directly, and are refused in plan mode. The Rust backend has `fs_rename` / `fs_move` / `fs_delete` / `fs_delete_batch` (`src-tauri/src/modules/fs/mutate.rs`); the agent's reviewed delete/rename apply reuses `fs_delete` / `fs_rename`, which the file explorer / editor UI also calls. Auto-send after approval uses `lastAssistantMessageIsCompleteWithApprovalResponses`. `lib/security.ts` is a deny-list refusing obvious secret paths (`.env*`, `.ssh/`, credentials, keychain dirs) - apply on **both** read and write paths and don't bypass it.
 - **Edit diffs**: AI-proposed edits are reviewed per hunk (see AI review above) before anything is written: inline in the editor when `aiReviewInline` is on (Settings → General), otherwise in a side-by-side diff tab (`ai-diff` tab kind). The composer card's Approve still writes the whole proposal unchanged.
 - **Prompt snippets** (`#handle`): reusable prompt fragments surfaced in the composer. Do not describe these as skills; a reusable tool-bundled skills system is not implemented yet.
