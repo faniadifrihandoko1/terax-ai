@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   allHunksDecided,
   allLinesDecided,
+  applyReviewedDelete,
   applyReviewedEdit,
+  applyReviewedRename,
   checkDiskConflict,
   clearReviewedApply,
   discardReviewedProposal,
@@ -12,6 +14,7 @@ import {
   type LineDecisions,
   type ReviewApplyIo,
 } from "./reviewApply";
+import type { FileCheckpoint } from "./reviewCheckpoint";
 
 function makeIo(
   opts: {
@@ -20,14 +23,23 @@ function makeIo(
     binary?: boolean;
     writable?: boolean;
     writeFails?: boolean;
+    deleteFails?: boolean;
+    renameFails?: boolean;
+    workspaceRoot?: string | null;
   } = {},
 ): {
   io: ReviewApplyIo;
   calls: string[];
   written: Map<string, string>;
+  deleted: string[];
+  renamed: [string, string][];
+  checkpoints: FileCheckpoint[];
 } {
   const calls: string[] = [];
   const written = new Map<string, string>();
+  const deleted: string[] = [];
+  const renamed: [string, string][] = [];
+  const checkpoints: FileCheckpoint[] = [];
   const disk = new Map(Object.entries(opts.disk ?? {}));
   const io: ReviewApplyIo = {
     respondToApproval: (id, approved) => {
@@ -45,16 +57,38 @@ function makeIo(
       if (opts.writeFails) throw new Error("disk full");
       written.set(path, content);
     },
-    checkWritable: async () => {
+    deleteFile: async (path) => {
+      calls.push(`delete:${path}`);
+      if (opts.deleteFails) throw new Error("permission denied");
+      deleted.push(path);
+      disk.delete(path);
+    },
+    renameFile: async (from, to) => {
+      calls.push(`rename:${from}:${to}`);
+      if (opts.renameFails) throw new Error("permission denied");
+      renamed.push([from, to]);
+      const content = disk.get(from);
+      if (content !== undefined) {
+        disk.delete(from);
+        disk.set(to, content);
+      }
+    },
+    saveCheckpoint: (cp) => {
+      calls.push(`checkpoint:${cp.approvalId}`);
+      checkpoints.push(cp);
+    },
+    getWorkspaceRoot: () =>
+      opts.workspaceRoot === undefined ? "/ws" : opts.workspaceRoot,
+    checkWritable: async (path) => {
       calls.push("checkWritable");
       if (opts.writable === false) {
         return { ok: false as const, reason: "read-only" };
       }
-      return { ok: true as const, canonical: "/x" };
+      return { ok: true as const, canonical: path };
     },
     canonicalize: async (p) => p,
   };
-  return { io, calls, written };
+  return { io, calls, written, deleted, renamed, checkpoints };
 }
 
 describe("allHunksDecided (Fase 4)", () => {
@@ -199,6 +233,178 @@ describe("applyReviewedEdit", () => {
     const result = await applyReviewedEdit(input, io);
     expect(result.outcome).toBe("not-writable");
     expect(calls).not.toContain("respond:ap1:false");
+  });
+
+  it("saves a checkpoint before the write, with the accepted hunks", async () => {
+    const { io, calls, checkpoints } = makeIo({
+      disk: { "/x/a.ts": "a\nb\n" },
+    });
+    const result = await applyReviewedEdit(
+      { ...input, sessionId: "s-1", appliedHunks: [0, 2] },
+      io,
+    );
+    expect(result.outcome).toBe("applied");
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]).toMatchObject({
+      approvalId: "ap1",
+      sessionId: "s-1",
+      kind: "edit",
+      path: "/x/a.ts",
+      contentBefore: "a\nb\n",
+      contentAfter: "a\nB\n",
+      appliedHunks: [0, 2],
+    });
+    expect(calls.indexOf("checkpoint:ap1")).toBeLessThan(
+      calls.indexOf("write:/x/a.ts"),
+    );
+  });
+
+  it("saves no checkpoint when nothing changed", async () => {
+    const { io, checkpoints } = makeIo({ disk: { "/x/a.ts": "a\nb\n" } });
+    await applyReviewedEdit(
+      { ...input, reconstructedContent: "a\nb\n" },
+      io,
+    );
+    expect(checkpoints).toHaveLength(0);
+  });
+});
+
+describe("applyReviewedDelete (Fase 5)", () => {
+  const input = {
+    approvalId: "del1",
+    path: "/x/a.ts",
+    originalContent: "gone soon\n",
+  };
+
+  afterEach(() => {
+    clearReviewedApply("del1");
+  });
+
+  it("answers false, checkpoints, then deletes", async () => {
+    const { io, calls, deleted, checkpoints } = makeIo({
+      disk: { "/x/a.ts": "gone soon\n" },
+    });
+    const result = await applyReviewedDelete(input, io);
+    expect(result).toEqual({ outcome: "applied", path: "/x/a.ts" });
+    expect(deleted).toEqual(["/x/a.ts"]);
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]).toMatchObject({
+      approvalId: "del1",
+      kind: "delete",
+      path: "/x/a.ts",
+      contentBefore: "gone soon\n",
+      contentAfter: null,
+    });
+    expect(calls.indexOf("respond:del1:false")).toBeLessThan(
+      calls.indexOf("checkpoint:del1"),
+    );
+    expect(calls.indexOf("checkpoint:del1")).toBeLessThan(
+      calls.indexOf("delete:/x/a.ts"),
+    );
+  });
+
+  it("refuses when the file changed since the proposal", async () => {
+    const { io, deleted, checkpoints } = makeIo({
+      disk: { "/x/a.ts": "edited since\n" },
+    });
+    const result = await applyReviewedDelete(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(deleted).toHaveLength(0);
+    expect(checkpoints).toHaveLength(0);
+  });
+
+  it("refuses when the file is already gone", async () => {
+    const { io, deleted } = makeIo({ missing: true });
+    const result = await applyReviewedDelete(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(deleted).toHaveLength(0);
+  });
+
+  it("reports write-failed after answering false", async () => {
+    const { io, calls } = makeIo({
+      disk: { "/x/a.ts": "gone soon\n" },
+      deleteFails: true,
+    });
+    const result = await applyReviewedDelete(input, io);
+    expect(result.outcome).toBe("write-failed");
+    expect(calls).toContain("respond:del1:false");
+  });
+});
+
+describe("applyReviewedRename (Fase 5)", () => {
+  const input = {
+    approvalId: "ren1",
+    path: "/ws/old.ts",
+    targetPath: "/ws/new.ts",
+    originalContent: "same\n",
+  };
+
+  afterEach(() => {
+    clearReviewedApply("ren1");
+  });
+
+  it("answers false, checkpoints, then renames", async () => {
+    const { io, calls, renamed, checkpoints } = makeIo({
+      disk: { "/ws/old.ts": "same\n" },
+    });
+    const result = await applyReviewedRename(input, io);
+    expect(result).toEqual({ outcome: "applied", path: "/ws/old.ts" });
+    expect(renamed).toEqual([["/ws/old.ts", "/ws/new.ts"]]);
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]).toMatchObject({
+      approvalId: "ren1",
+      kind: "rename",
+      path: "/ws/old.ts",
+      targetPath: "/ws/new.ts",
+      contentBefore: "same\n",
+    });
+    expect(calls.indexOf("respond:ren1:false")).toBeLessThan(
+      calls.indexOf("checkpoint:ren1"),
+    );
+    expect(calls.indexOf("checkpoint:ren1")).toBeLessThan(
+      calls.indexOf("rename:/ws/old.ts:/ws/new.ts"),
+    );
+  });
+
+  it("refuses when the target already exists", async () => {
+    const { io, renamed, checkpoints } = makeIo({
+      disk: { "/ws/old.ts": "same\n", "/ws/new.ts": "taken\n" },
+    });
+    const result = await applyReviewedRename(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(renamed).toHaveLength(0);
+    expect(checkpoints).toHaveLength(0);
+  });
+
+  it("refuses when the target is outside the workspace", async () => {
+    const { io, renamed } = makeIo({
+      disk: { "/ws/old.ts": "same\n" },
+    });
+    const result = await applyReviewedRename(
+      { ...input, targetPath: "/tmp/evil.ts" },
+      io,
+    );
+    expect(result.outcome).toBe("conflict");
+    expect(renamed).toHaveLength(0);
+  });
+
+  it("refuses when the source changed since the proposal", async () => {
+    const { io, renamed } = makeIo({
+      disk: { "/ws/old.ts": "changed\n" },
+    });
+    const result = await applyReviewedRename(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(renamed).toHaveLength(0);
+  });
+
+  it("refuses without a workspace root", async () => {
+    const { io, renamed } = makeIo({
+      disk: { "/ws/old.ts": "same\n" },
+      workspaceRoot: null,
+    });
+    const result = await applyReviewedRename(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(renamed).toHaveLength(0);
   });
 });
 

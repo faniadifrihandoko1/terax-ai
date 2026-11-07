@@ -26,6 +26,14 @@
 import { checkWritableCanonical } from "./security";
 import { native, type ReadResult } from "./native";
 import { useChatStore } from "../store/chatStore";
+import {
+  buildDeleteCheckpoint,
+  buildEditCheckpoint,
+  buildRenameCheckpoint,
+  saveCheckpoint,
+  type FileCheckpoint,
+} from "./reviewCheckpoint";
+import { checkRenameGuard, isPathInside } from "./fileOpGuards";
 
 /** Per-line review decision, keyed by line number in the proposed content. */
 export type LineDecision = "accepted" | "rejected" | "undecided";
@@ -46,6 +54,8 @@ export type HunkDecisions = Map<number, HunkDecision>;
 export type ReviewApplyInput = {
   /** Approval id of the original edit/write_file call being reviewed. */
   approvalId: string;
+  /** Owning session, stamped on the checkpoint for session-delete cleanup. */
+  sessionId?: string;
   path: string;
   /** True when the proposal creates the file (no on-disk baseline). */
   isNewFile: boolean;
@@ -53,6 +63,32 @@ export type ReviewApplyInput = {
   originalContent: string;
   /** Content after folding every accepted line decision in. */
   reconstructedContent: string;
+  /** Hunk indexes accepted by the apply, recorded on the checkpoint. */
+  appliedHunks?: number[];
+};
+
+/** Input for `apply_reviewed_delete`. */
+export type ReviewDeleteInput = {
+  /** Approval id of the original delete_file call being reviewed. */
+  approvalId: string;
+  /** Owning session, stamped on the checkpoint for session-delete cleanup. */
+  sessionId?: string;
+  path: string;
+  /** On-disk content the proposal was derived from (conflict baseline). */
+  originalContent: string;
+};
+
+/** Input for `apply_reviewed_rename`. */
+export type ReviewRenameInput = {
+  /** Approval id of the original rename_file call being reviewed. */
+  approvalId: string;
+  /** Owning session, stamped on the checkpoint for session-delete cleanup. */
+  sessionId?: string;
+  path: string;
+  /** Rename destination. */
+  targetPath: string;
+  /** On-disk content the proposal was derived from (conflict baseline). */
+  originalContent: string;
 };
 
 export type ReviewApplyOutcome =
@@ -139,6 +175,12 @@ export type ReviewApplyIo = {
   respondToApproval: (approvalId: string, approved: boolean) => void;
   readFile: (path: string) => Promise<ReadResult>;
   writeFile: (path: string, content: string) => Promise<void>;
+  deleteFile: (path: string) => Promise<void>;
+  renameFile: (from: string, to: string) => Promise<void>;
+  /** Records the pre-apply checkpoint, before the destructive call. */
+  saveCheckpoint: (cp: FileCheckpoint) => void;
+  /** Workspace root, for the rename containment guard. */
+  getWorkspaceRoot: () => string | null;
   checkWritable: (
     path: string,
     canonicalize: (p: string) => Promise<string>,
@@ -152,6 +194,11 @@ export function defaultReviewApplyIo(): ReviewApplyIo {
       useChatStore.getState().respondToApproval(id, approved),
     readFile: (path) => native.readFile(path),
     writeFile: (path, content) => native.writeFile(path, content),
+    deleteFile: (path) => native.deleteFile(path),
+    renameFile: (from, to) => native.renameFile(from, to),
+    saveCheckpoint: (cp) => saveCheckpoint(cp),
+    getWorkspaceRoot: () =>
+      useChatStore.getState().live.getWorkspaceRoot(),
     checkWritable: (path, canonicalize) =>
       checkWritableCanonical(path, canonicalize),
     canonicalize: (path) => native.canonicalize(path),
@@ -233,8 +280,150 @@ export async function applyReviewedEdit(
     return { outcome: "conflict", path, reason: conflict.reason };
   }
   io.respondToApproval(approvalId, false);
+  // Fase 5: checkpoint first, so the apply can be undone. Saved before
+  // the write, with the pre-write content and the accepted hunks.
+  io.saveCheckpoint(
+    buildEditCheckpoint({
+      approvalId,
+      sessionId: input.sessionId,
+      path,
+      originalContent: input.originalContent,
+      reconstructedContent: input.reconstructedContent,
+      appliedHunks: input.appliedHunks ?? [],
+    }),
+  );
   try {
     await io.writeFile(path, input.reconstructedContent);
+  } catch (error) {
+    return {
+      outcome: "write-failed",
+      path,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return { outcome: "applied", path };
+}
+
+/**
+ * Applies a reviewed delete (Fase 5, Opsi B for delete_file). Same order
+ * as applyReviewedEdit: writability and conflict guards first, answer
+ * the original approval false, checkpoint the content, then delete via
+ * the existing Rust fs_delete backend. The checkpoint is what makes the
+ * delete restorable.
+ */
+export async function applyReviewedDelete(
+  input: ReviewDeleteInput,
+  io: ReviewApplyIo = defaultReviewApplyIo(),
+): Promise<ReviewApplyOutcome> {
+  const { approvalId, path } = input;
+  markReviewedApply(approvalId);
+  const writable = await io.checkWritable(path, io.canonicalize);
+  if (!writable.ok) {
+    return { outcome: "not-writable", path, reason: writable.reason };
+  }
+  const conflict = await checkDiskConflict(
+    { ...input, isNewFile: false },
+    io,
+  );
+  if (conflict.status === "conflict") {
+    return { outcome: "conflict", path, reason: conflict.reason };
+  }
+  io.respondToApproval(approvalId, false);
+  io.saveCheckpoint(
+    buildDeleteCheckpoint({
+      approvalId,
+      sessionId: input.sessionId,
+      path,
+      content: input.originalContent,
+    }),
+  );
+  try {
+    await io.deleteFile(path);
+  } catch (error) {
+    return {
+      outcome: "write-failed",
+      path,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return { outcome: "applied", path };
+}
+
+/**
+ * Applies a reviewed rename (Fase 5, Opsi B for rename_file). Same order
+ * as the delete: guards first, answer false, checkpoint, then rename via
+ * the existing Rust fs_rename backend. The target must not exist and
+ * must stay inside the workspace; a rename that would overwrite another
+ * file or escape the workspace is a conflict, never executed.
+ */
+export async function applyReviewedRename(
+  input: ReviewRenameInput,
+  io: ReviewApplyIo = defaultReviewApplyIo(),
+): Promise<ReviewApplyOutcome> {
+  const { approvalId, path } = input;
+  markReviewedApply(approvalId);
+  const writable = await io.checkWritable(path, io.canonicalize);
+  if (!writable.ok) {
+    return { outcome: "not-writable", path, reason: writable.reason };
+  }
+  const targetWritable = await io.checkWritable(
+    input.targetPath,
+    io.canonicalize,
+  );
+  if (!targetWritable.ok) {
+    return { outcome: "not-writable", path, reason: targetWritable.reason };
+  }
+  const targetPath = targetWritable.canonical;
+  const conflict = await checkDiskConflict(
+    { ...input, isNewFile: false },
+    io,
+  );
+  if (conflict.status === "conflict") {
+    return { outcome: "conflict", path, reason: conflict.reason };
+  }
+  let targetExists = false;
+  try {
+    await io.readFile(targetPath);
+    targetExists = true;
+  } catch {
+    targetExists = false;
+  }
+  const root = io.getWorkspaceRoot();
+  let targetInside = false;
+  if (root) {
+    try {
+      const canonRoot = await io.canonicalize(root);
+      const lastSep = Math.max(
+        targetPath.lastIndexOf("/"),
+        targetPath.lastIndexOf("\\"),
+      );
+      const canonParent =
+        lastSep > 0 ? targetPath.slice(0, lastSep) : targetPath;
+      targetInside = isPathInside(canonRoot, canonParent);
+    } catch {
+      targetInside = false;
+    }
+  }
+  const guard = checkRenameGuard({
+    sourceExists: true,
+    targetExists,
+    targetInsideWorkspace: targetInside,
+  });
+  if (!guard.ok) {
+    return { outcome: "conflict", path, reason: guard.reason };
+  }
+  io.respondToApproval(approvalId, false);
+  io.saveCheckpoint(
+    buildRenameCheckpoint({
+      approvalId,
+      sessionId: input.sessionId,
+      path,
+      targetPath,
+      content: input.originalContent,
+    }),
+  );
+  try {
+    await io.renameFile(path, targetPath);
   } catch (error) {
     return {
       outcome: "write-failed",
