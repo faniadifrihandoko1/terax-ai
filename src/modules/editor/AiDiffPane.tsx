@@ -39,6 +39,10 @@ import {
 } from "./lib/extensions";
 import { computeLineStats } from "./lib/diffStats";
 import {
+  nextReviewFocus,
+  reviewKeyAction,
+} from "./lib/reviewKeyboard";
+import {
   computeLineChanges,
   countDecisions,
   reconstructFile,
@@ -59,6 +63,8 @@ type Props = {
   lineDecisions: Record<number, LineDecision>;
   onSetLineDecision: (index: number, decision: LineDecision) => void;
   onSetStatus: (status: AiDiffStatus) => void;
+  /** FR-11: false renders the per-file Accept/Reject fallback instead. */
+  perLineEnabled: boolean;
 };
 
 const SHARED_EXT: readonly Extension[] = buildSharedExtensions();
@@ -116,6 +122,7 @@ export function AiDiffPane({
   lineDecisions,
   onSetLineDecision,
   onSetStatus,
+  perLineEnabled,
 }: Props) {
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   const previewRef = useRef<ReactCodeMirrorRef>(null);
@@ -318,6 +325,90 @@ export function AiDiffPane({
     onSetStatus("rejected");
   };
 
+  // --- FR-11 fallback: per-file review -------------------------------------
+  // With per-line review off, there are no line decisions to collect, so
+  // Accept file builds the all-accepted reconstruction inline instead of
+  // going through decideAll + handleApply (the state update from decideAll
+  // would not have landed yet when Apply reads `allDecided`).
+  const acceptAllReconstruction = useMemo(() => {
+    const allAccepted = new Map<number, LineDecision>();
+    for (const c of changeSet.changes) allAccepted.set(c.index, "accepted");
+    return reconstructFile(originalContent, changeSet, allAccepted);
+  }, [originalContent, changeSet]);
+
+  // --- FR-11: keyboard navigation -----------------------------------------
+  // Focus lives in the review list only: the container (or a row in it)
+  // must be focused for Arrow/A/R to act, so typing in the composer,
+  // editor, or terminal is never affected. Rows are focusable so a click
+  // also sets the keyboard focus.
+  const flatRows = useMemo(
+    () => hunkGroups.flatMap(({ rows }) => rows),
+    [hunkGroups],
+  );
+  const [focusedRow, setFocusedRow] = useState<number | null>(null);
+  const rowRefs = useRef(new Map<number, HTMLDivElement>());
+  useEffect(() => {
+    setFocusedRow(null);
+    rowRefs.current.clear();
+  }, [approvalId]);
+  const onReviewKeyDown = (e: React.KeyboardEvent) => {
+    if (!perLineEnabled || !reviewable) return;
+    const action = reviewKeyAction(e);
+    if (!action) return;
+    e.preventDefault();
+    if (action === "move-next" || action === "move-prev") {
+      const next = nextReviewFocus(
+        focusedRow,
+        flatRows.length,
+        action === "move-next" ? 1 : -1,
+      );
+      if (next === null) return;
+      setFocusedRow(next);
+      rowRefs.current.get(next)?.focus();
+      return;
+    }
+    if (focusedRow === null) return;
+    const change = flatRows[focusedRow];
+    if (!change) return;
+    const decision = action === "accept" ? "accepted" : "rejected";
+    const current = decisions.get(change.index);
+    onSetLineDecision(
+      change.index,
+      current === decision ? "undecided" : decision,
+    );
+  };
+
+  const handleAcceptFile = async () => {
+    if (applying) return;
+    setApplying(true);
+    setApplyError(null);
+    try {
+      const result = await applyReviewedEdit({
+        approvalId,
+        path,
+        isNewFile,
+        originalContent,
+        reconstructedContent: acceptAllReconstruction.content,
+      });
+      if (result.outcome === "applied") {
+        onSetStatus("applied");
+      } else if (result.outcome === "discarded") {
+        onSetStatus("rejected");
+      } else if (result.outcome === "conflict") {
+        setConflict(result.reason);
+        onSetStatus("conflict");
+      } else {
+        setApplyError(result.reason);
+      }
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const handleRejectFile = () => {
+    handleDiscard();
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3">
@@ -347,24 +438,25 @@ export function AiDiffPane({
               −{stats.removed}
             </span>
           </span>
-          {counts.total > 0 ? (
+          {perLineEnabled && counts.total > 0 ? (
             <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
               {counts.decided}/{counts.total} decided
             </span>
           ) : null}
         </div>
-        {reviewable && counts.total > 0 ? (
-          <div className="flex shrink-0 items-center gap-1.5">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => decideAll("accepted")}
-              className="h-7 gap-1"
-              title="Accept every changed line"
-            >
-              <HugeiconsIcon icon={Tick02Icon} size={13} strokeWidth={2} />
-              Accept all
-            </Button>
+        {reviewable ? (
+          perLineEnabled && counts.total > 0 ? (
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => decideAll("accepted")}
+                className="h-7 gap-1"
+                title="Accept every changed line"
+              >
+                <HugeiconsIcon icon={Tick02Icon} size={13} strokeWidth={2} />
+                Accept all
+              </Button>
             <Button
               size="sm"
               variant="ghost"
@@ -414,7 +506,37 @@ export function AiDiffPane({
             >
               {applying ? "Applying…" : allRejected ? "Discard" : "Apply"}
             </Button>
-          </div>
+            </div>
+          ) : (
+            // FR-11 fallback: per-file review when per-line is off. Accept
+            // writes the whole proposal (the all-accepted reconstruction);
+            // Reject discards it. The per-file buttons that existed before
+            // Fase 2 live on here as the fallback, not as a second path.
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Button
+                size="sm"
+                variant="default"
+                onClick={handleAcceptFile}
+                disabled={applying}
+                className="h-7 gap-1"
+                title="Accept the whole file"
+              >
+                <HugeiconsIcon icon={Tick02Icon} size={13} strokeWidth={2} />
+                {applying ? "Applying…" : "Accept file"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleRejectFile}
+                disabled={applying}
+                className="h-7 gap-1"
+                title="Reject the whole file"
+              >
+                <HugeiconsIcon icon={Cancel01Icon} size={13} strokeWidth={2} />
+                Reject file
+              </Button>
+            </div>
+          )
         ) : null}
       </div>
 
@@ -449,7 +571,7 @@ export function AiDiffPane({
         </div>
       ) : null}
 
-      {counts.total > 0 ? (
+      {perLineEnabled && counts.total > 0 ? (
         <div className="shrink-0 border-b border-border/60">
           <button
             type="button"
@@ -466,6 +588,9 @@ export function AiDiffPane({
               {counts.decided}/{counts.total} decided · {counts.accepted}{" "}
               accepted · {counts.rejected} rejected
             </span>
+            <span className="ml-auto font-normal text-muted-foreground">
+              ↑ ↓ move · A accept · R reject
+            </span>
             {splitPairIds.size > 0 ? (
               <span className="font-normal text-amber-600 dark:text-amber-400">
                 {splitPairIds.size} replacement pair
@@ -474,8 +599,16 @@ export function AiDiffPane({
             ) : null}
           </button>
           {reviewOpen ? (
-            <div className="max-h-64 overflow-y-auto border-t border-border/40 py-1">
+            <div
+              className="max-h-64 overflow-y-auto border-t border-border/40 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              tabIndex={0}
+              onKeyDown={onReviewKeyDown}
+              aria-label="Changed lines review. Use arrow keys to move, A to accept, R to reject."
+            >
               {hunkGroups.map(({ hunk, rows }, hi) => {
+                const flatStart = hunkGroups
+                  .slice(0, hi)
+                  .reduce((n, g) => n + g.rows.length, 0);
                 const hunkDecided = rows.filter((c) => {
                   const d = decisions.get(c.index);
                   return d === "accepted" || d === "rejected";
@@ -511,7 +644,7 @@ export function AiDiffPane({
                         </span>
                       ) : null}
                     </div>
-                    {rows.map((change) => (
+                    {rows.map((change, ri) => (
                       <ReviewLineRow
                         key={change.index}
                         change={change}
@@ -521,6 +654,13 @@ export function AiDiffPane({
                           splitPairIds.has(change.pairId)
                         }
                         disabled={!reviewable}
+                        focused={focusedRow === flatStart + ri}
+                        onFocus={() => setFocusedRow(flatStart + ri)}
+                        rowRef={(el) => {
+                          const pos = flatStart + ri;
+                          if (el) rowRefs.current.set(pos, el);
+                          else rowRefs.current.delete(pos);
+                        }}
                         onDecide={(decision) =>
                           onSetLineDecision(change.index, decision)
                         }
@@ -600,12 +740,19 @@ function ReviewLineRow({
   decision,
   pairSplit,
   disabled,
+  focused,
+  onFocus,
+  rowRef,
   onDecide,
 }: {
   change: LineChange;
   decision: LineDecision;
   pairSplit: boolean;
   disabled: boolean;
+  /** FR-11: keyboard focus position in the review list. */
+  focused: boolean;
+  onFocus: () => void;
+  rowRef: (el: HTMLDivElement | null) => void;
   onDecide: (decision: LineDecision) => void;
 }) {
   const lineNo =
@@ -616,12 +763,16 @@ function ReviewLineRow({
   const rejected = decision === "rejected";
   return (
     <div
+      ref={rowRef}
+      tabIndex={-1}
+      onFocus={onFocus}
       className={cn(
-        "flex items-center gap-2 border-l-2 px-3 py-1 font-mono text-[12px]",
+        "flex items-center gap-2 border-l-2 px-3 py-1 font-mono text-[12px] focus-visible:outline-none",
         accepted && "border-emerald-500/70 bg-emerald-500/8",
         rejected && "border-rose-500/70 bg-rose-500/8",
         !accepted && !rejected && "border-transparent",
         pairSplit && "bg-amber-500/8",
+        focused && "bg-accent/50 ring-1 ring-inset ring-ring/60",
       )}
     >
       <span className="w-8 shrink-0 text-right tabular-nums text-muted-foreground">

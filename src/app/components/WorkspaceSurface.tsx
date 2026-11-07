@@ -61,6 +61,7 @@ export function WorkspaceSurface({
   onPreviewUrlChange,
   onSetAiDiffStatus,
   onSetAiDiffLineDecision,
+  aiReviewPerLine,
   onOpenCommitFile,
   onGitHistorySearchHandle,
   onSetMarkdownView,
