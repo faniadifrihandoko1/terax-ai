@@ -33,6 +33,7 @@ import { estimateCost, getModel, getModelContextLimit, type ModelId } from "../c
 import type { ResizeDir } from "../lib/miniWindowGeometry";
 import type { SessionMeta } from "../lib/sessions";
 import { useMiniWindowGeometry } from "../lib/useMiniWindowGeometry";
+import type { AiDiffStatus } from "@/modules/tabs";
 import { useAgentsStore } from "../store/agentsStore";
 import { useChatStore } from "../store/chatStore";
 import { getOrCreateChat } from "../store/chatRuntime";
@@ -64,7 +65,15 @@ const SUGGESTIONS = [
   },
 ];
 
-export function AiMiniWindow({ state }: { state: PresenceState }) {
+export function AiMiniWindow({
+  state,
+  onOpenFileDiff,
+  reviewStatusByApproval,
+}: {
+  state: PresenceState;
+  onOpenFileDiff?: (approvalId: string) => void;
+  reviewStatusByApproval?: Map<string, AiDiffStatus>;
+}) {
   const closeMini = useChatStore((s) => s.closeMini);
   const sessionId = useChatStore((s) => s.activeSessionId);
   const openPanel = useChatStore((s) => s.openPanel);
@@ -116,6 +125,8 @@ export function AiMiniWindow({ state }: { state: PresenceState }) {
           onClose={closeMini}
           onExpand={expandToPanel}
           onHeaderPointerDown={onHeaderPointerDown}
+          onOpenFileDiff={onOpenFileDiff}
+          reviewStatusByApproval={reviewStatusByApproval}
         />
       ) : (
         <EmptyShell
@@ -163,11 +174,15 @@ function Body({
   onClose,
   onExpand,
   onHeaderPointerDown,
+  onOpenFileDiff,
+  reviewStatusByApproval,
 }: {
   sessionId: string;
   onClose: () => void;
   onExpand: () => void;
   onHeaderPointerDown: (e: React.PointerEvent) => void;
+  onOpenFileDiff?: (approvalId: string) => void;
+  reviewStatusByApproval?: Map<string, AiDiffStatus>;
 }) {
   const focusInput = useChatStore((s) => s.focusInput);
   const step = useChatStore((s) => s.agentMeta.step);
@@ -202,6 +217,8 @@ function Body({
               clearError={helpers.clearError}
               addToolApprovalResponse={helpers.addToolApprovalResponse}
               stop={helpers.stop}
+              onOpenFileDiff={onOpenFileDiff}
+              reviewStatusByApproval={reviewStatusByApproval}
             />
           </div>
         )}

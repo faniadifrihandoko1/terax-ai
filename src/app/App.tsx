@@ -83,6 +83,7 @@ import {
   useWorkspaceCwd,
 } from "@/modules/tabs";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
+import type { AiDiffStatus } from "@/modules/tabs";
 import {
   clearFocusedTerminal,
   disposeSession,
@@ -176,6 +177,7 @@ export default function App() {
     setMarkdownView,
     setOverrideLanguage,
     openAiDiffTab,
+    activateAiDiffTab,
     setAiDiffStatus,
     openGitDiffTab,
     openCommitHistoryTab,
@@ -358,6 +360,31 @@ export default function App() {
   const panelOpen = useChatStore((s) => s.panelOpen);
   const setLive = useChatStore((s) => s.setLive);
   const respondToApproval = useChatStore((s) => s.respondToApproval);
+
+  // Per-file review status for the Changed Files card (FR-01/FR-06),
+  // keyed by the tool-call approval id of each ai-diff tab.
+  const reviewStatusByApproval = useMemo(() => {
+    const m = new Map<string, AiDiffStatus>();
+    for (const t of tabs) {
+      if (t.kind === "ai-diff") m.set(t.approvalId, t.status);
+    }
+    return m;
+  }, [tabs]);
+
+  // FR-02: a click on a file in the Changed Files card brings its ai-diff
+  // tab forward and marks the file as being reviewed.
+  const handleOpenFileDiff = useCallback(
+    (approvalId: string) => {
+      if (!activateAiDiffTab(approvalId)) return;
+      const tab = tabs.find(
+        (t) => t.kind === "ai-diff" && t.approvalId === approvalId,
+      );
+      if (tab && tab.status === "pending") {
+        setAiDiffStatus(approvalId, "reviewing");
+      }
+    },
+    [activateAiDiffTab, setAiDiffStatus, tabs],
+  );
 
   const { hasComposer, keysLoaded } = useAiBootstrap();
 
@@ -1606,7 +1633,11 @@ export default function App() {
           ) : null}
 
           {hasComposer && miniPresence.mounted ? (
-            <AiMiniWindow state={miniPresence.state} />
+            <AiMiniWindow
+              state={miniPresence.state}
+              onOpenFileDiff={handleOpenFileDiff}
+              reviewStatusByApproval={reviewStatusByApproval}
+            />
           ) : null}
           {askPresence.mounted ? (
             <SelectionAskAi

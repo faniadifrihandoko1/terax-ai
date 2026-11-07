@@ -47,7 +47,10 @@ import type {
   UIMessagePart,
 } from "ai";
 import { memo, useCallback, useMemo } from "react";
+import type { AiDiffStatus } from "@/modules/tabs";
 import { AiToolApproval } from "./AiToolApproval";
+import { ChangedFilesCard } from "./ChangedFilesCard";
+import { isFileMutationPart } from "../lib/fileMutations";
 import { estimateMessageHeight } from "./messageHeightEstimate";
 
 function CommandSnippet({ name }: { name: string }) {
@@ -183,6 +186,8 @@ type Props = {
   clearError: () => void;
   addToolApprovalResponse: (arg: ApprovalArg) => void | PromiseLike<void>;
   stop: () => void | PromiseLike<void>;
+  onOpenFileDiff?: (approvalId: string) => void;
+  reviewStatusByApproval?: Map<string, AiDiffStatus>;
 };
 
 export function AiChatView({
@@ -191,6 +196,8 @@ export function AiChatView({
   error,
   clearError,
   addToolApprovalResponse,
+  onOpenFileDiff,
+  reviewStatusByApproval,
 }: Props) {
   const isBusy = status === "submitted" || status === "streaming";
   const lastMessage = messages[messages.length - 1];
@@ -234,6 +241,8 @@ export function AiChatView({
             onApproval={onApproval}
             streaming={m.id === streamingMessageId}
             deferOffscreen={i < messages.length - LIVE_TAIL_MESSAGES}
+            onOpenFileDiff={onOpenFileDiff}
+            reviewStatusByApproval={reviewStatusByApproval}
           />
         ))}
         {compactionNotice && (
@@ -338,11 +347,15 @@ const RenderedMessage = memo(function RenderedMessage({
   onApproval,
   streaming,
   deferOffscreen,
+  onOpenFileDiff,
+  reviewStatusByApproval,
 }: {
   message: UIMessage;
   onApproval: (id: string, approved: boolean) => void;
   streaming: boolean;
   deferOffscreen: boolean;
+  onOpenFileDiff?: (approvalId: string) => void;
+  reviewStatusByApproval?: Map<string, AiDiffStatus>;
 }) {
   const deferProps = deferOffscreen
     ? {
@@ -400,6 +413,17 @@ const RenderedMessage = memo(function RenderedMessage({
       <MessageContent>
         <div className="flex flex-col gap-3">
           {groups.map((g) => {
+            if (g.kind === "changes") {
+              return (
+                <PartAppear key={`${message.id}-${g.key}`}>
+                  <ChangedFilesCard
+                    parts={g.parts}
+                    reviewStatusByApproval={reviewStatusByApproval}
+                    onOpenFileDiff={onOpenFileDiff}
+                  />
+                </PartAppear>
+              );
+            }
             if (g.kind === "reads") {
               return (
                 <PartAppear key={`${message.id}-${g.key}`}>
@@ -436,7 +460,8 @@ const RenderedMessage = memo(function RenderedMessage({
 
 type Group =
   | { kind: "single"; part: AnyPart; idx: number; key: string }
-  | { kind: "reads"; parts: AnyPart[]; key: string };
+  | { kind: "reads"; parts: AnyPart[]; key: string }
+  | { kind: "changes"; parts: AnyPart[]; key: string };
 
 function partType(p: AnyPart): string {
   return (p as { type?: string }).type ?? "";
@@ -459,6 +484,16 @@ function partKey(p: AnyPart, idx: number): string {
 function buildPartGroups(parts: AnyPart[]): Group[] {
   const out: Group[] = [];
   let run: { parts: AnyPart[]; startIdx: number } | null = null;
+  let changes: { parts: AnyPart[]; startIdx: number } | null = null;
+  const flushChanges = () => {
+    if (!changes) return;
+    out.push({
+      kind: "changes",
+      parts: changes.parts,
+      key: `changes-${partKey(changes.parts[0], changes.startIdx)}`,
+    });
+    changes = null;
+  };
   const flushRun = () => {
     if (!run) return;
     if (run.parts.length >= 2) {
@@ -477,14 +512,23 @@ function buildPartGroups(parts: AnyPart[]): Group[] {
   };
   parts.forEach((p, i) => {
     if (isReadFilePart(p)) {
+      flushChanges();
       if (!run) run = { parts: [], startIdx: i };
       run.parts.push(p);
       return;
     }
+    if (isFileMutationPart(partType(p))) {
+      flushRun();
+      if (!changes) changes = { parts: [], startIdx: i };
+      changes.parts.push(p);
+      return;
+    }
     flushRun();
+    flushChanges();
     out.push({ kind: "single", part: p, idx: i, key: partKey(p, i) });
   });
   flushRun();
+  flushChanges();
   return out;
 }
 
