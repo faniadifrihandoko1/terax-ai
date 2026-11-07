@@ -8,6 +8,9 @@
 #   bundle.createUpdaterArtifacts to false instead of changing tauri.conf.json.
 # - No code signing: the installers are unsigned, so Windows SmartScreen will
 #   warn on first install ("More info" -> "Run anyway").
+# Registration note: GitHub only picks up workflow files when a push to the
+# default branch touches them, so this file was touched after the repo's
+# default branch was switched to master.
 
 name: Build Windows
 
