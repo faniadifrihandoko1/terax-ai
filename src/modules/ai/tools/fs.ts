@@ -2,6 +2,9 @@ import { tool } from "ai";
 import { z } from "zod";
 import { native } from "../lib/native";
 import {
+  composePendingProposal,
+} from "../lib/pendingProposals";
+import {
   checkDeleteGuard,
   checkRenameGuard,
   isPathInside,
@@ -12,6 +15,13 @@ import {
 } from "../lib/security";
 import { newQueuedEditId, usePlanStore } from "../store/planStore";
 import { resolvePath, type ToolContext } from "./context";
+
+/**
+ * What the model is told after a successful file proposal. The on-disk
+ * file is untouched until the user applies the review.
+ */
+const PROPOSAL_NOTE =
+  "Proposal recorded for review; the file on disk is unchanged until the user applies it in the review tab.";
 
 const READ_BYTE_CAP = 25 * 1024;
 const READ_LINE_CAP = 2000;
@@ -140,27 +150,28 @@ export function buildFsTools(ctx: ToolContext) {
 
     write_file: tool({
       description:
-        "Create or overwrite a file with the given content. Always asks the user before running. Prefer `edit` / `multi_edit` for in-place changes — only use `write_file` for creating a brand-new file or fully replacing a tiny one.",
+        "Create or overwrite a file with the given content. Proposes the new content for user review; nothing is written to disk until the user applies it in the review tab. Prefer `edit` / `multi_edit` for in-place changes — only use `write_file` for creating a brand-new file or fully replacing a tiny one.",
       inputSchema: z.object({
         path: z.string(),
         content: z.string(),
       }),
-      needsApproval: true,
       execute: async ({ path, content }) => {
         const reqPath = resolvePath(path, ctx.getCwd());
         const safety = await checkWritableCanonical(reqPath, native.canonicalize);
         if (!safety.ok) return { error: safety.reason, path: reqPath };
         const abs = safety.canonical;
 
+        // On-disk baseline for the proposal (and for the plan queue).
+        let original = "";
+        let isNewFile = false;
+        try {
+          const r = await native.readFile(abs);
+          if (r.kind === "text") original = r.content;
+        } catch {
+          isNewFile = true;
+        }
+
         if (usePlanStore.getState().active) {
-          let original = "";
-          let isNewFile = false;
-          try {
-            const r = await native.readFile(abs);
-            if (r.kind === "text") original = r.content;
-          } catch {
-            isNewFile = true;
-          }
           usePlanStore.getState().enqueue({
             id: newQueuedEditId(),
             kind: "write_file",
@@ -176,23 +187,23 @@ export function buildFsTools(ctx: ToolContext) {
           };
         }
 
-        try {
-          await native.writeFile(abs, content);
-          ctx.readCache.set(abs, { size: content.length, hash: djb2(content) });
-          return { path: abs, bytesWritten: content.length, ok: true };
-        } catch (e) {
-          return { error: String(e), path: abs };
-        }
+        composePendingProposal(abs, original, content, isNewFile);
+        return {
+          path: abs,
+          bytesProposed: content.length,
+          proposed: true,
+          ok: true,
+          note: PROPOSAL_NOTE,
+        };
       },
     }),
 
     create_directory: tool({
       description:
-        "Create a directory (and any missing parents). Always asks the user before running.",
+        "Create a directory (and any missing parents). Runs immediately — there is no review step for directories.",
       inputSchema: z.object({
         path: z.string(),
       }),
-      needsApproval: true,
       execute: async ({ path }) => {
         const reqPath = resolvePath(path, ctx.getCwd());
         const safety = await checkWritableCanonical(reqPath, native.canonicalize);
@@ -221,7 +232,7 @@ export function buildFsTools(ctx: ToolContext) {
 
     delete_file: tool({
       description:
-        "Delete a file. Always asks the user before running, and the deletion is reviewed in the AI diff tab like an edit: the user accepts or rejects it there. Requires a prior read_file on the path in this session, and refuses when the file changed since that read. Never use for directories.",
+        "Delete a file. Proposes the deletion for user review in the AI diff tab — the file is unchanged on disk until the user accepts it there. Requires a prior read_file on the path in this session, and refuses when the file changed since that read. Never use for directories.",
       inputSchema: z.object({
         path: z.string(),
         reason: z
@@ -229,7 +240,6 @@ export function buildFsTools(ctx: ToolContext) {
           .optional()
           .describe("Why the file should be deleted."),
       }),
-      needsApproval: true,
       execute: async ({ path }) => {
         const reqPath = resolvePath(path, ctx.getCwd());
         const safety = await checkWritableCanonical(reqPath, native.canonicalize);
@@ -265,19 +275,20 @@ export function buildFsTools(ctx: ToolContext) {
         });
         if (!guard.ok) return { error: guard.reason, path: abs };
 
-        try {
-          await native.deleteFile(abs);
-          ctx.readCache.delete(abs);
-          return { path: abs, ok: true };
-        } catch (e) {
-          return { error: String(e), path: abs };
-        }
+        // Proposal only: the file is deleted by the review UI, after the
+        // user accepts it — never here.
+        return {
+          path: abs,
+          proposed: true,
+          ok: true,
+          note: "Deletion proposed for review; the file is unchanged on disk until the user accepts it in the review tab.",
+        };
       },
     }),
 
     rename_file: tool({
       description:
-        "Rename or move a file. Always asks the user before running, and the rename is reviewed in the AI diff tab like an edit. Refuses when the target already exists or the target is outside the workspace. Never use for directories.",
+        "Rename or move a file. Proposes the rename for user review in the AI diff tab — nothing moves on disk until the user accepts it there. Refuses when the target already exists or the target is outside the workspace. Never use for directories.",
       inputSchema: z.object({
         path: z.string(),
         to: z
@@ -290,7 +301,6 @@ export function buildFsTools(ctx: ToolContext) {
           .optional()
           .describe("Why the file should be renamed."),
       }),
-      needsApproval: true,
       execute: async ({ path, to }) => {
         const reqPath = resolvePath(path, ctx.getCwd());
         const reqTo = resolvePath(to, ctx.getCwd());
@@ -364,17 +374,15 @@ export function buildFsTools(ctx: ToolContext) {
         });
         if (!guard.ok) return { error: guard.reason, path: abs };
 
-        try {
-          await native.renameFile(abs, absTo);
-          const cached = ctx.readCache.get(abs);
-          if (cached) {
-            ctx.readCache.delete(abs);
-            ctx.readCache.set(absTo, cached);
-          }
-          return { path: abs, to: absTo, ok: true };
-        } catch (e) {
-          return { error: String(e), path: abs };
-        }
+        // Proposal only: the rename is executed by the review UI, after
+        // the user accepts it — never here.
+        return {
+          path: abs,
+          to: absTo,
+          proposed: true,
+          ok: true,
+          note: "Rename proposed for review; nothing moves on disk until the user accepts it in the review tab.",
+        };
       },
     }),
   } as const;

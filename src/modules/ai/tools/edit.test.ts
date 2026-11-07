@@ -1,11 +1,17 @@
 import type { ToolExecutionOptions } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clearAllPendingProposals, getPendingProposal } from "../lib/pendingProposals";
 import type { ToolContext } from "./context";
 
 const nativeMock = vi.hoisted(() => ({
   canonicalize: vi.fn(async (path: string) => path),
   readFile: vi.fn(),
   writeFile: vi.fn(async () => undefined),
+}));
+
+const planMock = vi.hoisted(() => ({
+  active: false,
+  enqueue: vi.fn(),
 }));
 
 vi.mock("../lib/native", () => ({ native: nativeMock }));
@@ -19,7 +25,9 @@ vi.mock("../lib/security", () => ({
 
 vi.mock("../store/planStore", () => ({
   newQueuedEditId: () => "queued-edit",
-  usePlanStore: { getState: () => ({ active: false, enqueue: vi.fn() }) },
+  usePlanStore: {
+    getState: () => ({ active: planMock.active, enqueue: planMock.enqueue }),
+  },
 }));
 
 import { buildEditTools } from "./edit";
@@ -59,7 +67,12 @@ function setFile(content: string) {
   });
 }
 
-type EditResult = { error?: string; replacements?: number };
+type EditResult = {
+  error?: string;
+  proposed?: boolean;
+  replacements?: number;
+  queued_for_plan_review?: boolean;
+};
 
 async function runEdit(
   ctx: ToolContext,
@@ -81,6 +94,8 @@ async function runMultiEdit(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearAllPendingProposals();
+  planMock.active = false;
   nativeMock.canonicalize.mockImplementation(async (p: string) => p);
   nativeMock.writeFile.mockResolvedValue(undefined);
 });
@@ -95,6 +110,7 @@ describe("edit tool guards", () => {
     });
     expect(result.error).toContain("read_file");
     expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(getPendingProposal(FILE)).toBeUndefined();
   });
 
   it("errors when old_string is absent", async () => {
@@ -106,6 +122,7 @@ describe("edit tool guards", () => {
     });
     expect(result.error).toContain("not found");
     expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(getPendingProposal(FILE)).toBeUndefined();
   });
 
   it("errors when old_string is not unique and replace_all is off", async () => {
@@ -165,16 +182,19 @@ describe("edit tool guards", () => {
   });
 });
 
-describe("edit tool replacement", () => {
-  it("writes the file with a single unique replacement", async () => {
+describe("edit tool proposals (Fase 6: no disk writes)", () => {
+  it("proposes a single unique replacement without writing", async () => {
     setFile("hello world");
     const result = await runEdit(readContext(), {
       path: FILE,
       old_string: "world",
       new_string: "there",
     });
+    expect(result.proposed).toBe(true);
     expect(result.replacements).toBe(1);
-    expect(nativeMock.writeFile).toHaveBeenCalledWith(FILE, "hello there");
+    expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(getPendingProposal(FILE)?.proposedContent).toBe("hello there");
+    expect(getPendingProposal(FILE)?.originalContent).toBe("hello world");
   });
 
   it("replaces every occurrence and counts them with replace_all", async () => {
@@ -185,8 +205,48 @@ describe("edit tool replacement", () => {
       new_string: "z",
       replace_all: true,
     });
+    expect(result.proposed).toBe(true);
     expect(result.replacements).toBe(3);
-    expect(nativeMock.writeFile).toHaveBeenCalledWith(FILE, "z b z b z");
+    expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(getPendingProposal(FILE)?.proposedContent).toBe("z b z b z");
+  });
+
+  it("composes a second edit on top of the pending proposal", async () => {
+    setFile("hello world");
+    const ctx = readContext();
+    await runEdit(ctx, {
+      path: FILE,
+      old_string: "world",
+      new_string: "there",
+    });
+    const second = await runEdit(ctx, {
+      path: FILE,
+      old_string: "hello",
+      new_string: "hi",
+    });
+    expect(second.proposed).toBe(true);
+    expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    const pending = getPendingProposal(FILE);
+    expect(pending?.proposedContent).toBe("hi there");
+    // The review baseline is still the original on-disk content.
+    expect(pending?.originalContent).toBe("hello world");
+  });
+
+  it("lets a second edit match text introduced by the first proposal", async () => {
+    setFile("hello world");
+    const ctx = readContext();
+    await runEdit(ctx, {
+      path: FILE,
+      old_string: "world",
+      new_string: "there",
+    });
+    const second = await runEdit(ctx, {
+      path: FILE,
+      old_string: "there",
+      new_string: "everyone",
+    });
+    expect(second.proposed).toBe(true);
+    expect(getPendingProposal(FILE)?.proposedContent).toBe("hello everyone");
   });
 });
 
@@ -200,11 +260,13 @@ describe("multi_edit atomicity", () => {
         { old_string: "two", new_string: "2" },
       ],
     });
+    expect(result.proposed).toBe(true);
     expect(result.replacements).toBe(2);
-    expect(nativeMock.writeFile).toHaveBeenCalledWith(FILE, "1 2");
+    expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(getPendingProposal(FILE)?.proposedContent).toBe("1 2");
   });
 
-  it("writes nothing when a later edit in the batch fails", async () => {
+  it("proposes nothing when a later edit in the batch fails", async () => {
     setFile("one two");
     const result = await runMultiEdit(readContext(), {
       path: FILE,
@@ -215,9 +277,10 @@ describe("multi_edit atomicity", () => {
     });
     expect(result.error).toContain("not found");
     expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(getPendingProposal(FILE)).toBeUndefined();
   });
 
-  it("writes nothing when a later edit is non-unique", async () => {
+  it("proposes nothing when a later edit is non-unique", async () => {
     setFile("one dup dup");
     const result = await runMultiEdit(readContext(), {
       path: FILE,
@@ -228,5 +291,29 @@ describe("multi_edit atomicity", () => {
     });
     expect(result.error).toContain("not unique");
     expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(getPendingProposal(FILE)).toBeUndefined();
+  });
+});
+
+describe("edit tools in plan mode", () => {
+  it("queues the edit for plan review instead of the proposal registry", async () => {
+    planMock.active = true;
+    setFile("hello world");
+    const result = await runEdit(readContext(), {
+      path: FILE,
+      old_string: "world",
+      new_string: "there",
+    });
+    expect(result.queued_for_plan_review).toBe(true);
+    expect(planMock.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "edit",
+        path: FILE,
+        originalContent: "hello world",
+        proposedContent: "hello there",
+      }),
+    );
+    expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(getPendingProposal(FILE)).toBeUndefined();
   });
 });
