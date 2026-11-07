@@ -205,7 +205,7 @@ export function AiDiffPane({
   const rowRefs = useRef(new Map<number, HTMLDivElement>());
   // Bumped on every record/undo/redo so the Undo/Redo buttons re-render.
   const [historyVersion, setHistoryVersion] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies(approvalId): approvalId is a manual reset trigger — the keyboard focus resets when the proposal changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies(approvalId): approvalId is a manual reset trigger, the keyboard focus resets when the proposal changes
   useEffect(() => {
     setFocusedHunk(null);
     rowRefs.current.clear();

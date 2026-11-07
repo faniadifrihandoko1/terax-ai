@@ -20,7 +20,7 @@ import type {
  * equals the original) even for edits at the end of a file without a
  * trailing newline.
  *
- * Fase 4 (Antigravity-style): the hunk — not the line — is the unit of
+ * Fase 4 (Antigravity-style): the hunk, not the line, is the unit of
  * decision. The per-line functions below stay as the reconstruction
  * engine; `hunkDecisionsToLineDecisions` expands a per-hunk decision
  * into the per-line decisions the engine consumes.
