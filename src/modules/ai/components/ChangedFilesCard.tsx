@@ -33,7 +33,12 @@ export type ChangedFileEntry = {
   /** Rename destination. Only set for rename_file entries. */
   targetPath?: string;
   editCount: number;
-  mutation: FileMutation;
+  /**
+   * Every tool call behind this row, in message order. One entry per
+   * part, except edit proposals for one file (Fase 6), which compose
+   * into a single row — the row's stats chain all of them.
+   */
+  mutations: FileMutation[];
   status: AiDiffStatus;
 };
 
@@ -321,13 +326,25 @@ function useChangedFileStats(entry: ChangedFileEntry) {
           isNewFile = false;
         }
       }
-      const r = deriveProposed(content, entry.mutation.derive);
-      if (!r.ok) {
+      // Fase 6: a composed proposal chains every mutation for the path,
+      // in message order — the same derivation the bridge uses for the
+      // tab, so the row's +/− counts match the accumulated diff.
+      let proposed = content;
+      let ok = true;
+      for (const m of entry.mutations) {
+        const r = deriveProposed(proposed, m.derive);
+        if (!r.ok) {
+          ok = false;
+          break;
+        }
+        proposed = r.content;
+      }
+      if (!ok) {
         setFailed(true);
         return;
       }
       setStats({
-        ...computeLineStats(content, r.content),
+        ...computeLineStats(content, proposed),
         isNewFile,
       });
     })();
@@ -339,19 +356,24 @@ function useChangedFileStats(entry: ChangedFileEntry) {
     entry.kind,
     entry.targetPath,
     entry.approvalId,
-    entry.mutation,
+    entry.mutations,
     live,
   ]);
 
   return { stats, failed };
 }
 
-function buildEntries(
+export function buildEntries(
   parts: AnyPart[],
   reviewStatusByApproval?: Map<string, AiDiffStatus>,
 ): ChangedFileEntry[] {
   const seen = new Set<string>();
   const out: ChangedFileEntry[] = [];
+  // Fase 6: edit proposals for one file compose into a single review tab,
+  // so the card shows one row per file for them (first proposal's id and
+  // status, edit counts summed). Delete/rename proposals never compose,
+  // so each keeps its own row.
+  const composedByPath = new Map<string, ChangedFileEntry>();
   for (const p of parts) {
     const mutation = extractFileMutation(p as unknown as ToolPartLike);
     if (!mutation) continue;
@@ -371,7 +393,17 @@ function buildEntries(
               : "rename_file";
     const editCount =
       mutation.derive.kind === "edits" ? mutation.derive.edits.length : 1;
-    out.push({
+    const composable =
+      kind === "edit" || kind === "multi_edit" || kind === "write_file";
+    if (composable) {
+      const existing = composedByPath.get(mutation.path);
+      if (existing) {
+        existing.editCount += editCount;
+        existing.mutations.push(mutation);
+        continue;
+      }
+    }
+    const entry: ChangedFileEntry = {
       key,
       path: mutation.path,
       approvalId: mutation.approvalId,
@@ -380,11 +412,13 @@ function buildEntries(
         ? { targetPath: mutation.derive.to }
         : {}),
       editCount,
-      mutation,
+      mutations: [mutation],
       status: mutation.approvalId
         ? (reviewStatusByApproval?.get(mutation.approvalId) ?? "pending")
         : "pending",
-    });
+    };
+    if (composable) composedByPath.set(mutation.path, entry);
+    out.push(entry);
   }
   return out;
 }
