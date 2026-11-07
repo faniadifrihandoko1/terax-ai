@@ -40,6 +40,7 @@ const tab = (overrides: Partial<ReviewTabSnapshot>): ReviewTabSnapshot => ({
   path: "src/a.ts",
   isNewFile: false,
   status: "pending",
+  mutationKind: "edit",
   hunkDecisions: {},
   ...overrides,
 });
@@ -60,7 +61,7 @@ describe("snapshotReviewState (FR-10, Fase 4)", () => {
       123,
     );
     expect(state).toEqual({
-      version: 2,
+      version: 3,
       sessionId: "s-1",
       proposals: [
         {
@@ -93,6 +94,85 @@ describe("snapshotReviewState (FR-10, Fase 4)", () => {
   });
 });
 
+describe("snapshotReviewState (FR-10, Fase 5)", () => {
+  it("keeps an applied proposal only when it has a checkpoint", () => {
+    const checkpoint = {
+      approvalId: "a2",
+      path: "src/a.ts",
+      kind: "edit" as const,
+      contentBefore: "a\n",
+      contentAfter: "b\n",
+      hashBefore: 1,
+      hashAfter: 2,
+      appliedAt: 5,
+      appliedHunks: [0],
+    };
+    const state = snapshotReviewState(
+      "s-1",
+      [
+        tab({ approvalId: "a2", status: "applied" }),
+        tab({ approvalId: "a3", status: "applied" }),
+      ],
+      123,
+      new Map([["a2", checkpoint]]),
+    );
+    expect(state).toEqual({
+      version: 3,
+      sessionId: "s-1",
+      proposals: [
+        {
+          approvalId: "a2",
+          path: "src/a.ts",
+          isNewFile: false,
+          status: "applied",
+          hunkDecisions: {},
+          checkpoint,
+          savedAt: 123,
+        },
+      ],
+    });
+  });
+
+  it("keeps delete/rename fields on the proposal", () => {
+    const state = snapshotReviewState("s-1", [
+      tab({
+        approvalId: "d1",
+        status: "done",
+        mutationKind: "delete",
+        fileDecision: "accepted",
+      }),
+      tab({
+        approvalId: "r1",
+        status: "reviewing",
+        mutationKind: "rename",
+        targetPath: "src/b.ts",
+      }),
+    ]);
+    expect(state.proposals).toEqual([
+      {
+        approvalId: "d1",
+        path: "src/a.ts",
+        isNewFile: false,
+        status: "done",
+        hunkDecisions: {},
+        mutationKind: "delete",
+        fileDecision: "accepted",
+        savedAt: expect.any(Number),
+      },
+      {
+        approvalId: "r1",
+        path: "src/a.ts",
+        isNewFile: false,
+        status: "reviewing",
+        hunkDecisions: {},
+        mutationKind: "rename",
+        targetPath: "src/b.ts",
+        savedAt: expect.any(Number),
+      },
+    ]);
+  });
+});
+
 describe("parseReviewState (FR-10, Fase 4)", () => {
   it("rejects wrong versions and malformed shapes", () => {
     expect(parseReviewState(null)).toBeNull();
@@ -112,7 +192,7 @@ describe("parseReviewState (FR-10, Fase 4)", () => {
     expect(
       parseReviewState({ version: 2, sessionId: "s", proposals: [] }),
     ).toEqual({
-      version: 2,
+      version: 3,
       sessionId: "s",
       proposals: [],
     });
@@ -134,7 +214,7 @@ describe("parseReviewState (FR-10, Fase 4)", () => {
       ],
     });
     expect(parsed).toEqual({
-      version: 2,
+      version: 3,
       sessionId: "s",
       proposals: [
         {
@@ -148,6 +228,108 @@ describe("parseReviewState (FR-10, Fase 4)", () => {
         },
       ],
     });
+  });
+
+  it("migrates a v2 state to v3, defaulting new fields to edit", () => {
+    const parsed = parseReviewState({
+      version: 2,
+      sessionId: "s",
+      proposals: [
+        {
+          approvalId: "v2",
+          path: "a.ts",
+          isNewFile: false,
+          status: "pending",
+          hunkDecisions: { "0": "accepted" },
+          savedAt: 3,
+        },
+      ],
+    });
+    expect(parsed).toEqual({
+      version: 3,
+      sessionId: "s",
+      proposals: [
+        {
+          approvalId: "v2",
+          path: "a.ts",
+          isNewFile: false,
+          status: "pending",
+          hunkDecisions: { "0": "accepted" },
+          savedAt: 3,
+        },
+      ],
+    });
+  });
+
+  it("keeps a v3 applied proposal with its checkpoint", () => {
+    const checkpoint = {
+      approvalId: "a1",
+      path: "a.ts",
+      kind: "edit",
+      contentBefore: "a\n",
+      contentAfter: "b\n",
+      hashBefore: 1,
+      hashAfter: 2,
+      appliedAt: 5,
+      appliedHunks: [0],
+    };
+    const parsed = parseReviewState({
+      version: 3,
+      sessionId: "s",
+      proposals: [
+        {
+          approvalId: "a1",
+          path: "a.ts",
+          isNewFile: false,
+          status: "applied",
+          hunkDecisions: {},
+          checkpoint,
+          savedAt: 1,
+        },
+      ],
+    });
+    expect(parsed?.proposals[0]).toMatchObject({
+      status: "applied",
+      checkpoint,
+    });
+  });
+
+  it("drops a malformed checkpoint but keeps the proposal", () => {
+    const parsed = parseReviewState({
+      version: 3,
+      sessionId: "s",
+      proposals: [
+        {
+          approvalId: "a1",
+          path: "a.ts",
+          isNewFile: false,
+          status: "applied",
+          hunkDecisions: {},
+          checkpoint: { approvalId: "a1", kind: "edit" },
+          savedAt: 1,
+        },
+      ],
+    });
+    expect(parsed?.proposals[0]).not.toHaveProperty("checkpoint");
+  });
+
+  it("skips a rename proposal without a target path", () => {
+    const parsed = parseReviewState({
+      version: 3,
+      sessionId: "s",
+      proposals: [
+        {
+          approvalId: "r1",
+          path: "a.ts",
+          isNewFile: false,
+          status: "pending",
+          hunkDecisions: {},
+          mutationKind: "rename",
+          savedAt: 1,
+        },
+      ],
+    });
+    expect(parsed?.proposals).toEqual([]);
   });
 
   it("skips malformed entries instead of dropping the whole state", () => {
@@ -183,7 +365,7 @@ describe("parseReviewState (FR-10, Fase 4)", () => {
           approvalId: "bad-status",
           path: "a.ts",
           isNewFile: false,
-          status: "applied",
+          status: "rejected",
           hunkDecisions: {},
           savedAt: 1,
         },
@@ -216,6 +398,7 @@ describe("restoreStatus (FR-10)", () => {
     expect(restoreStatus("pending")).toBe("pending");
     expect(restoreStatus("reviewing")).toBe("reviewing");
     expect(restoreStatus("done")).toBe("done");
+    expect(restoreStatus("applied")).toBe("applied");
   });
 });
 
@@ -227,7 +410,7 @@ describe("review state storage in sessions.ts (FR-10)", () => {
   });
 
   const state: PersistedReviewState = {
-    version: 2,
+    version: 3,
     sessionId: "s-1",
     proposals: [
       {

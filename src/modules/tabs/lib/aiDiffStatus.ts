@@ -11,6 +11,7 @@ export const AI_DIFF_STATUS_LABEL: Record<AiDiffStatus, string> = {
   applied: "Applied",
   rejected: "Rejected",
   conflict: "Conflict",
+  restored: "Restored",
 };
 
 export const AI_DIFF_STATUS_BADGE: Record<
@@ -23,4 +24,5 @@ export const AI_DIFF_STATUS_BADGE: Record<
   applied: "secondary",
   rejected: "destructive",
   conflict: "destructive",
+  restored: "secondary",
 };

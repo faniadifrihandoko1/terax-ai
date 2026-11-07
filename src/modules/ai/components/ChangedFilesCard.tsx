@@ -211,6 +211,8 @@ function statusShortLabel(status: AiDiffStatus): string {
       return "Ditolak";
     case "conflict":
       return "Konflik";
+    case "restored":
+      return "Dipulihkan";
   }
 }
 

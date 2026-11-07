@@ -25,6 +25,7 @@ import {
 } from "../lib/sessions";
 import { pushRecentModel } from "../lib/modelPrefs";
 import { persistDelay } from "../lib/persistSchedule";
+import { clearCheckpointsForSession } from "../lib/reviewCheckpoint";
 
 export type Live = {
   getCwd: () => string | null;
@@ -391,6 +392,10 @@ export const useChatStore = create<StoreState>((set, get) => ({
     }
     lastPersistedAt.delete(id);
     void deleteSessionData(id);
+    // The persisted review state goes with the session data; drop the
+    // in-memory checkpoints too, so a deleted session leaves nothing
+    // restorable behind.
+    clearCheckpointsForSession(id);
     void useTodosStore.getState().clearSession(id);
 
     if (remaining.length === 0) {

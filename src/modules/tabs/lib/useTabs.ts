@@ -89,6 +89,7 @@ export type MarkdownTab = TabBase & {
  * applied: the change was written to disk.
  * rejected: the change was declined, nothing was written.
  * conflict: the on-disk file changed since the proposal (Fase 2 guard).
+ * restored: an applied change was undone from its checkpoint (Fase 5).
  */
 export type AiDiffStatus =
   | "pending"
@@ -96,7 +97,8 @@ export type AiDiffStatus =
   | "done"
   | "applied"
   | "rejected"
-  | "conflict";
+  | "conflict"
+  | "restored";
 
 export type AiDiffTab = TabBase & {
   id: number;
@@ -110,6 +112,19 @@ export type AiDiffTab = TabBase & {
   approvalId: string;
   status: AiDiffStatus;
   isNewFile: boolean;
+  /**
+   * What the proposal does (Fase 5). "edit" is the default for every
+   * pre-Fase-5 tab; "delete" and "rename" proposals have no hunks, only
+   * a per-file decision (fileDecision) and, for renames, a targetPath.
+   */
+  mutationKind: "edit" | "delete" | "rename";
+  /** Rename destination. Only set when mutationKind is "rename". */
+  targetPath?: string;
+  /**
+   * Per-file decision for delete/rename proposals (Fase 5). Absent
+   * means undecided.
+   */
+  fileDecision?: "accepted" | "rejected";
   /**
    * Per-hunk review decisions (Fase 4, Antigravity-style), keyed by hunk
    * index. Lives on the tab, not in pane-local state, because AiDiffStack
@@ -907,6 +922,12 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       isNewFile: boolean;
       /** FR-10: restored review progress; defaults to a fresh pending tab. */
       status?: AiDiffStatus;
+      /** Delete/rename proposal (Fase 5). Defaults to "edit". */
+      mutationKind?: "edit" | "delete" | "rename";
+      /** Rename destination. Only used when mutationKind is "rename". */
+      targetPath?: string;
+      /** Restored per-file decision for delete/rename proposals. */
+      fileDecision?: "accepted" | "rejected";
       hunkDecisions?: Record<number, HunkDecision>;
       /** False when inline review is on: the tab opens in the background. */
       activate?: boolean;
@@ -936,6 +957,13 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             approvalId: input.approvalId,
             status: input.status ?? "pending",
             isNewFile: input.isNewFile,
+            mutationKind: input.mutationKind ?? "edit",
+            ...(input.targetPath !== undefined
+              ? { targetPath: input.targetPath }
+              : {}),
+            ...(input.fileDecision !== undefined
+              ? { fileDecision: input.fileDecision }
+              : {}),
             hunkDecisions: input.hunkDecisions ?? {},
           },
         ];
@@ -995,6 +1023,31 @@ export function useTabs(initial?: Partial<TerminalTab>) {
               }
             : t,
         ),
+      );
+    },
+    [],
+  );
+
+  /**
+   * Records the per-file decision of a delete/rename proposal (Fase 5).
+   * "undecided" clears the decision, the same toggle behaviour the
+   * per-hunk buttons have.
+   */
+  const setAiDiffFileDecision = useCallback(
+    (
+      approvalId: string,
+      decision: "accepted" | "rejected" | "undecided",
+    ) => {
+      setTabs((curr) =>
+        curr.map((t) => {
+          if (t.kind !== "ai-diff" || t.approvalId !== approvalId) return t;
+          if (decision === "undecided") {
+            const next = { ...t };
+            delete next.fileDecision;
+            return next;
+          }
+          return { ...t, fileDecision: decision };
+        }),
       );
     },
     [],
@@ -1507,6 +1560,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     openCommitFileDiffTab,
     setAiDiffStatus,
     setAiDiffHunkDecision,
+    setAiDiffFileDecision,
     closeAiDiffTab,
     closeTab,
     closeTabs,

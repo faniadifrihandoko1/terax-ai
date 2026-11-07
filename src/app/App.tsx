@@ -30,6 +30,7 @@ import {
 } from "@/modules/ai";
 import { saveReviewState } from "@/modules/ai/lib/sessions";
 import { snapshotReviewState } from "@/modules/ai/lib/reviewPersistence";
+import { listCheckpoints } from "@/modules/ai/lib/reviewCheckpoint";
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
@@ -271,7 +272,8 @@ export default function App() {
 
   // FR-10: persist open AI review proposals (status + line decisions) per
   // session, debounced so a burst of line decisions writes once. The
-  // reviewed contents are NOT stored — the bridge re-derives them from the
+  // reviewed contents are NOT stored, except the checkpoint of an applied
+  // proposal (Fase 5); the bridge re-derives proposal contents from the
   // chat messages on restore, exactly like on first open.
   useEffect(() => {
     if (!activeSessionId) return;
@@ -280,7 +282,12 @@ export default function App() {
       if (aiDiffTabs.length === 0) return;
       void saveReviewState(
         activeSessionId,
-        snapshotReviewState(activeSessionId, aiDiffTabs),
+        snapshotReviewState(
+          activeSessionId,
+          aiDiffTabs,
+          Date.now(),
+          listCheckpoints(),
+        ),
       ).catch(() => {});
     }, REVIEW_SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
@@ -398,6 +405,8 @@ export default function App() {
   // forward and marks the file as being reviewed. With inline review on,
   // Review opens the file in the editor at its first undecided hunk
   // (Fase 4, Antigravity-style); otherwise it activates the ai-diff tab.
+  // Delete/rename proposals (Fase 5) have no inline editor view, so they
+  // always activate the ai-diff tab.
   const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
   const handleOpenFileDiff = useCallback(
     (approvalId: string) => {
@@ -406,7 +415,7 @@ export default function App() {
           t.kind === "ai-diff" && t.approvalId === approvalId,
       );
       if (!tab) return;
-      if (aiReviewInline) {
+      if (aiReviewInline && tab.mutationKind === "edit") {
         openFileTab(tab.path, true);
       } else if (!activateAiDiffTab(approvalId)) {
         return;

@@ -1,4 +1,8 @@
 import type { AiDiffStatus } from "@/modules/tabs";
+import {
+  isFileCheckpoint,
+  type FileCheckpoint,
+} from "./reviewCheckpoint";
 import type { HunkDecision, LineDecision } from "./reviewApply";
 
 /**
@@ -6,18 +10,21 @@ import type { HunkDecision, LineDecision } from "./reviewApply";
  * is the review progress, which proposals are still open, their status, and
  * the per-hunk decisions, so a pending proposal survives an app restart.
  *
- * File contents are never stored here; the bridge re-derives them from the
- * chat messages on reopen. Only decided hunks are stored, so the default
- * state is an empty map.
+ * File contents are not stored here, except for applied proposals: a
+ * checkpoint (Fase 5) holds the pre-apply content so an applied change
+ * can be restored after a restart. The bridge re-derives proposal
+ * contents from the chat messages on reopen. Only decided hunks are
+ * stored, so the default state is an empty map.
  */
 
-export const REVIEW_STATE_VERSION = 2;
+export const REVIEW_STATE_VERSION = 3;
 
 /** Statuses worth restoring on restart. */
 export type RestorableReviewStatus =
   | "pending"
   | "reviewing"
   | "done"
+  | "applied"
   | "conflict";
 
 export type PersistedReviewProposal = {
@@ -32,6 +39,14 @@ export type PersistedReviewProposal = {
    * hunks on restore. Absent in v2 states.
    */
   lineDecisions?: Record<string, LineDecision>;
+  /** v3: what the proposal does. Absent means "edit". */
+  mutationKind?: "edit" | "delete" | "rename";
+  /** v3: rename destination. Only set for rename proposals. */
+  targetPath?: string;
+  /** v3: per-file decision for delete/rename proposals. */
+  fileDecision?: "accepted" | "rejected";
+  /** v3: checkpoint of an applied proposal, for Restore. */
+  checkpoint?: FileCheckpoint;
   savedAt: number;
 };
 
@@ -47,6 +62,9 @@ export type ReviewTabSnapshot = {
   path: string;
   isNewFile: boolean;
   status: AiDiffStatus;
+  mutationKind: "edit" | "delete" | "rename";
+  targetPath?: string;
+  fileDecision?: "accepted" | "rejected";
   hunkDecisions: Record<number, HunkDecision>;
 };
 
@@ -54,6 +72,7 @@ const RESTORABLE: ReadonlySet<string> = new Set([
   "pending",
   "reviewing",
   "done",
+  "applied",
   "conflict",
 ]);
 
@@ -83,16 +102,26 @@ function parseDigitKeyed<T>(
   return out;
 }
 
+/**
+ * Snapshots restorable review state for one session. An "applied"
+ * proposal is only restorable when it has a checkpoint; without one,
+ * restoring it would show an Applied file that cannot be undone.
+ */
 export function snapshotReviewState(
   sessionId: string,
   tabs: readonly ReviewTabSnapshot[],
   now: number = Date.now(),
+  checkpoints: ReadonlyMap<string, FileCheckpoint> = new Map(),
 ): PersistedReviewState {
   return {
     version: REVIEW_STATE_VERSION,
     sessionId,
     proposals: tabs
-      .filter((tab) => isRestorable(tab.status))
+      .filter(
+        (tab) =>
+          isRestorable(tab.status) &&
+          (tab.status !== "applied" || checkpoints.has(tab.approvalId)),
+      )
       .map((tab) => {
         const hunkDecisions: Record<string, HunkDecision> = {};
         for (const [key, decision] of Object.entries(tab.hunkDecisions)) {
@@ -100,12 +129,23 @@ export function snapshotReviewState(
             hunkDecisions[key] = decision;
           }
         }
+        const checkpoint = checkpoints.get(tab.approvalId);
         return {
           approvalId: tab.approvalId,
           path: tab.path,
           isNewFile: tab.isNewFile,
           status: tab.status as RestorableReviewStatus,
           hunkDecisions,
+          ...(tab.mutationKind !== "edit"
+            ? { mutationKind: tab.mutationKind }
+            : {}),
+          ...(tab.targetPath !== undefined
+            ? { targetPath: tab.targetPath }
+            : {}),
+          ...(tab.fileDecision !== undefined
+            ? { fileDecision: tab.fileDecision }
+            : {}),
+          ...(checkpoint !== undefined ? { checkpoint } : {}),
           savedAt: now,
         };
       }),
@@ -117,15 +157,21 @@ export function serializeReviewState(state: PersistedReviewState): string {
 }
 
 /**
- * Parses a stored review state. Accepts both v1 (per-line decisions) and
- * v2 (per-hunk decisions); v1 entries keep their `lineDecisions` so the
- * bridge can migrate them. Unknown versions are rejected, damaged entries
- * are skipped instead of dropping the whole state.
+ * Parses a stored review state. Accepts v1 (per-line decisions), v2
+ * (per-hunk decisions) and v3 (per-file decisions, checkpoints);
+ * v1 entries keep their `lineDecisions` so the bridge can migrate
+ * them. Unknown versions are rejected, damaged entries are skipped
+ * instead of dropping the whole state.
  */
 export function parseReviewState(value: unknown): PersistedReviewState | null {
   if (typeof value !== "object" || value === null) return null;
   const obj = value as Record<string, unknown>;
-  if (obj.version !== 1 && obj.version !== REVIEW_STATE_VERSION) return null;
+  if (
+    obj.version !== 1 &&
+    obj.version !== 2 &&
+    obj.version !== REVIEW_STATE_VERSION
+  )
+    return null;
   if (typeof obj.sessionId !== "string" || !obj.sessionId) return null;
   if (!Array.isArray(obj.proposals)) return null;
   const proposals: PersistedReviewProposal[] = [];
@@ -138,20 +184,28 @@ export function parseReviewState(value: unknown): PersistedReviewState | null {
     if (!isRestorable(p.status)) continue;
     if (typeof p.savedAt !== "number" || Number.isNaN(p.savedAt)) continue;
     const hunkDecisions = parseDigitKeyed(p.hunkDecisions, isHunkDecision);
-    if (obj.version === REVIEW_STATE_VERSION && hunkDecisions === null)
-      continue;
-    if (
-      obj.version === 1 &&
-      hunkDecisions === null &&
-      p.hunkDecisions !== undefined
-    ) {
-      continue;
-    }
+    if (hunkDecisions === null && p.hunkDecisions !== undefined) continue;
     const lineDecisions =
       obj.version === 1
         ? parseDigitKeyed(p.lineDecisions, isLineDecision)
         : undefined;
     if (obj.version === 1 && lineDecisions === null) continue;
+    const mutationKind =
+      p.mutationKind === "delete" || p.mutationKind === "rename"
+        ? p.mutationKind
+        : "edit";
+    const targetPath =
+      typeof p.targetPath === "string" && p.targetPath
+        ? p.targetPath
+        : undefined;
+    if (mutationKind === "rename" && targetPath === undefined) continue;
+    const fileDecision =
+      p.fileDecision === "accepted" || p.fileDecision === "rejected"
+        ? p.fileDecision
+        : undefined;
+    const checkpoint = isFileCheckpoint(p.checkpoint)
+      ? (p.checkpoint as FileCheckpoint)
+      : undefined;
     proposals.push({
       approvalId: p.approvalId,
       path: p.path,
@@ -159,6 +213,10 @@ export function parseReviewState(value: unknown): PersistedReviewState | null {
       status: p.status,
       hunkDecisions: hunkDecisions ?? {},
       ...(lineDecisions ? { lineDecisions } : {}),
+      ...(mutationKind !== "edit" ? { mutationKind } : {}),
+      ...(targetPath !== undefined ? { targetPath } : {}),
+      ...(fileDecision !== undefined ? { fileDecision } : {}),
+      ...(checkpoint !== undefined ? { checkpoint } : {}),
       savedAt: p.savedAt,
     });
   }

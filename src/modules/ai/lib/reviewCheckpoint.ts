@@ -21,6 +21,8 @@ export type CheckpointKind = "edit" | "delete" | "rename";
 
 export type FileCheckpoint = {
   approvalId: string;
+  /** Owning session, when known. Used to drop checkpoints on session delete. */
+  sessionId?: string;
   /** Path the proposal was about (the old path for a rename). */
   path: string;
   kind: CheckpointKind;
@@ -47,6 +49,7 @@ export const MAX_CHECKPOINTS_PER_SESSION = 20;
 
 export function buildEditCheckpoint(input: {
   approvalId: string;
+  sessionId?: string;
   path: string;
   originalContent: string;
   reconstructedContent: string;
@@ -55,6 +58,7 @@ export function buildEditCheckpoint(input: {
 }): FileCheckpoint {
   return {
     approvalId: input.approvalId,
+    ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
     path: input.path,
     kind: "edit",
     contentBefore: input.originalContent,
@@ -68,12 +72,14 @@ export function buildEditCheckpoint(input: {
 
 export function buildDeleteCheckpoint(input: {
   approvalId: string;
+  sessionId?: string;
   path: string;
   content: string;
   appliedAt?: number;
 }): FileCheckpoint {
   return {
     approvalId: input.approvalId,
+    ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
     path: input.path,
     kind: "delete",
     contentBefore: input.content,
@@ -87,6 +93,7 @@ export function buildDeleteCheckpoint(input: {
 
 export function buildRenameCheckpoint(input: {
   approvalId: string;
+  sessionId?: string;
   path: string;
   targetPath: string;
   content: string;
@@ -94,6 +101,7 @@ export function buildRenameCheckpoint(input: {
 }): FileCheckpoint {
   return {
     approvalId: input.approvalId,
+    ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
     path: input.path,
     kind: "rename",
     contentBefore: input.content,
@@ -134,6 +142,13 @@ export function clearCheckpoint(approvalId: string): void {
   checkpoints.delete(approvalId);
 }
 
+/** Drops every checkpoint stamped with the deleted session id. */
+export function clearCheckpointsForSession(sessionId: string): void {
+  for (const [id, cp] of checkpoints) {
+    if (cp.sessionId === sessionId) checkpoints.delete(id);
+  }
+}
+
 export function clearAllCheckpoints(): void {
   checkpoints.clear();
 }
@@ -152,6 +167,11 @@ export function isFileCheckpoint(value: unknown): value is FileCheckpoint {
   if (typeof value !== "object" || value === null) return false;
   const c = value as Record<string, unknown>;
   if (typeof c.approvalId !== "string" || !c.approvalId) return false;
+  if (
+    c.sessionId !== undefined &&
+    (typeof c.sessionId !== "string" || !c.sessionId)
+  )
+    return false;
   if (typeof c.path !== "string" || !c.path) return false;
   if (c.kind !== "edit" && c.kind !== "delete" && c.kind !== "rename")
     return false;
