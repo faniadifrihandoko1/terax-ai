@@ -69,7 +69,14 @@ export function extractFileMutation(
 ): FileMutation | null {
   const type = part.type ?? "";
   const state = part.state ?? "";
-  const approvalId = part.approval?.id ?? null;
+  // Fase 6: the id that keys a proposal. Before Fase 6 this was the AI SDK
+  // approval id; file proposals no longer go through an approval
+  // round-trip, so the id is now the tool call's own id. An approval id
+  // still wins when one exists (legacy parts from sessions recorded
+  // before Fase 6, whose tool call was approval-gated). The field keeps
+  // its old name so tabs, persistence, checkpoints and the card keep
+  // working unchanged — it identifies the proposing tool call.
+  const approvalId = part.approval?.id ?? part.toolCallId ?? null;
   const input = (part.input ?? {}) as Record<string, unknown>;
 
   if (type === "tool-write_file") {

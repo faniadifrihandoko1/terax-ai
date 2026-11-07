@@ -99,6 +99,36 @@ describe("extractFileMutation", () => {
       ),
     ).toBeNull();
   });
+
+  it("keys a proposal by its tool call id when there is no approval (Fase 6)", () => {
+    const m = extractFileMutation({
+      type: "tool-edit",
+      state: "output-available",
+      toolCallId: "call-9",
+      input: { path: "x.ts", old_string: "a", new_string: "b" },
+    });
+    expect(m?.approvalId).toBe("call-9");
+  });
+
+  it("prefers the approval id over the tool call id for legacy parts", () => {
+    const m = extractFileMutation(
+      part({
+        type: "tool-edit",
+        toolCallId: "call-9",
+        input: { path: "x.ts", old_string: "a", new_string: "b" },
+      }),
+    );
+    expect(m?.approvalId).toBe("a1");
+  });
+
+  it("has no proposal id when neither approval nor tool call id exists", () => {
+    const m = extractFileMutation({
+      type: "tool-edit",
+      state: "output-available",
+      input: { path: "x.ts", old_string: "a", new_string: "b" },
+    });
+    expect(m?.approvalId).toBeNull();
+  });
 });
 
 describe("applyEditsLocally", () => {
