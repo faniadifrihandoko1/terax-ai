@@ -402,12 +402,12 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
 - **Voice input**: streamed transcription pipeline. Toggled from the composer.
 - **Live context bridge**: `App.tsx` calls `setLive({ getCwd, getTerminalContext, … })` so tools can read the *currently active* terminal's cwd + last 300 lines of buffer. Lazy by design - don't pre-snapshot.
 
-- **AI review, Antigravity-style (fork, Fase 1-4)**: after a task finishes, the
+- **AI review, Antigravity-style (fork, Fase 1-5)**: after a task finishes, the
   chat shows a `ChangedFilesCard` (`src/modules/ai/components/ChangedFilesCard.tsx`)
   listing every file the agent proposed to change, with +added/-removed counts
   (shared `computeLineStats` in `src/modules/editor/lib/diffStats.ts`) and a
   per-file review status (`AiDiffStatus` in `src/modules/tabs/lib/useTabs.ts`:
-  pending, reviewing, done, applied, rejected, conflict; labels in
+  pending, reviewing, done, applied, rejected, conflict, restored; labels in
   `src/modules/tabs/lib/aiDiffStatus.ts`). Clicking Review on a file opens
   the file in the editor at its first undecided hunk when inline review is
   on, or activates its ai-diff tab when it is off. The card derives its data
@@ -440,19 +440,14 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   deliberately not an AI SDK tool: only the review UI may invoke it, never
   the model.
   Fase 3: (FR-09) the "New file" badge is the same chip in the chat card and
-  the diff header; there is NO delete/rename file tool for the agent (see
-  Tools below), so a delete/rename can never appear as an ai-diff proposal.
-  If the agent deletes or renames through the shell (`run_command`), that
-  only goes through the approval card, and a file deleted on disk while a
-  proposal is pending is caught by the FR-07 conflict guard. (FR-10) open
-  proposals survive a restart: `src/modules/ai/lib/reviewPersistence.ts`
-  (`snapshotReviewState` / `parseReviewState`, versioned format v2, v1 line
-  decisions migrated to hunks on restore) stores only status + hunk
-  decisions per session in the same LazyStore as the session metadata
-  (`review:<id>` in `lib/sessions.ts`, saved debounced from `App.tsx`,
-  deleted with the session); the reviewed contents are re-derived from the
-  chat messages by `AgentRunBridge` on reopen, which restores the saved
-  status/decisions into `openAiDiffTab` and toasts once per session when
+  the diff header. (FR-10) open proposals survive a restart: `src/modules/ai/lib/reviewPersistence.ts`
+  (`snapshotReviewState` / `parseReviewState`, versioned format v3, v1 line
+  decisions migrated to hunks on restore, v2 states migrate to v3) stores
+  only status + hunk decisions per session in the same LazyStore as the
+  session metadata (`review:<id>` in `lib/sessions.ts`, saved debounced from
+  `App.tsx`, deleted with the session); the reviewed contents are re-derived
+  from the chat messages by `AgentRunBridge` on reopen, which restores the
+  saved status/decisions into `openAiDiffTab` and toasts once per session when
   proposals were restored. (FR-11) Settings → General → "Review AI edits
   inline in the editor" (`aiReviewInline`, default on, in
   `src/modules/settings/store.ts`, following `antigravity.enableInlineDiff`;
@@ -470,16 +465,49 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   header above each hunk; the ai-diff tab stays as the side-by-side
   alternative). `EditorPane` wires the extension to the proposal for its
   file (`src/modules/editor/lib/reviewTab.ts` matches the first ai-diff tab
-  by path) and focuses the first undecided hunk the first time the editor
+  by path, edit proposals only) and focuses the first undecided hunk the first time the editor
   becomes visible with a pending proposal. `AgentRunBridge` opens ai-diff
   tabs in the background while inline is on (`openAiDiffTab` takes
   `activate: false`). Ctrl+Z in the editor stays text undo on purpose:
   review undo lives in the ai-diff pane only. Known limits: only the first
   proposal per file shows inline; editing the buffer mid-review leaves the
   decorations mapped through the edits (approximately right, the ai-diff
-  tab stays authoritative); there is still no checkpoint/undo for edits
-  already applied to disk.
-- **Tools** (`tools/tools.ts`): `read_file`, `list_directory`, `fs_search`, `fs_grep` auto-execute. `write_file`, `edit`, `multi_edit`, `create_directory`, `run_command` (`bash_run` / `bash_background` in `tools/shell.ts`), `spawn_coding_agent`, `send_to_agent` set `needsApproval: true` and the AI SDK pauses for an in-UI confirmation card. There is NO `delete_file` or `rename` AI tool in v0.9.0 (the earlier mention of `rename`/`delete` here was stale upstream doc text): the Rust backend does have `fs_rename` / `fs_move` / `fs_delete` / `fs_delete_batch` (`src-tauri/src/modules/fs/mutate.rs`), but only the file explorer / editor UI calls them — the agent cannot propose a delete or rename for ai-diff review. Auto-send after approval uses `lastAssistantMessageIsCompleteWithApprovalResponses`. `lib/security.ts` is a deny-list refusing obvious secret paths (`.env*`, `.ssh/`, credentials, keychain dirs) - apply on **both** read and write paths and don't bypass it.
+  tab stays authoritative).
+  Fase 5 (checkpoint/undo and delete/rename review): every reviewed apply
+  saves a checkpoint first (`src/modules/ai/lib/reviewCheckpoint.ts`:
+  pre-apply content + hash + time + approval id + accepted hunks, one per
+  file per apply, at most 20 per session, oldest dropped; `applyReviewedEdit`
+  in `reviewApply.ts` saves it before writing). An applied file can be
+  restored from the Changed Files card and from the ai-diff tab ("Restore" /
+  "Undo apply", atomic re-write through the same `native.writeFile` path);
+  after restore the status is `restored`. The restore guard refuses when
+  the disk no longer matches the applied result, so a later manual edit is
+  never silently overwritten; "Restore anyway" is an explicit second action
+  with confirmation, available in the ai-diff tab only. Checkpoints ride
+  the v3 review persistence (an applied proposal is only restorable with a
+  checkpoint) and are cleared with the session, in memory and on disk.
+  The agent can now propose deletes and renames (`delete_file`,
+  `rename_file` in `src/modules/ai/tools/fs.ts`, approval-gated like the
+  other mutating tools): they never execute directly, they produce a
+  per-file proposal in the ai-diff tab (`AiDiffTab.mutationKind`,
+  `targetPath`, `fileDecision`) with a Deleted / Renamed chip in the card
+  and the tab header. Delete needs a prior `read_file` and refuses when
+  the content changed since that read; rename refuses an existing target
+  and a target outside the workspace root (shared pure guards in
+  `src/modules/ai/lib/fileOpGuards.ts`, also used by the tools). Apply
+  follows Opsi B (`applyReviewedDelete` / `applyReviewedRename` in
+  `reviewApply.ts`: answer the original approval false, then execute via
+  the existing Rust `fs_delete` / `fs_rename` backend) and also saves a
+  checkpoint, so a deleted file is recreated and a renamed file is moved
+  back on restore. Plan mode refuses both tools (never queued as writes).
+  If the agent deletes or renames through the shell (`run_command`), that
+  only goes through the approval card, and a file deleted on disk while a
+  proposal is pending is caught by the FR-07 conflict guard. Known limits:
+  a delete/rename approved on the composer card executes directly through
+  the tool, with no checkpoint (same as an edit approved there); only the
+  reviewed-apply path in the ai-diff tab is restorable. Delete/rename
+  proposals never render inline in the editor.
+- **Tools** (`tools/tools.ts`): `read_file`, `list_directory`, `fs_search`, `fs_grep` auto-execute. `write_file`, `edit`, `multi_edit`, `create_directory`, `delete_file`, `rename_file`, `run_command` (`bash_run` / `bash_background` in `tools/shell.ts`), `spawn_coding_agent`, `send_to_agent` set `needsApproval: true` and the AI SDK pauses for an in-UI confirmation card. `delete_file` and `rename_file` are fork additions (Fase 5, see AI review above): they propose, never execute directly, and are refused in plan mode. The Rust backend has `fs_rename` / `fs_move` / `fs_delete` / `fs_delete_batch` (`src-tauri/src/modules/fs/mutate.rs`); the agent's reviewed delete/rename apply reuses `fs_delete` / `fs_rename`, which the file explorer / editor UI also calls. Auto-send after approval uses `lastAssistantMessageIsCompleteWithApprovalResponses`. `lib/security.ts` is a deny-list refusing obvious secret paths (`.env*`, `.ssh/`, credentials, keychain dirs) - apply on **both** read and write paths and don't bypass it.
 - **Edit diffs**: AI-proposed edits are reviewed per hunk (see AI review above) before anything is written: inline in the editor when `aiReviewInline` is on (Settings → General), otherwise in a side-by-side diff tab (`ai-diff` tab kind). The composer card's Approve still writes the whole proposal unchanged.
 - **Prompt snippets** (`#handle`): reusable prompt fragments surfaced in the composer. Do not describe these as skills; a reusable tool-bundled skills system is not implemented yet.
 
