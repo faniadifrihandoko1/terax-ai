@@ -347,6 +347,7 @@ export function AiDiffPane({
   );
   const [focusedRow, setFocusedRow] = useState<number | null>(null);
   const rowRefs = useRef(new Map<number, HTMLDivElement>());
+  // biome-ignore lint/correctness/useExhaustiveDependencies(approvalId): approvalId is a manual reset trigger — the keyboard focus resets when the proposal changes
   useEffect(() => {
     setFocusedRow(null);
     rowRefs.current.clear();
@@ -602,6 +603,7 @@ export function AiDiffPane({
             <div
               className="max-h-64 overflow-y-auto border-t border-border/40 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               tabIndex={0}
+              role="listbox"
               onKeyDown={onReviewKeyDown}
               aria-label="Changed lines review. Use arrow keys to move, A to accept, R to reject."
             >
@@ -765,6 +767,8 @@ function ReviewLineRow({
     <div
       ref={rowRef}
       tabIndex={-1}
+      role="option"
+      aria-selected={decision !== "undecided"}
       onFocus={onFocus}
       className={cn(
         "flex items-center gap-2 border-l-2 px-3 py-1 font-mono text-[12px] focus-visible:outline-none",

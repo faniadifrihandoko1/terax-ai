@@ -153,6 +153,7 @@ function Bridge({
     state: PersistedReviewState | null;
   } | null>(null);
   const reviewToastShownRef = useRef<Set<string>>(new Set());
+  // biome-ignore lint/correctness/useExhaustiveDependencies(sessionId): sessionId is a manual reset trigger — the per-session caches reset when the session changes
   useEffect(() => {
     openedRef.current = new Set();
     fileMutationFingerprintRef.current = "";
@@ -312,7 +313,7 @@ function Bridge({
     return () => {
       cancelled = true;
     };
-  }, [messages, fileMutationFingerprint, openAiDiffTab, setAiDiffStatus]);
+  }, [messages, fileMutationFingerprint, openAiDiffTab, setAiDiffStatus, sessionId]);
 
   return null;
 }
