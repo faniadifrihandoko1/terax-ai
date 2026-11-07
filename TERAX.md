@@ -402,62 +402,85 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
 - **Voice input**: streamed transcription pipeline. Toggled from the composer.
 - **Live context bridge**: `App.tsx` calls `setLive({ getCwd, getTerminalContext, … })` so tools can read the *currently active* terminal's cwd + last 300 lines of buffer. Lazy by design - don't pre-snapshot.
 
-- **AI review, Antigravity-style (fork, Fase 1–3)**: after a task finishes, the
+- **AI review, Antigravity-style (fork, Fase 1-4)**: after a task finishes, the
   chat shows a `ChangedFilesCard` (`src/modules/ai/components/ChangedFilesCard.tsx`)
   listing every file the agent proposed to change, with +added/-removed counts
   (shared `computeLineStats` in `src/modules/editor/lib/diffStats.ts`) and a
   per-file review status (`AiDiffStatus` in `src/modules/tabs/lib/useTabs.ts`:
   pending, reviewing, done, applied, rejected, conflict; labels in
-  `src/modules/tabs/lib/aiDiffStatus.ts`). Clicking a file activates its
-  ai-diff tab via `activateAiDiffTab`. The card derives its data with the
-  shared `extractFileMutation` / `deriveProposed` in
+  `src/modules/tabs/lib/aiDiffStatus.ts`). Clicking Review on a file opens
+  the file in the editor at its first undecided hunk when inline review is
+  on, or activates its ai-diff tab when it is off. The card derives its data
+  with the shared `extractFileMutation` / `deriveProposed` in
   `src/modules/ai/lib/fileMutations.ts`, the same functions `AgentRunBridge`
   uses to open the tab. An answered approval no longer closes the ai-diff
   tab; the decision is recorded with `setAiDiffStatus` instead, so the tab
-  stays open until the user closes it. Per-line review (Fase 2): the ai-diff
-  tab breaks the proposal into per-line changes (`src/modules/editor/lib/lineDiff.ts`:
-  `computeLineChanges`, `reconstructFile`, `countDecisions`, `splitPairs`),
-  each line decided Accept/Reject in the review list, per hunk, or per file
-  (Accept all / Reject all / Reject remaining); decisions live on the tab
-  (`AiDiffTab.lineDecisions`, `setAiDiffLineDecision`) because the pane
-  unmounts on tab switch. Apply is enabled only when every line is decided
-  and writes the reconstruction via `applyReviewedEdit`
-  (`src/modules/ai/lib/reviewApply.ts`): it answers the original approval
-  `false` first so the agent tool never writes, guards the write with a
-  djb2 hash of the on-disk content vs `originalContent` (mismatch sets the
-  tab `conflict` and blocks the write; "Check again" re-runs the guard,
-  "Discard proposal" answers false), and writes atomically through
-  `native.writeFile`. A read-only result preview shows the reconstruction
-  side by side with the diff, decided lines highlighted. The reviewed-apply
-  registry (`mark/is/clearReviewedApply`) lets `AgentRunBridge` skip its own
-  applied/rejected recording for these approvals; it is cleared on session
-  change. `apply_reviewed_edit` is deliberately not an AI SDK tool: only the
-  review UI may invoke it, never the model.
+  stays open until the user closes it. Per-hunk review (Fase 2, rebuilt
+  Fase 4): the proposal is broken into hunks
+  (`src/modules/editor/lib/lineDiff.ts`: `computeLineChanges`,
+  `reconstructFileFromHunks`, `countHunkDecisions`,
+  `hunkDecisionsToLineDecisions`, `migrateLineDecisionsToHunks`); each hunk
+  is decided Accept/Reject, per hunk or per file (Accept all / Reject all /
+  Reject remaining); decisions live on the tab (`AiDiffTab.hunkDecisions`,
+  `setAiDiffHunkDecision`) because the pane unmounts on tab switch.
+  Decisions are undoable (Ctrl+Z) and redoable (Ctrl+Y) per proposal
+  (`src/modules/ai/lib/reviewHistory.ts`, one stack per approval id, shared
+  by the pane and the inline editor, cleared on apply/discard). Apply is
+  enabled only when every hunk is decided and writes the reconstruction via
+  `applyReviewedEdit` (`src/modules/ai/lib/reviewApply.ts`): it answers the
+  original approval `false` first so the agent tool never writes, guards the
+  write with a djb2 hash of the on-disk content vs `originalContent`
+  (mismatch sets the tab `conflict` and blocks the write; "Check again"
+  re-runs the guard, "Discard proposal" answers false), and writes
+  atomically through `native.writeFile`. A read-only result preview shows
+  the reconstruction side by side with the diff, decided hunks highlighted.
+  The reviewed-apply registry (`mark/is/clearReviewedApply`) lets
+  `AgentRunBridge` skip its own applied/rejected recording for these
+  approvals; it is cleared on session change. `apply_reviewed_edit` is
+  deliberately not an AI SDK tool: only the review UI may invoke it, never
+  the model.
   Fase 3: (FR-09) the "New file" badge is the same chip in the chat card and
   the diff header; there is NO delete/rename file tool for the agent (see
-  Tools below), so a delete/rename can never appear as an ai-diff proposal —
-  if the agent deletes or renames through the shell (`run_command`), that
+  Tools below), so a delete/rename can never appear as an ai-diff proposal.
+  If the agent deletes or renames through the shell (`run_command`), that
   only goes through the approval card, and a file deleted on disk while a
   proposal is pending is caught by the FR-07 conflict guard. (FR-10) open
   proposals survive a restart: `src/modules/ai/lib/reviewPersistence.ts`
-  (`snapshotReviewState` / `parseReviewState`, versioned format v1) stores
-  only status + line decisions per session in the same LazyStore as the
-  session metadata (`review:<id>` in `lib/sessions.ts` — saved debounced
-  from `App.tsx`, deleted with the session); the reviewed contents are
-  re-derived from the chat messages by `AgentRunBridge` on reopen, which
-  restores the saved status/decisions into `openAiDiffTab` and toasts once
-  per session when proposals were restored. (FR-11) Settings → General →
-  "Review AI edits line by line" (`aiReviewPerLine`, default on, in
-  `src/modules/settings/store.ts`) switches the diff tab to a per-file
-  Accept/Reject fallback (Accept file writes the all-accepted
-  reconstruction through the same `applyReviewedEdit`); keyboard navigation
-  in the review list (`src/modules/editor/lib/reviewKeyboard.ts`:
-  ArrowUp/ArrowDown move between changed lines, `A` accept, `R` reject,
-  clamped at the ends, modifiers ignored) is scoped to the review list
-  container only, so it never fires while typing in the composer, editor,
-  or terminal.
+  (`snapshotReviewState` / `parseReviewState`, versioned format v2, v1 line
+  decisions migrated to hunks on restore) stores only status + hunk
+  decisions per session in the same LazyStore as the session metadata
+  (`review:<id>` in `lib/sessions.ts`, saved debounced from `App.tsx`,
+  deleted with the session); the reviewed contents are re-derived from the
+  chat messages by `AgentRunBridge` on reopen, which restores the saved
+  status/decisions into `openAiDiffTab` and toasts once per session when
+  proposals were restored. (FR-11) Settings → General → "Review AI edits
+  inline in the editor" (`aiReviewInline`, default on, in
+  `src/modules/settings/store.ts`, following `antigravity.enableInlineDiff`;
+  a stored Fase 3 `aiReviewPerLine` choice migrates to it); keyboard
+  navigation in the review list (`src/modules/editor/lib/reviewKeyboard.ts`:
+  ArrowUp/ArrowDown move between hunks, Alt+Enter accept, Alt+Shift+Enter
+  reject, Ctrl+Z undo, Ctrl+Y redo, clamped at the ends) is scoped to the
+  review list container only, so it never fires while typing in the
+  composer, editor, or terminal.
+  Fase 4 (inline review): with `aiReviewInline` on, the pending proposal
+  also renders inline in the open editor
+  (`src/modules/editor/lib/inlineReview.ts`: a CodeMirror extension over
+  the on-disk buffer, removed lines struck through while undecided and
+  hidden once accepted, added lines as a block widget, Accept/Reject
+  header above each hunk; the ai-diff tab stays as the side-by-side
+  alternative). `EditorPane` wires the extension to the proposal for its
+  file (`src/modules/editor/lib/reviewTab.ts` matches the first ai-diff tab
+  by path) and focuses the first undecided hunk the first time the editor
+  becomes visible with a pending proposal. `AgentRunBridge` opens ai-diff
+  tabs in the background while inline is on (`openAiDiffTab` takes
+  `activate: false`). Ctrl+Z in the editor stays text undo on purpose:
+  review undo lives in the ai-diff pane only. Known limits: only the first
+  proposal per file shows inline; editing the buffer mid-review leaves the
+  decorations mapped through the edits (approximately right, the ai-diff
+  tab stays authoritative); there is still no checkpoint/undo for edits
+  already applied to disk.
 - **Tools** (`tools/tools.ts`): `read_file`, `list_directory`, `fs_search`, `fs_grep` auto-execute. `write_file`, `edit`, `multi_edit`, `create_directory`, `run_command` (`bash_run` / `bash_background` in `tools/shell.ts`), `spawn_coding_agent`, `send_to_agent` set `needsApproval: true` and the AI SDK pauses for an in-UI confirmation card. There is NO `delete_file` or `rename` AI tool in v0.9.0 (the earlier mention of `rename`/`delete` here was stale upstream doc text): the Rust backend does have `fs_rename` / `fs_move` / `fs_delete` / `fs_delete_batch` (`src-tauri/src/modules/fs/mutate.rs`), but only the file explorer / editor UI calls them — the agent cannot propose a delete or rename for ai-diff review. Auto-send after approval uses `lastAssistantMessageIsCompleteWithApprovalResponses`. `lib/security.ts` is a deny-list refusing obvious secret paths (`.env*`, `.ssh/`, credentials, keychain dirs) - apply on **both** read and write paths and don't bypass it.
-- **Edit diffs**: AI-proposed edits open in a side-by-side diff tab (`ai-diff` tab kind); the user reviews them line by line (see AI review above) before anything is written. With per-line review on, the old per-file Accept/Reject buttons are replaced by the review list; with it off (Settings → General), per-file Accept/Reject is the fallback. The composer card's Approve still writes the whole proposal unchanged.
+- **Edit diffs**: AI-proposed edits are reviewed per hunk (see AI review above) before anything is written: inline in the editor when `aiReviewInline` is on (Settings → General), otherwise in a side-by-side diff tab (`ai-diff` tab kind). The composer card's Approve still writes the whole proposal unchanged.
 - **Prompt snippets** (`#handle`): reusable prompt fragments surfaced in the composer. Do not describe these as skills; a reusable tool-bundled skills system is not implemented yet.
 
 ### UI conventions
