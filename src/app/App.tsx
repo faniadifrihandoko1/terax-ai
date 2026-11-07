@@ -91,6 +91,7 @@ import {
   useWorkspaceCwd,
 } from "@/modules/tabs";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
+import { decideOpenFileDiff } from "@/modules/tabs/lib/openFileDiffAction";
 import type { AiDiffStatus, AiDiffTab } from "@/modules/tabs";
 import {
   clearFocusedTerminal,
@@ -431,17 +432,51 @@ export default function App() {
   // (Fase 4, Antigravity-style); otherwise it activates the ai-diff tab.
   // Delete/rename proposals (Fase 5) have no inline editor view, so they
   // always activate the ai-diff tab.
+  //
+  // The click must never do nothing: the ai-diff tab is created by
+  // AgentRunBridge after the proposal lands, while the card row already
+  // appears from the message parts, so a click while the agent is still
+  // working used to return silently. When there is no tab yet, the file
+  // still opens in the editor and a toast says honestly that the review
+  // itself is not ready (inline decorations sync from the ai-diff tab,
+  // so without a tab there is nothing to decorate yet).
   const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
   const handleOpenFileDiff = useCallback(
-    (approvalId: string) => {
+    (approvalId: string, path: string) => {
       const tab = tabs.find(
         (t): t is AiDiffTab =>
           t.kind === "ai-diff" && t.approvalId === approvalId,
       );
-      if (!tab) return;
-      if (aiReviewInline && tab.mutationKind === "edit") {
+      const decision = decideOpenFileDiff({
+        tabExists: tab !== undefined,
+        aiReviewInline,
+        mutationKind: tab?.mutationKind ?? "edit",
+      });
+      if (decision.kind === "fallback-editor-toast") {
+        openFileTab(path, true);
+        toast.info("Review belum siap untuk file ini", {
+          description:
+            "Tab review belum terbentuk (agent mungkin masih bekerja). File dibuka di editor; coba lagi setelah agent selesai.",
+        });
+        return;
+      }
+      // Unreachable: the fallback branch above already returned when
+      // there is no tab. Kept so TypeScript can narrow `tab` below.
+      if (tab === undefined) return;
+      if (decision.kind === "open-editor") {
         openFileTab(tab.path, true);
       } else if (!activateAiDiffTab(approvalId)) {
+        const afterActivate = decideOpenFileDiff({
+          tabExists: true,
+          aiReviewInline,
+          mutationKind: tab.mutationKind,
+          activateSucceeded: false,
+        });
+        if (afterActivate.kind === "error-toast") {
+          toast.error("Tidak bisa membuka tab review", {
+            description: "Tab review ada tapi gagal diaktifkan. Coba lagi.",
+          });
+        }
         return;
       }
       if (tab.status === "pending") {

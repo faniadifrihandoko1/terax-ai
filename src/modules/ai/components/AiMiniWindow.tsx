@@ -73,7 +73,7 @@ export function AiMiniWindow({
   onRestoreFile,
 }: {
   state: PresenceState;
-  onOpenFileDiff?: (approvalId: string) => void;
+  onOpenFileDiff?: (approvalId: string, path: string) => void;
   reviewStatusByApproval?: Map<string, AiDiffStatus>;
   restorableApprovals?: ReadonlySet<string>;
   onRestoreFile?: (approvalId: string) => void;
@@ -189,7 +189,7 @@ function Body({
   onClose: () => void;
   onExpand: () => void;
   onHeaderPointerDown: (e: React.PointerEvent) => void;
-  onOpenFileDiff?: (approvalId: string) => void;
+  onOpenFileDiff?: (approvalId: string, path: string) => void;
   reviewStatusByApproval?: Map<string, AiDiffStatus>;
   restorableApprovals?: ReadonlySet<string>;
   onRestoreFile?: (approvalId: string) => void;

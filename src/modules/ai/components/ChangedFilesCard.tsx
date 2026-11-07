@@ -40,7 +40,12 @@ export type ChangedFileEntry = {
 type Props = {
   parts: AnyPart[];
   reviewStatusByApproval?: Map<string, AiDiffStatus>;
-  onOpenFileDiff?: (approvalId: string) => void;
+  /**
+   * Opens the review for a file. The path is the resolved absolute path
+   * of the file, so the handler can open the file in the editor as a
+   * fallback when the ai-diff tab does not exist yet.
+   */
+  onOpenFileDiff?: (approvalId: string, path: string) => void;
   /** Approval ids with a checkpoint, so their Restore button can show. */
   restorableApprovals?: ReadonlySet<string>;
   onRestoreFile?: (approvalId: string) => void;
@@ -50,9 +55,10 @@ type Props = {
  * Antigravity-style "Changed Files" summary (FR-01) for one assistant
  * message: every file the agent proposed to change, with +added/-removed
  * and its per-file review status (FR-06). Clicking a file opens its
- * ai-diff tab (FR-02). The card is navigation and status only; in Fase 1
- * the actual Accept/Reject still happens in the diff tab and the approval
- * card, through the existing approval flow.
+ * ai-diff tab (FR-02), or the file in the editor when inline review is
+ * on. When the ai-diff tab does not exist yet (the agent is still
+ * working), the click still opens the file in the editor and says so
+ * with a toast, instead of doing nothing.
  */
 export const ChangedFilesCard = memo(function ChangedFilesCard({
   parts,
@@ -137,11 +143,18 @@ const ChangedFileRow = memo(function ChangedFileRow({
   onRestoreFile,
 }: {
   entry: ChangedFileEntry;
-  onOpenFileDiff?: (approvalId: string) => void;
+  onOpenFileDiff?: (approvalId: string, path: string) => void;
   restorable?: boolean;
   onRestoreFile?: (approvalId: string) => void;
 }) {
   const { stats, failed } = useChangedFileStats(entry);
+  const live = useChatStore((s) => s.live);
+  // Absolute path of the file, for the editor fallback when the ai-diff
+  // tab does not exist yet. Resolved the same way as the stats above.
+  const absPath = useMemo(
+    () => resolveMutationPath(entry.path, live.getCwd()),
+    [entry.path, live],
+  );
   const clickable = entry.approvalId !== null && onOpenFileDiff !== undefined;
   const isFileOp =
     entry.kind === "delete_file" || entry.kind === "rename_file";
@@ -229,7 +242,7 @@ const ChangedFileRow = memo(function ChangedFileRow({
     <li className="flex items-center gap-1">
       <button
         type="button"
-        onClick={() => onOpenFileDiff(entry.approvalId as string)}
+        onClick={() => onOpenFileDiff(entry.approvalId as string, absPath)}
         title={`Review ${entry.path}`}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left font-mono text-[11px] text-muted-foreground",
