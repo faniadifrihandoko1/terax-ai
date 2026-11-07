@@ -4,6 +4,7 @@ import {
   createAgentPanePlan,
 } from "@/modules/agents/lib/launcher";
 import type { HunkDecision } from "@/modules/ai/lib/reviewApply";
+import { updateAiDiffTabState } from "./aiDiffUpdate";
 import {
   findLeafCwd,
   hasLeaf,
@@ -1008,6 +1009,31 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   );
 
   /**
+   * Absorbs a newer composed proposal into an existing ai-diff tab
+   * (Fase 6): several tool calls to one file in a run compose into a
+   * single proposal, so the tab shows the accumulated diff instead of
+   * spawning a second tab. Returns false when the tab does not exist or
+   * must not absorb the update (see updateAiDiffTabState) — the caller
+   * then opens a separate tab for the new proposal.
+   */
+  const updateAiDiffTab = useCallback(
+    (approvalId: string, proposedContent: string): boolean => {
+      let updated = false;
+      setTabs((curr) =>
+        curr.map((t) => {
+          if (t.kind !== "ai-diff" || t.approvalId !== approvalId) return t;
+          const next = updateAiDiffTabState(t, proposedContent);
+          if (!next) return t;
+          updated = true;
+          return next;
+        }),
+      );
+      return updated;
+    },
+    [],
+  );
+
+  /**
    * Records one per-hunk decision (Fase 4) on the ai-diff tab. The tab
    * owns the decisions because the pane unmounts when the user switches
    * tabs; the pane reads them back from the tab props on every render.
@@ -1555,6 +1581,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     setMarkdownView,
     openAiDiffTab,
     activateAiDiffTab,
+    updateAiDiffTab,
     openGitDiffTab,
     openCommitHistoryTab,
     openCommitFileDiffTab,
