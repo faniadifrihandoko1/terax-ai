@@ -16,9 +16,9 @@ import {
   getPendingProposal,
 } from "../lib/pendingProposals";
 import { saveCheckpoint } from "../lib/reviewCheckpoint";
-import {
-  type HunkDecision,
-  type LineDecision,
+import type {
+  HunkDecision,
+  LineDecision,
 } from "../lib/reviewApply";
 import {
   computeLineChanges,

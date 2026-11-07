@@ -2,11 +2,6 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   Cancel01Icon,
-  Delete02Icon,
-  Edit02Icon,
-  FileEditIcon,
-  FilePlusIcon,
-  FolderAddIcon,
   TerminalIcon,
   Tick02Icon,
   ToolsIcon,
@@ -21,14 +16,14 @@ type Props = {
   onRespond: (approved: boolean) => void;
 };
 
-const TOOL_META: Record<string, { label: string; icon: typeof FilePlusIcon }> =
+/**
+ * Approval card. Since Fase 6 only terminal commands (and managed-agent
+ * spawns) are approval-gated — file proposals never show a card, they go
+ * straight to the review tab. Anything not listed here falls back to the
+ * generic label + JSON preview.
+ */
+const TOOL_META: Record<string, { label: string; icon: typeof ToolsIcon }> =
   {
-    write_file: { label: "Write file", icon: FilePlusIcon },
-    edit: { label: "Edit file", icon: FileEditIcon },
-    multi_edit: { label: "Edit file (batch)", icon: Edit02Icon },
-    delete_file: { label: "Delete file", icon: Delete02Icon },
-    rename_file: { label: "Rename file", icon: FileEditIcon },
-    create_directory: { label: "Create directory", icon: FolderAddIcon },
     bash_run: { label: "Run shell command", icon: TerminalIcon },
     bash_background: { label: "Spawn background process", icon: TerminalIcon },
   };
@@ -103,6 +98,9 @@ function PreviewBlock({
   toolName: string;
   input: Record<string, unknown>;
 }) {
+  // The approval card shows the command so the user can judge it; the
+  // file tools never reach this card (Fase 6), so there is no file
+  // preview branch anymore.
   if (toolName === "bash_run" || toolName === "bash_background") {
     const cwd = typeof input.cwd === "string" ? input.cwd : null;
     return (
@@ -119,83 +117,6 @@ function PreviewBlock({
         >
           {String(input.command ?? "")}
         </pre>
-      </div>
-    );
-  }
-  // For file mutations we deliberately do NOT preview content here —
-  // streamed write/edit content thrashes the UI and the AI diff tab is the
-  // authoritative place to review the change. Show just the path + a
-  // one-line size hint so the user knows what's being touched.
-  if (toolName === "write_file") {
-    const content = typeof input.content === "string" ? input.content : "";
-    const lines = content ? content.split("\n").length : 0;
-    return (
-      <div className="space-y-0.5 font-mono text-[11px]">
-        <div className="text-muted-foreground">{String(input.path ?? "")}</div>
-        <div className="text-[10.5px] text-muted-foreground/80">
-          {lines} line{lines === 1 ? "" : "s"} · review in the diff tab
-        </div>
-      </div>
-    );
-  }
-  if (toolName === "edit") {
-    const oldStr = typeof input.old_string === "string" ? input.old_string : "";
-    const newStr = typeof input.new_string === "string" ? input.new_string : "";
-    const removed = oldStr ? oldStr.split("\n").length : 0;
-    const added = newStr ? newStr.split("\n").length : 0;
-    return (
-      <div className="space-y-0.5 font-mono text-[11px]">
-        <div className="text-muted-foreground">
-          {String(input.path ?? "")}
-          {input.replace_all ? " · replace all" : ""}
-        </div>
-        <div className="text-[10.5px] text-muted-foreground/80">
-          −{removed} / +{added} line{added === 1 && removed === 1 ? "" : "s"} ·
-          review in the diff tab
-        </div>
-      </div>
-    );
-  }
-  if (toolName === "multi_edit") {
-    const edits = Array.isArray(input.edits)
-      ? (input.edits as Array<{ old_string?: string; new_string?: string }>)
-      : [];
-    return (
-      <div className="space-y-0.5 font-mono text-[11px]">
-        <div className="text-muted-foreground">{String(input.path ?? "")}</div>
-        <div className="text-[10.5px] text-muted-foreground/80">
-          {edits.length} edit{edits.length === 1 ? "" : "s"} · review in the
-          diff tab
-        </div>
-      </div>
-    );
-  }
-  if (toolName === "create_directory") {
-    return (
-      <div className="font-mono text-[11px] text-muted-foreground">
-        {String(input.path ?? "")}
-      </div>
-    );
-  }
-  if (toolName === "delete_file") {
-    return (
-      <div className="space-y-0.5 font-mono text-[11px]">
-        <div className="text-muted-foreground">{String(input.path ?? "")}</div>
-        <div className="text-[10.5px] text-muted-foreground/80">
-          file will be deleted · review in the diff tab
-        </div>
-      </div>
-    );
-  }
-  if (toolName === "rename_file") {
-    return (
-      <div className="space-y-0.5 font-mono text-[11px]">
-        <div className="text-muted-foreground">
-          {String(input.path ?? "")} → {String(input.to ?? "")}
-        </div>
-        <div className="text-[10.5px] text-muted-foreground/80">
-          review in the diff tab
-        </div>
       </div>
     );
   }
