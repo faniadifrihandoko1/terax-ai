@@ -3,7 +3,7 @@ import {
   type AgentInstanceCount,
   createAgentPanePlan,
 } from "@/modules/agents/lib/launcher";
-import type { LineDecision } from "@/modules/ai/lib/reviewApply";
+import type { HunkDecision } from "@/modules/ai/lib/reviewApply";
 import {
   findLeafCwd,
   hasLeaf,
@@ -111,11 +111,12 @@ export type AiDiffTab = TabBase & {
   status: AiDiffStatus;
   isNewFile: boolean;
   /**
-   * Per-line review decisions (FR-03), keyed by LineChange index.
-   * Lives on the tab, not in pane-local state, because AiDiffStack only
-   * renders the active ai-diff tab and switching tabs unmounts the pane.
+   * Per-hunk review decisions (Fase 4, Antigravity-style), keyed by hunk
+   * index. Lives on the tab, not in pane-local state, because AiDiffStack
+   * only renders the active ai-diff tab and switching tabs unmounts the
+   * pane. Only decided hunks are stored; an absent index means undecided.
    */
-  lineDecisions: Record<number, LineDecision>;
+  hunkDecisions: Record<number, HunkDecision>;
 };
 
 export type GitDiffTab = TabBase & {
@@ -906,7 +907,9 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       isNewFile: boolean;
       /** FR-10: restored review progress; defaults to a fresh pending tab. */
       status?: AiDiffStatus;
-      lineDecisions?: Record<number, LineDecision>;
+      hunkDecisions?: Record<number, HunkDecision>;
+      /** False when inline review is on: the tab opens in the background. */
+      activate?: boolean;
     }) => {
       let targetId: number | null = null;
       setTabs((curr) => {
@@ -933,11 +936,11 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             approvalId: input.approvalId,
             status: input.status ?? "pending",
             isNewFile: input.isNewFile,
-            lineDecisions: input.lineDecisions ?? {},
+            hunkDecisions: input.hunkDecisions ?? {},
           },
         ];
       });
-      if (targetId !== null) setActiveId(targetId);
+      if (targetId !== null && input.activate !== false) setActiveId(targetId);
       return targetId as number | null;
     },
     [],
@@ -977,18 +980,18 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   );
 
   /**
-   * Records one per-line decision (FR-03) on the ai-diff tab. The tab
+   * Records one per-hunk decision (Fase 4) on the ai-diff tab. The tab
    * owns the decisions because the pane unmounts when the user switches
    * tabs; the pane reads them back from the tab props on every render.
    */
-  const setAiDiffLineDecision = useCallback(
-    (approvalId: string, index: number, decision: LineDecision) => {
+  const setAiDiffHunkDecision = useCallback(
+    (approvalId: string, index: number, decision: HunkDecision) => {
       setTabs((curr) =>
         curr.map((t) =>
           t.kind === "ai-diff" && t.approvalId === approvalId
             ? {
                 ...t,
-                lineDecisions: { ...t.lineDecisions, [index]: decision },
+                hunkDecisions: { ...t.hunkDecisions, [index]: decision },
               }
             : t,
         ),
@@ -1503,7 +1506,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     openCommitHistoryTab,
     openCommitFileDiffTab,
     setAiDiffStatus,
-    setAiDiffLineDecision,
+    setAiDiffHunkDecision,
     closeAiDiffTab,
     closeTab,
     closeTabs,

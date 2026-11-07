@@ -15,10 +15,18 @@ import {
   clearAllReviewedApplies,
   clearReviewedApply,
   isReviewedApply,
+  type HunkDecision,
   type LineDecision,
 } from "../lib/reviewApply";
+import {
+  computeLineChanges,
+  migrateLineDecisionsToHunks,
+} from "@/modules/editor/lib/lineDiff";
 import { loadReviewState } from "../lib/sessions";
-import { restoreStatus, type PersistedReviewState } from "../lib/reviewPersistence";
+import {
+  restoreStatus,
+  type PersistedReviewState,
+} from "../lib/reviewPersistence";
 import {
   flushPersist,
   useChatStore,
@@ -47,7 +55,7 @@ export type DiffOpenInput = {
   isNewFile: boolean;
   /** FR-10: restored review progress; defaults to a fresh pending tab. */
   status?: AiDiffStatus;
-  lineDecisions?: Record<number, LineDecision>;
+  hunkDecisions?: Record<number, HunkDecision>;
 };
 
 export type AgentRunBridgeProps = {
@@ -65,11 +73,7 @@ type BridgeProps = { sessionId: string } & AgentRunBridgeProps;
 
 type AnyPart = UIMessagePart<Record<string, never>, Record<string, never>>;
 
-function Bridge({
-  sessionId,
-  openAiDiffTab,
-  setAiDiffStatus,
-}: BridgeProps) {
+function Bridge({ sessionId, openAiDiffTab, setAiDiffStatus }: BridgeProps) {
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
   const { status, messages, addToolApprovalResponse } = useChat<UIMessage>({
     chat,
@@ -129,9 +133,7 @@ function Bridge({
     patch({
       status: runStatus,
       approvalsPending,
-      ...(runStatus === "idle" || runStatus === "error"
-        ? { step: null }
-        : {}),
+      ...(runStatus === "idle" || runStatus === "error" ? { step: null } : {}),
       ...(runStatus === "idle" ? { error: null } : {}),
     });
   }, [status, approvalsPending, patch]);
@@ -178,8 +180,7 @@ function Bridge({
           t === "tool-multi_edit"
         ) {
           const state = (p as { state?: string }).state ?? "";
-          const id =
-            (p as { approval?: { id?: string } }).approval?.id ?? "";
+          const id = (p as { approval?: { id?: string } }).approval?.id ?? "";
           fp += `${id}:${state}|`;
         }
       }
@@ -279,12 +280,26 @@ function Bridge({
         const saved = restored?.proposals.find(
           (pr) => pr.approvalId === p.approvalId,
         );
-        const lineDecisions: Record<number, LineDecision> = {};
+        // v2 states carry hunk decisions; v1 states carry line decisions,
+        // migrated to hunks against the re-derived change set.
+        const hunkDecisions: Record<number, HunkDecision> = {};
         if (saved) {
-          for (const [index, decision] of Object.entries(
-            saved.lineDecisions,
-          )) {
-            lineDecisions[Number(index)] = decision;
+          for (const [index, decision] of Object.entries(saved.hunkDecisions)) {
+            hunkDecisions[Number(index)] = decision;
+          }
+          if (saved.lineDecisions) {
+            const lineDecisions: Record<number, LineDecision> = {};
+            for (const [index, decision] of Object.entries(
+              saved.lineDecisions,
+            )) {
+              lineDecisions[Number(index)] = decision;
+            }
+            const changeSet = computeLineChanges(original.content, proposed);
+            for (const [hunkIndex, decision] of Object.entries(
+              migrateLineDecisionsToHunks(lineDecisions, changeSet),
+            )) {
+              hunkDecisions[Number(hunkIndex)] = decision;
+            }
           }
           restoredCount += 1;
         }
@@ -295,7 +310,7 @@ function Bridge({
           approvalId: p.approvalId,
           isNewFile: original.isNewFile,
           status: saved ? restoreStatus(saved.status) : undefined,
-          lineDecisions: saved ? lineDecisions : undefined,
+          hunkDecisions: saved ? hunkDecisions : undefined,
         });
       }
       if (restoredCount > 0 && !reviewToastShownRef.current.has(sessionId)) {
@@ -313,7 +328,13 @@ function Bridge({
     return () => {
       cancelled = true;
     };
-  }, [messages, fileMutationFingerprint, openAiDiffTab, setAiDiffStatus, sessionId]);
+  }, [
+    messages,
+    fileMutationFingerprint,
+    openAiDiffTab,
+    setAiDiffStatus,
+    sessionId,
+  ]);
 
   return null;
 }

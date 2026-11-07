@@ -1,4 +1,4 @@
-import type { LineDecision } from "@/modules/ai/lib/reviewApply";
+import type { HunkDecision } from "@/modules/ai/lib/reviewApply";
 import type { AiDiffStatus, AiDiffTab, Tab } from "@/modules/tabs";
 import { AiDiffPane } from "./AiDiffPane";
 
@@ -6,21 +6,18 @@ type Props = {
   tabs: Tab[];
   activeId: number;
   onSetStatus: (approvalId: string, status: AiDiffStatus) => void;
-  onSetLineDecision: (
+  onSetHunkDecision: (
     approvalId: string,
-    index: number,
-    decision: LineDecision,
+    hunkIndex: number,
+    decision: HunkDecision,
   ) => void;
-  /** FR-11: false renders the per-file Accept/Reject fallback instead. */
-  perLineEnabled: boolean;
 };
 
 export function AiDiffStack({
   tabs,
   activeId,
   onSetStatus,
-  onSetLineDecision,
-  perLineEnabled,
+  onSetHunkDecision,
 }: Props) {
   const active = tabs.find(
     (t): t is AiDiffTab => t.kind === "ai-diff" && t.id === activeId,
@@ -36,12 +33,11 @@ export function AiDiffStack({
         status={active.status}
         isNewFile={active.isNewFile}
         approvalId={active.approvalId}
-        lineDecisions={active.lineDecisions}
-        onSetLineDecision={(index, decision) =>
-          onSetLineDecision(active.approvalId, index, decision)
+        hunkDecisions={active.hunkDecisions}
+        onSetHunkDecision={(hunkIndex, decision) =>
+          onSetHunkDecision(active.approvalId, hunkIndex, decision)
         }
         onSetStatus={(status) => onSetStatus(active.approvalId, status)}
-        perLineEnabled={perLineEnabled}
       />
     </div>
   );

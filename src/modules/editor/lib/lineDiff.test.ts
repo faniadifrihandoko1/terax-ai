@@ -8,7 +8,6 @@ import {
   reconstructFile,
   reconstructFileFromHunks,
   splitLines,
-  splitPairs,
 } from "./lineDiff";
 import type { LineDecisions } from "../../ai/lib/reviewApply";
 
@@ -67,22 +66,16 @@ describe("computeLineChanges", () => {
         proposedLine: 2,
       }),
     ]);
-    expect(
-      reconstructFile("a\nb\n", cs, acceptAll(cs)).content,
-    ).toBe("a\nb\nc\n");
-    expect(
-      reconstructFile("a\nb\n", cs, rejectAll(cs)).content,
-    ).toBe("a\nb\n");
+    expect(reconstructFile("a\nb\n", cs, acceptAll(cs)).content).toBe(
+      "a\nb\nc\n",
+    );
+    expect(reconstructFile("a\nb\n", cs, rejectAll(cs)).content).toBe("a\nb\n");
   });
 
   it("handles appending to a file without a trailing newline", () => {
     const cs = computeLineChanges("a", "a\nb");
-    expect(
-      reconstructFile("a", cs, acceptAll(cs)).content,
-    ).toBe("a\nb");
-    expect(
-      reconstructFile("a", cs, rejectAll(cs)).content,
-    ).toBe("a");
+    expect(reconstructFile("a", cs, acceptAll(cs)).content).toBe("a\nb");
+    expect(reconstructFile("a", cs, rejectAll(cs)).content).toBe("a");
   });
 
   it("finds a single removed line", () => {
@@ -95,12 +88,12 @@ describe("computeLineChanges", () => {
         proposedLine: null,
       }),
     ]);
-    expect(
-      reconstructFile("a\nb\nc\n", cs, acceptAll(cs)).content,
-    ).toBe("a\nc\n");
-    expect(
-      reconstructFile("a\nb\nc\n", cs, rejectAll(cs)).content,
-    ).toBe("a\nb\nc\n");
+    expect(reconstructFile("a\nb\nc\n", cs, acceptAll(cs)).content).toBe(
+      "a\nc\n",
+    );
+    expect(reconstructFile("a\nb\nc\n", cs, rejectAll(cs)).content).toBe(
+      "a\nb\nc\n",
+    );
   });
 
   it("pairs a replaced line and keeps both on a split decision", () => {
@@ -114,12 +107,8 @@ describe("computeLineChanges", () => {
     expect(added.kind).toBe("added");
     expect(removed.pairId).toBe(added.pairId);
     expect(removed.pairId).not.toBeNull();
-    expect(
-      reconstructFile(original, cs, acceptAll(cs)).content,
-    ).toBe(proposed);
-    expect(
-      reconstructFile(original, cs, rejectAll(cs)).content,
-    ).toBe(original);
+    expect(reconstructFile(original, cs, acceptAll(cs)).content).toBe(proposed);
+    expect(reconstructFile(original, cs, rejectAll(cs)).content).toBe(original);
     // Accept the addition, reject the deletion: both lines survive.
     const split = decide([
       [removed.index, "rejected"],
@@ -128,14 +117,12 @@ describe("computeLineChanges", () => {
     expect(reconstructFile(original, cs, split).content).toBe(
       "a\nfoo bar\nfoo baz\nc\n",
     );
-    expect(splitPairs(cs.changes, split)).toEqual([removed.pairId]);
     // Accept the deletion, reject the addition: the line is gone.
     const gone = decide([
       [removed.index, "accepted"],
       [added.index, "rejected"],
     ]);
     expect(reconstructFile(original, cs, gone).content).toBe("a\nc\n");
-    expect(splitPairs(cs.changes, gone)).toEqual([removed.pairId]);
   });
 
   it("splits a 1-to-2 replacement into a pair plus an unpaired add", () => {
@@ -151,9 +138,7 @@ describe("computeLineChanges", () => {
       [add1.index, "accepted"],
       [add2.index, "rejected"],
     ]);
-    expect(reconstructFile(original, cs, partial).content).toBe(
-      "a\nB1\nc\n",
-    );
+    expect(reconstructFile(original, cs, partial).content).toBe("a\nB1\nc\n");
   });
 
   it("keeps the right duplicate line when deleting", () => {
@@ -188,55 +173,41 @@ describe("computeLineChanges", () => {
     const original = "a\nb\n";
     const proposed = "ab\n";
     const cs = computeLineChanges(original, proposed);
-    expect(
-      reconstructFile(original, cs, acceptAll(cs)).content,
-    ).toBe(proposed);
-    expect(
-      reconstructFile(original, cs, rejectAll(cs)).content,
-    ).toBe(original);
+    expect(reconstructFile(original, cs, acceptAll(cs)).content).toBe(proposed);
+    expect(reconstructFile(original, cs, rejectAll(cs)).content).toBe(original);
   });
 
   it("handles splitting one line into two", () => {
     const original = "ab\n";
     const proposed = "a\nb\n";
     const cs = computeLineChanges(original, proposed);
-    expect(
-      reconstructFile(original, cs, acceptAll(cs)).content,
-    ).toBe(proposed);
-    expect(
-      reconstructFile(original, cs, rejectAll(cs)).content,
-    ).toBe(original);
+    expect(reconstructFile(original, cs, acceptAll(cs)).content).toBe(proposed);
+    expect(reconstructFile(original, cs, rejectAll(cs)).content).toBe(original);
   });
 
   it("handles a whole new file and a whole deleted file", () => {
     const created = computeLineChanges("", "x\ny\n");
     expect(created.changes).toHaveLength(2);
-    expect(
-      reconstructFile("", created, acceptAll(created)).content,
-    ).toBe("x\ny\n");
-    expect(
-      reconstructFile("", created, rejectAll(created)).content,
-    ).toBe("");
+    expect(reconstructFile("", created, acceptAll(created)).content).toBe(
+      "x\ny\n",
+    );
+    expect(reconstructFile("", created, rejectAll(created)).content).toBe("");
     const deleted = computeLineChanges("x\ny\n", "");
     expect(deleted.changes).toHaveLength(2);
-    expect(
-      reconstructFile("x\ny\n", deleted, acceptAll(deleted)).content,
-    ).toBe("");
-    expect(
-      reconstructFile("x\ny\n", deleted, rejectAll(deleted)).content,
-    ).toBe("x\ny\n");
+    expect(reconstructFile("x\ny\n", deleted, acceptAll(deleted)).content).toBe(
+      "",
+    );
+    expect(reconstructFile("x\ny\n", deleted, rejectAll(deleted)).content).toBe(
+      "x\ny\n",
+    );
   });
 
   it("keeps CRLF endings through reconstruction", () => {
     const original = "a\r\nb\r\n";
     const proposed = "a\r\nB\r\n";
     const cs = computeLineChanges(original, proposed);
-    expect(
-      reconstructFile(original, cs, acceptAll(cs)).content,
-    ).toBe(proposed);
-    expect(
-      reconstructFile(original, cs, rejectAll(cs)).content,
-    ).toBe(original);
+    expect(reconstructFile(original, cs, acceptAll(cs)).content).toBe(proposed);
+    expect(reconstructFile(original, cs, rejectAll(cs)).content).toBe(original);
   });
 
   it("handles a mid-line word change as one pair", () => {
@@ -245,9 +216,7 @@ describe("computeLineChanges", () => {
     const cs = computeLineChanges(original, proposed);
     expect(cs.hunks).toHaveLength(1);
     expect(cs.changes).toHaveLength(2);
-    expect(
-      reconstructFile(original, cs, acceptAll(cs)).content,
-    ).toBe(proposed);
+    expect(reconstructFile(original, cs, acceptAll(cs)).content).toBe(proposed);
   });
 
   it("reports decided lines for the preview highlight", () => {
@@ -293,7 +262,11 @@ describe("reconstruction invariants on random edits", () => {
         const kind = Math.floor(rand() * 3);
         const at = Math.floor(rand() * (propLines.length + 1));
         if (kind === 0) {
-          propLines.splice(at, 0, alphabet[Math.floor(rand() * alphabet.length)]);
+          propLines.splice(
+            at,
+            0,
+            alphabet[Math.floor(rand() * alphabet.length)],
+          );
         } else if (kind === 1 && propLines.length > 0) {
           propLines.splice(Math.min(at, propLines.length - 1), 1);
         } else if (propLines.length > 0) {

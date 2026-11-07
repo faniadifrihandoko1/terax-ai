@@ -18,7 +18,7 @@ import type { ThemePref } from "@/modules/settings/store";
 import {
   setAgentNotificationSound,
   setAgentNotifications,
-  setAiReviewPerLine,
+  setAiReviewInline,
   setAutostart,
   setConfirmCloseRunningTerminal,
   setDefaultWorkspaceEnv,
@@ -118,7 +118,7 @@ export function GeneralSection() {
     (s) => s.confirmCloseRunningTerminal,
   );
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
-  const aiReviewPerLine = usePreferencesStore((s) => s.aiReviewPerLine);
+  const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
   const agentNotificationSound = usePreferencesStore(
     (s) => s.agentNotificationSound,
@@ -250,12 +250,12 @@ export function GeneralSection() {
       <div className="flex flex-col gap-2">
         <Label>AI review</Label>
         <SettingRow
-          title="Review AI edits line by line"
-          description="When on, each changed line in the AI diff tab gets its own Accept/Reject buttons. When off, the diff tab falls back to Accept/Reject for the whole file."
+          title="Review AI edits inline in the editor"
+          description="When on, pending AI changes appear inline in the editor with Accept/Reject above each hunk, like Antigravity. When off, review stays in the side-by-side AI diff tab."
         >
           <Switch
-            checked={aiReviewPerLine}
-            onCheckedChange={(v) => void setAiReviewPerLine(v)}
+            checked={aiReviewInline}
+            onCheckedChange={(v) => void setAiReviewInline(v)}
           />
         </SettingRow>
       </div>

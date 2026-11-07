@@ -88,7 +88,12 @@ export function splitLines(doc: string): DocLine[] {
     start = i + 1;
   }
   if (start < doc.length) {
-    lines.push({ text: doc.slice(start), terminator: "", start, end: doc.length });
+    lines.push({
+      text: doc.slice(start),
+      terminator: "",
+      start,
+      end: doc.length,
+    });
   }
   return lines;
 }
@@ -267,9 +272,7 @@ export function computeLineChanges(
       removedIdx = baseSlice
         .map((_, i) => i)
         .filter((i) => !matchedBase.has(i));
-      addedIdx = propSlice
-        .map((_, j) => j)
-        .filter((j) => !matchedProp.has(j));
+      addedIdx = propSlice.map((_, j) => j).filter((j) => !matchedProp.has(j));
     }
     if (removedIdx.length === 0 && addedIdx.length === 0) continue;
 
@@ -379,7 +382,10 @@ export function reconstructFile(
   decisions: LineDecisions,
 ): { content: string; decidedLines: number[] } {
   const origLines = splitLines(original);
-  const byHunk = new Map<number, { removed: LineChange[]; added: LineChange[] }>();
+  const byHunk = new Map<
+    number,
+    { removed: LineChange[]; added: LineChange[] }
+  >();
   for (const c of changeSet.changes) {
     let entry = byHunk.get(c.hunkIndex);
     if (!entry) {
@@ -481,7 +487,10 @@ export function migrateLineDecisionsToHunks(
   lineDecisions: Record<number, LineDecision>,
   changeSet: LineChangeSet,
 ): Record<number, HunkDecision> {
-  const perHunk = new Map<number, { total: number; accepted: number; rejected: number }>();
+  const perHunk = new Map<
+    number,
+    { total: number; accepted: number; rejected: number }
+  >();
   for (const c of changeSet.changes) {
     let entry = perHunk.get(c.hunkIndex);
     if (!entry) {
@@ -499,31 +508,6 @@ export function migrateLineDecisionsToHunks(
     else if (entry.rejected === entry.total) out[hunkIndex] = "rejected";
   }
   return out;
-}
-
-/** Pair ids whose two lines were decided differently (a split pair). */
-export function splitPairs(
-  changes: LineChange[],
-  decisions: LineDecisions,
-): string[] {
-  const byPair = new Map<string, LineDecision[]>();
-  for (const c of changes) {
-    if (!c.pairId) continue;
-    const list = byPair.get(c.pairId) ?? [];
-    const d = decisions.get(c.index);
-    if (d === "accepted" || d === "rejected") list.push(d);
-    byPair.set(c.pairId, list);
-  }
-  const split: string[] = [];
-  for (const [pairId, list] of byPair) {
-    if (
-      list.length === 2 &&
-      list[0] !== list[1]
-    ) {
-      split.push(pairId);
-    }
-  }
-  return split;
 }
 
 /** Decision counts for the header (FR-04). */

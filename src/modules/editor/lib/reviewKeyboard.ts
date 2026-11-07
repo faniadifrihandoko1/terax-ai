@@ -41,9 +41,7 @@ function isMod(event: ReviewKeyEvent): boolean {
  * match Antigravity's Accept/Reject Focused Change; Ctrl/Cmd+Z / Ctrl/Cmd+Y
  * match its undo/redo of review decisions.
  */
-export function reviewKeyAction(
-  event: ReviewKeyEvent,
-): ReviewKeyAction | null {
+export function reviewKeyAction(event: ReviewKeyEvent): ReviewKeyAction | null {
   if (isMod(event)) {
     if (event.key === "z" || event.key === "Z") {
       return event.shiftKey ? "redo" : "undo";

@@ -52,7 +52,7 @@ export type InlineHunkPlan = {
   removedLines: number[];
   /** Added line texts, without terminators. */
   addedLines: string[];
-  /** Display label, e.g. "lines 3–5" or "insert after line 2". */
+  /** Display label, e.g. "lines 3-5" or "insert after line 2". */
   label: string;
 };
 
@@ -60,15 +60,20 @@ export type InlineHunkPlan = {
  * Turns a change set + hunk decisions into one plan per hunk. Pure, so
  * the rendering below is a thin translation of the plan.
  */
+/** Human label for a hunk, e.g. "lines 2-4" or "insert after line 2". */
+export function labelForHunk(hunk: LineHunk): string {
+  return hunk.baseFrom === hunk.baseTo
+    ? `insert after line ${hunk.baseFrom}`
+    : `lines ${hunk.baseFrom + 1}-${hunk.baseTo}`;
+}
+
 export function planInlineReview(
   changeSet: LineChangeSet,
   decisions: HunkDecisions,
   focusedHunk: number | null,
 ): InlineHunkPlan[] {
   return changeSet.hunks.map((hunk) => {
-    const changes = changeSet.changes.filter(
-      (c) => c.hunkIndex === hunk.index,
-    );
+    const changes = changeSet.changes.filter((c) => c.hunkIndex === hunk.index);
     return {
       hunkIndex: hunk.index,
       state: decisions.get(hunk.index) ?? "undecided",
@@ -77,13 +82,8 @@ export function planInlineReview(
       removedLines: changes
         .filter((c) => c.kind === "removed")
         .map((c) => c.baseLine ?? 0),
-      addedLines: changes
-        .filter((c) => c.kind === "added")
-        .map((c) => c.text),
-      label:
-        hunk.baseFrom === hunk.baseTo
-          ? `insert after line ${hunk.baseFrom}`
-          : `lines ${hunk.baseFrom + 1}–${hunk.baseTo}`,
+      addedLines: changes.filter((c) => c.kind === "added").map((c) => c.text),
+      label: labelForHunk(hunk),
     };
   });
 }
@@ -311,7 +311,11 @@ export function buildInlineDecorations(
   doc: Text,
   data: InlineReviewData,
 ): DecorationSet {
-  const plans = planInlineReview(data.changeSet, data.decisions, data.focusedHunk);
+  const plans = planInlineReview(
+    data.changeSet,
+    data.decisions,
+    data.focusedHunk,
+  );
   const entries: DecoEntry[] = [];
   for (const plan of plans) {
     const hunk = data.changeSet.hunks[plan.hunkIndex];

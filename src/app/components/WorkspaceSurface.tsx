@@ -28,8 +28,7 @@ type Props = {
   registerPreviewHandle: PreviewStackProps["registerHandle"];
   onPreviewUrlChange: PreviewStackProps["onUrlChange"];
   onSetAiDiffStatus: AiDiffStackProps["onSetStatus"];
-  onSetAiDiffLineDecision: AiDiffStackProps["onSetLineDecision"];
-  aiReviewPerLine: AiDiffStackProps["perLineEnabled"];
+  onSetAiDiffHunkDecision: AiDiffStackProps["onSetHunkDecision"];
   onOpenCommitFile: GitHistoryStackProps["onOpenCommitFile"];
   onGitHistorySearchHandle: GitHistoryStackProps["onSearchHandle"];
   onSetMarkdownView: EditorStackProps["onSetMarkdownView"];
@@ -60,8 +59,7 @@ export function WorkspaceSurface({
   registerPreviewHandle,
   onPreviewUrlChange,
   onSetAiDiffStatus,
-  onSetAiDiffLineDecision,
-  aiReviewPerLine,
+  onSetAiDiffHunkDecision,
   onOpenCommitFile,
   onGitHistorySearchHandle,
   onSetMarkdownView,
@@ -137,8 +135,7 @@ export function WorkspaceSurface({
           tabs={tabs}
           activeId={activeId}
           onSetStatus={onSetAiDiffStatus}
-          onSetLineDecision={onSetAiDiffLineDecision}
-          perLineEnabled={aiReviewPerLine}
+          onSetHunkDecision={onSetAiDiffHunkDecision}
         />
       </div>
       <div

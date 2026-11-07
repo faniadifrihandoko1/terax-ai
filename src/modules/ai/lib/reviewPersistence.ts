@@ -1,35 +1,37 @@
+import type { AiDiffStatus } from "@/modules/tabs";
+import type { HunkDecision, LineDecision } from "./reviewApply";
+
 /**
- * Persistence of the per-line review state (FR-10).
+ * Persistence of the review state (FR-10, Fase 4): what survives a restart
+ * is the review progress, which proposals are still open, their status, and
+ * the per-hunk decisions, so a pending proposal survives an app restart.
  *
- * The reviewed contents are NOT stored here: on restart the bridge
- * re-derives `originalContent`/`proposedContent` from the chat messages,
- * exactly like it does on the first open. What is stored is the review
- * progress — which proposals are still open, their status, and the
- * per-line decisions — so a pending proposal survives an app restart.
- *
- * Format (versioned, so a future shape can migrate instead of breaking):
- *   { version: 1, sessionId, proposals: [{ approvalId, path, isNewFile,
- *     status, lineDecisions, savedAt }] }
- * `lineDecisions` only carries decided lines (accepted/rejected);
- * undecided lines are omitted. Terminal statuses (applied/rejected) are
- * never stored: there is nothing left to restore for them.
+ * File contents are never stored here; the bridge re-derives them from the
+ * chat messages on reopen. Only decided hunks are stored, so the default
+ * state is an empty map.
  */
 
-import type { AiDiffStatus } from "@/modules/tabs";
-import type { LineDecision } from "./reviewApply";
-
-export const REVIEW_STATE_VERSION = 1;
+export const REVIEW_STATE_VERSION = 2;
 
 /** Statuses worth restoring on restart. */
-export type RestorableReviewStatus = "pending" | "reviewing" | "done" | "conflict";
+export type RestorableReviewStatus =
+  | "pending"
+  | "reviewing"
+  | "done"
+  | "conflict";
 
 export type PersistedReviewProposal = {
   approvalId: string;
   path: string;
   isNewFile: boolean;
   status: RestorableReviewStatus;
-  /** Decided lines only: line index -> accepted | rejected. */
-  lineDecisions: Record<string, LineDecision>;
+  /** Decided hunks only: hunk index -> accepted | rejected. */
+  hunkDecisions: Record<string, HunkDecision>;
+  /**
+   * v1 legacy: per-line decisions, kept so the bridge can migrate them to
+   * hunks on restore. Absent in v2 states.
+   */
+  lineDecisions?: Record<string, LineDecision>;
   savedAt: number;
 };
 
@@ -45,60 +47,85 @@ export type ReviewTabSnapshot = {
   path: string;
   isNewFile: boolean;
   status: AiDiffStatus;
-  lineDecisions: Record<number, LineDecision>;
+  hunkDecisions: Record<number, HunkDecision>;
 };
 
-export function isRestorableStatus(
-  status: AiDiffStatus,
-): status is RestorableReviewStatus {
-  return (
-    status === "pending" ||
-    status === "reviewing" ||
-    status === "done" ||
-    status === "conflict"
-  );
+const RESTORABLE: ReadonlySet<string> = new Set([
+  "pending",
+  "reviewing",
+  "done",
+  "conflict",
+]);
+
+function isRestorable(value: unknown): value is RestorableReviewStatus {
+  return typeof value === "string" && RESTORABLE.has(value);
 }
 
-/**
- * Extracts the restorable proposals from the open ai-diff tabs.
- * `savedAt` is the snapshot time; callers pass Date.now() by default.
- */
+function isHunkDecision(value: unknown): value is HunkDecision {
+  return value === "accepted" || value === "rejected";
+}
+
+function isLineDecision(value: unknown): value is LineDecision {
+  return value === "accepted" || value === "rejected" || value === "undecided";
+}
+
+function parseDigitKeyed<T>(
+  value: unknown,
+  valid: (v: unknown) => v is T,
+): Record<string, T> | null {
+  if (typeof value !== "object" || value === null) return null;
+  const out: Record<string, T> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^\d+$/.test(key)) return null;
+    if (!valid(entry)) return null;
+    out[key] = entry;
+  }
+  return out;
+}
+
 export function snapshotReviewState(
   sessionId: string,
   tabs: readonly ReviewTabSnapshot[],
   now: number = Date.now(),
 ): PersistedReviewState {
-  const proposals: PersistedReviewProposal[] = [];
-  for (const tab of tabs) {
-    if (!isRestorableStatus(tab.status)) continue;
-    if (!tab.approvalId || !tab.path) continue;
-    const lineDecisions: Record<string, LineDecision> = {};
-    for (const [index, decision] of Object.entries(tab.lineDecisions)) {
-      if (decision === "accepted" || decision === "rejected") {
-        lineDecisions[index] = decision;
-      }
-    }
-    proposals.push({
-      approvalId: tab.approvalId,
-      path: tab.path,
-      isNewFile: tab.isNewFile,
-      status: tab.status,
-      lineDecisions,
-      savedAt: now,
-    });
-  }
-  return { version: REVIEW_STATE_VERSION, sessionId, proposals };
+  return {
+    version: REVIEW_STATE_VERSION,
+    sessionId,
+    proposals: tabs
+      .filter((tab) => isRestorable(tab.status))
+      .map((tab) => {
+        const hunkDecisions: Record<string, HunkDecision> = {};
+        for (const [key, decision] of Object.entries(tab.hunkDecisions)) {
+          if (decision === "accepted" || decision === "rejected") {
+            hunkDecisions[key] = decision;
+          }
+        }
+        return {
+          approvalId: tab.approvalId,
+          path: tab.path,
+          isNewFile: tab.isNewFile,
+          status: tab.status as RestorableReviewStatus,
+          hunkDecisions,
+          savedAt: now,
+        };
+      }),
+  };
 }
 
 export function serializeReviewState(state: PersistedReviewState): string {
   return JSON.stringify(state);
 }
 
-/** Strict parse: unknown version or malformed shape -> null. */
+/**
+ * Parses a stored review state. Accepts both v1 (per-line decisions) and
+ * v2 (per-hunk decisions); v1 entries keep their `lineDecisions` so the
+ * bridge can migrate them. Unknown versions are rejected, damaged entries
+ * are skipped instead of dropping the whole state.
+ */
 export function parseReviewState(value: unknown): PersistedReviewState | null {
   if (typeof value !== "object" || value === null) return null;
   const obj = value as Record<string, unknown>;
-  if (obj.version !== REVIEW_STATE_VERSION) return null;
+  if (obj.version !== 1 && obj.version !== REVIEW_STATE_VERSION) return null;
   if (typeof obj.sessionId !== "string" || !obj.sessionId) return null;
   if (!Array.isArray(obj.proposals)) return null;
   const proposals: PersistedReviewProposal[] = [];
@@ -108,42 +135,39 @@ export function parseReviewState(value: unknown): PersistedReviewState | null {
     if (typeof p.approvalId !== "string" || !p.approvalId) continue;
     if (typeof p.path !== "string" || !p.path) continue;
     if (typeof p.isNewFile !== "boolean") continue;
+    if (!isRestorable(p.status)) continue;
+    if (typeof p.savedAt !== "number" || Number.isNaN(p.savedAt)) continue;
+    const hunkDecisions = parseDigitKeyed(p.hunkDecisions, isHunkDecision);
+    if (obj.version === REVIEW_STATE_VERSION && hunkDecisions === null)
+      continue;
     if (
-      p.status !== "pending" &&
-      p.status !== "reviewing" &&
-      p.status !== "done" &&
-      p.status !== "conflict"
+      obj.version === 1 &&
+      hunkDecisions === null &&
+      p.hunkDecisions !== undefined
     ) {
       continue;
     }
-    if (typeof p.lineDecisions !== "object" || p.lineDecisions === null) {
-      continue;
-    }
-    const lineDecisions: Record<string, LineDecision> = {};
-    for (const [index, decision] of Object.entries(
-      p.lineDecisions as Record<string, unknown>,
-    )) {
-      if (!/^\d+$/.test(index)) continue;
-      if (decision === "accepted" || decision === "rejected") {
-        lineDecisions[index] = decision;
-      }
-    }
+    const lineDecisions =
+      obj.version === 1
+        ? parseDigitKeyed(p.lineDecisions, isLineDecision)
+        : undefined;
+    if (obj.version === 1 && lineDecisions === null) continue;
     proposals.push({
       approvalId: p.approvalId,
       path: p.path,
       isNewFile: p.isNewFile,
       status: p.status,
-      lineDecisions,
-      savedAt: typeof p.savedAt === "number" ? p.savedAt : 0,
+      hunkDecisions: hunkDecisions ?? {},
+      ...(lineDecisions ? { lineDecisions } : {}),
+      savedAt: p.savedAt,
     });
   }
   return { version: REVIEW_STATE_VERSION, sessionId: obj.sessionId, proposals };
 }
 
 /**
- * Status a restored proposal reopens with. A saved "conflict" reopens as
- * "done": the disk-hash guard re-checks at Apply time, and a stale conflict
- * badge must not block a file whose on-disk state has since been fixed.
+ * A saved "conflict" reopens as "done": the disk guard re-checks at Apply
+ * time, so the restored tab must still allow an apply attempt.
  */
 export function restoreStatus(saved: RestorableReviewStatus): AiDiffStatus {
   return saved === "conflict" ? "done" : saved;

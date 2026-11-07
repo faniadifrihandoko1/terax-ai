@@ -6,7 +6,7 @@
  * ai-diff pane and the inline editor share one history for the same
  * proposal. Callers record a group whenever they change one or more
  * hunk decisions; undo/redo return the group so the caller can apply
- * the previous (or next) decisions itself — the class never touches
+ * the previous (or next) decisions itself; the class never touches
  * the tab state.
  */
 
@@ -20,26 +20,24 @@ export type DecisionChange = {
 };
 
 /** One user action, possibly touching several hunks at once (Accept all). */
-export type DecisionGroup = {
-  changes: DecisionChange[];
-};
+export type ReviewDecisionGroup = DecisionChange[];
 
 const MAX_HISTORY = 100;
 
 export class ReviewHistory {
-  private undoStack: DecisionGroup[] = [];
-  private redoStack: DecisionGroup[] = [];
+  private undoStack: ReviewDecisionGroup[] = [];
+  private redoStack: ReviewDecisionGroup[] = [];
 
   /** Records one action. Any redoable future is discarded. */
-  record(group: DecisionGroup): void {
-    if (group.changes.length === 0) return;
+  record(group: ReviewDecisionGroup): void {
+    if (group.length === 0) return;
     this.undoStack.push(group);
     if (this.undoStack.length > MAX_HISTORY) this.undoStack.shift();
     this.redoStack = [];
   }
 
   /** Pops the last action for undoing; its `prev` values are the restore. */
-  undo(): DecisionGroup | null {
+  undo(): ReviewDecisionGroup | null {
     const group = this.undoStack.pop();
     if (!group) return null;
     this.redoStack.push(group);
@@ -47,7 +45,7 @@ export class ReviewHistory {
   }
 
   /** Re-applies the last undone action; its `next` values are the restore. */
-  redo(): DecisionGroup | null {
+  redo(): ReviewDecisionGroup | null {
     const group = this.redoStack.pop();
     if (!group) return null;
     this.undoStack.push(group);

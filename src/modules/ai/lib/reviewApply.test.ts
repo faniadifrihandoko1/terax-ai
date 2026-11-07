@@ -8,17 +8,20 @@ import {
   discardReviewedProposal,
   djb2Hash,
   isReviewedApply,
+  type HunkDecisions,
   type LineDecisions,
   type ReviewApplyIo,
 } from "./reviewApply";
 
-function makeIo(opts: {
-  disk?: Record<string, string>;
-  missing?: boolean;
-  binary?: boolean;
-  writable?: boolean;
-  writeFails?: boolean;
-} = {}): {
+function makeIo(
+  opts: {
+    disk?: Record<string, string>;
+    missing?: boolean;
+    binary?: boolean;
+    writable?: boolean;
+    writeFails?: boolean;
+  } = {},
+): {
   io: ReviewApplyIo;
   calls: string[];
   written: Map<string, string>;
@@ -56,7 +59,7 @@ function makeIo(opts: {
 
 describe("allHunksDecided (Fase 4)", () => {
   it("requires every hunk to be accepted or rejected", () => {
-    const d = new Map([
+    const d: HunkDecisions = new Map([
       [0, "accepted" as const],
       [1, "undecided" as const],
     ]);

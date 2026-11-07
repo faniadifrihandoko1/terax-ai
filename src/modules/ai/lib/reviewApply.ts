@@ -33,8 +33,8 @@ export type LineDecision = "accepted" | "rejected" | "undecided";
 export type LineDecisions = Map<number, LineDecision>;
 
 /**
- * Per-hunk review decision (Fase 4, Antigravity-style): the hunk — not
- * the line — is the unit of decision. One decision covers every changed
+ * Per-hunk review decision (Fase 4, Antigravity-style): the hunk, not
+ * the line, is the unit of decision. One decision covers every changed
  * line inside the hunk.
  */
 export type HunkDecision = "accepted" | "rejected" | "undecided";

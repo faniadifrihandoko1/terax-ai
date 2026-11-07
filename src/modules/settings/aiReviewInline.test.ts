@@ -18,7 +18,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: async () => () => undefined,
 }));
 
-describe("aiReviewPerLine default (FR-11)", () => {
+describe("aiReviewInline default (Fase 4)", () => {
   beforeEach(() => {
     entries.value = [];
     vi.resetModules();
@@ -26,17 +26,32 @@ describe("aiReviewPerLine default (FR-11)", () => {
 
   it("is on by default", async () => {
     const { DEFAULT_PREFERENCES } = await import("./store");
-    expect(DEFAULT_PREFERENCES.aiReviewPerLine).toBe(true);
+    expect(DEFAULT_PREFERENCES.aiReviewInline).toBe(true);
   });
 
   it("applies to users who never stored a choice", async () => {
     const { loadPreferences } = await import("./store");
-    expect((await loadPreferences()).aiReviewPerLine).toBe(true);
+    expect((await loadPreferences()).aiReviewInline).toBe(true);
   });
 
   it("never overrides an explicit stored choice", async () => {
+    entries.value = [["aiReviewInline", false]];
+    const { loadPreferences } = await import("./store");
+    expect((await loadPreferences()).aiReviewInline).toBe(false);
+  });
+
+  it("migrates the Fase 3 aiReviewPerLine choice", async () => {
     entries.value = [["aiReviewPerLine", false]];
     const { loadPreferences } = await import("./store");
-    expect((await loadPreferences()).aiReviewPerLine).toBe(false);
+    expect((await loadPreferences()).aiReviewInline).toBe(false);
+  });
+
+  it("prefers the new key when both are stored", async () => {
+    entries.value = [
+      ["aiReviewPerLine", false],
+      ["aiReviewInline", true],
+    ];
+    const { loadPreferences } = await import("./store");
+    expect((await loadPreferences()).aiReviewInline).toBe(true);
   });
 });

@@ -39,7 +39,7 @@ describe("planInlineReview (Fase 4)", () => {
         anchorLine: 1,
         removedLines: [1],
         addedLines: ["B"],
-        label: "lines 2–2",
+        label: "lines 2-2",
       },
       {
         hunkIndex: 1,
@@ -48,18 +48,14 @@ describe("planInlineReview (Fase 4)", () => {
         anchorLine: 3,
         removedLines: [3],
         addedLines: ["D"],
-        label: "lines 4–4",
+        label: "lines 4-4",
       },
     ]);
   });
 
   it("marks decided hunks and the focused one", () => {
     const cs = changeSet();
-    const plans = planInlineReview(
-      cs,
-      new Map([[1, "rejected" as const]]),
-      1,
-    );
+    const plans = planInlineReview(cs, new Map([[1, "rejected" as const]]), 1);
     expect(plans[0].state).toBe("undecided");
     expect(plans[0].focused).toBe(false);
     expect(plans[1].state).toBe("rejected");
@@ -97,7 +93,15 @@ describe("hunkAtLine / firstUndecidedHunk / nextHunkAtOrAfter", () => {
     const cs = changeSet();
     const d = new Map([[0, "accepted" as const]]);
     expect(firstUndecidedHunk(cs, d)).toBe(1);
-    expect(firstUndecidedHunk(cs, new Map([[0, "accepted" as const], [1, "rejected" as const]]))).toBeNull();
+    expect(
+      firstUndecidedHunk(
+        cs,
+        new Map([
+          [0, "accepted" as const],
+          [1, "rejected" as const],
+        ]),
+      ),
+    ).toBeNull();
     expect(nextHunkAtOrAfter(cs, 0)).toBe(0);
     expect(nextHunkAtOrAfter(cs, 2)).toBe(1);
     expect(nextHunkAtOrAfter(cs, 4)).toBeNull();
@@ -117,14 +121,27 @@ describe("anchorPosition", () => {
 
 function decorationSummary(
   data: InlineReviewData,
-): Array<{ from: number; to: number; cls: string | undefined; widget: boolean }> {
+): Array<{
+  from: number;
+  to: number;
+  cls: string | undefined;
+  widget: boolean;
+}> {
   const state = EditorState.create({
     doc: original,
     extensions: [inlineReviewExtension()],
   });
   const next = state.update({ effects: setInlineReviewEffect.of(data) }).state;
-  const out: Array<{ from: number; to: number; cls: string | undefined; widget: boolean }> = [];
+  const out: Array<{
+    from: number;
+    to: number;
+    cls: string | undefined;
+    widget: boolean;
+  }> = [];
   for (const decos of next.facet(EditorView.decorations)) {
+    // The facet type also allows view-dependent providers; the inline
+    // extension is a plain DecorationSet, so functions are skipped here.
+    if (typeof decos === "function") continue;
     const iter = decos.iter();
     while (iter.value) {
       out.push({
@@ -140,7 +157,9 @@ function decorationSummary(
 }
 
 describe("buildInlineDecorations via EditorState (Fase 4)", () => {
-  const data = (decisions: InlineReviewData["decisions"]): InlineReviewData => ({
+  const data = (
+    decisions: InlineReviewData["decisions"],
+  ): InlineReviewData => ({
     changeSet: changeSet(),
     decisions,
     focusedHunk: null,
@@ -188,7 +207,7 @@ describe("buildInlineDecorations via EditorState (Fase 4)", () => {
     });
     const total = state
       .facet(EditorView.decorations)
-      .reduce((n, set) => n + set.size, 0);
+      .reduce((n, set) => n + (typeof set === "function" ? 0 : set.size), 0);
     expect(total).toBe(0);
   });
 });

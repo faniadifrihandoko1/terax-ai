@@ -55,9 +55,9 @@ describe("inlineReviewKeyAction (Fase 4, inline editor)", () => {
   });
 
   it("maps Alt+arrows to hunk movement, plain arrows to nothing", () => {
-    expect(
-      inlineReviewKeyAction({ key: "ArrowDown", altKey: true }),
-    ).toBe("move-next");
+    expect(inlineReviewKeyAction({ key: "ArrowDown", altKey: true })).toBe(
+      "move-next",
+    );
     expect(inlineReviewKeyAction({ key: "ArrowUp", altKey: true })).toBe(
       "move-prev",
     );

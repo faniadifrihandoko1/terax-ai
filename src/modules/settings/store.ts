@@ -178,8 +178,8 @@ export type Preferences = {
   editorAutoSave: boolean;
   editorAutoSaveDelay: number;
   editorFormatOnSave: boolean;
-  /** FR-11: per-line AI edit review. Off falls back to per-file Accept/Reject. */
-  aiReviewPerLine: boolean;
+  /** Fase 4: inline AI edit review, following antigravity.enableInlineDiff. Off keeps review in the side-by-side ai-diff tab. */
+  aiReviewInline: boolean;
   editorFormatter: EditorFormatter;
   /** languageResolver id -> formatter, overriding the global default. */
   editorFormatterByLang: Record<string, EditorFormatter>;
@@ -275,7 +275,9 @@ const KEY_DEFAULT_WORKSPACE_ENV = "defaultWorkspaceEnv";
 const KEY_SHORTCUTS = "shortcuts";
 const KEY_EDITOR_AUTO_SAVE = "editorAutoSave";
 const KEY_EDITOR_AUTO_SAVE_DELAY = "editorAutoSaveDelay";
-const KEY_AI_REVIEW_PER_LINE = "aiReviewPerLine";
+const KEY_AI_REVIEW_INLINE = "aiReviewInline";
+/** Fase 3 key, kept so loadPreferences can migrate an explicit choice. */
+const KEY_AI_REVIEW_PER_LINE_LEGACY = "aiReviewPerLine";
 const KEY_EDITOR_FORMAT_ON_SAVE = "editorFormatOnSave";
 const KEY_EDITOR_FORMATTER = "editorFormatter";
 const KEY_EDITOR_FORMATTER_BY_LANG = "editorFormatterByLang";
@@ -371,7 +373,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   shortcuts: {} as Record<ShortcutId, KeyBinding[]>,
   editorAutoSave: false,
   editorAutoSaveDelay: 1000,
-  aiReviewPerLine: true,
+  aiReviewInline: true,
   editorFormatOnSave: false,
   editorFormatter: "lsp",
   editorFormatterByLang: {},
@@ -561,9 +563,10 @@ export async function loadPreferences(): Promise<Preferences> {
       DEFAULT_PREFERENCES.shortcuts,
     editorAutoSave:
       get<boolean>(KEY_EDITOR_AUTO_SAVE) ?? DEFAULT_PREFERENCES.editorAutoSave,
-    aiReviewPerLine:
-      get<boolean>(KEY_AI_REVIEW_PER_LINE) ??
-      DEFAULT_PREFERENCES.aiReviewPerLine,
+    aiReviewInline:
+      get<boolean>(KEY_AI_REVIEW_INLINE) ??
+      get<boolean>(KEY_AI_REVIEW_PER_LINE_LEGACY) ??
+      DEFAULT_PREFERENCES.aiReviewInline,
     editorAutoSaveDelay: clampAutoSaveDelay(
       get<number>(KEY_EDITOR_AUTO_SAVE_DELAY) ??
         DEFAULT_PREFERENCES.editorAutoSaveDelay,
@@ -802,8 +805,8 @@ export async function setShowHidden(value: boolean): Promise<void> {
   await writePref(KEY_SHOW_HIDDEN, value);
 }
 
-export async function setAiReviewPerLine(value: boolean): Promise<void> {
-  await writePref(KEY_AI_REVIEW_PER_LINE, value);
+export async function setAiReviewInline(value: boolean): Promise<void> {
+  await writePref(KEY_AI_REVIEW_INLINE, value);
 }
 
 export async function setExplorerGitDecorations(value: boolean): Promise<void> {
