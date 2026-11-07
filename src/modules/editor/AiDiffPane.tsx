@@ -1,6 +1,10 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AiDiffStatus } from "@/modules/tabs";
+import {
+  AI_DIFF_STATUS_BADGE,
+  AI_DIFF_STATUS_LABEL,
+} from "@/modules/tabs/lib/aiDiffStatus";
 import { presentableDiff, unifiedMergeView } from "@codemirror/merge";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -71,27 +75,6 @@ const DIFF_THEME = EditorView.theme({
   },
 });
 
-const STATUS_LABEL: Record<AiDiffStatus, string> = {
-  pending: "Pending review",
-  reviewing: "Reviewing",
-  done: "Reviewed",
-  applied: "Applied",
-  rejected: "Rejected",
-  conflict: "Conflict",
-};
-
-const STATUS_BADGE: Record<
-  AiDiffStatus,
-  "outline" | "secondary" | "destructive"
-> = {
-  pending: "outline",
-  reviewing: "secondary",
-  done: "secondary",
-  applied: "secondary",
-  rejected: "destructive",
-  conflict: "destructive",
-};
-
 export function AiDiffPane({
   path,
   originalContent,
@@ -150,9 +133,9 @@ export function AiDiffPane({
         <div className="flex min-w-0 items-center gap-2">
           <Badge
             className="text-[11px] px-2.5 py-2.5"
-            variant={STATUS_BADGE[status]}
+            variant={AI_DIFF_STATUS_BADGE[status]}
           >
-            {STATUS_LABEL[status]}
+            {AI_DIFF_STATUS_LABEL[status]}
           </Badge>
           {isNewFile ? (
             <span className="shrink-0 rounded-full border border-border/60 bg-accent/40 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
