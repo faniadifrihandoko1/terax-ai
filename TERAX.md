@@ -401,6 +401,23 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
 - **AI HTTP transport**: binary request bodies and response packets avoid JSON byte arrays. Native requests are owned by their calling window, explicitly cancelled on abort, page reload, or window destruction, and bounded to 16 concurrent requests. A 128 KiB byte window (at most 256 packets) carries at most 64 KiB per packet and coalesces ready network chunks; the webview acknowledges validated cumulative byte boundaries once half a window has arrived, so small SSE chunks cost no per-chunk IPC, and a consumer that grants no credit for two minutes is abandoned and its request cancelled. The frontend consumer queue is capped at 192 KiB, request bodies at 64 MiB, and request metadata at 64 KiB. Consumer cancellation during startup is repeated after native registration completes. SSRF validation and DNS pinning remain in Rust.
 - **Voice input**: streamed transcription pipeline. Toggled from the composer.
 - **Live context bridge**: `App.tsx` calls `setLive({ getCwd, getTerminalContext, … })` so tools can read the *currently active* terminal's cwd + last 300 lines of buffer. Lazy by design - don't pre-snapshot.
+
+- **AI review, Antigravity-style (fork, Fase 1)**: after a task finishes, the
+  chat shows a `ChangedFilesCard` (`src/modules/ai/components/ChangedFilesCard.tsx`)
+  listing every file the agent proposed to change, with +added/-removed counts
+  (shared `computeLineStats` in `src/modules/editor/lib/diffStats.ts`) and a
+  per-file review status (`AiDiffStatus` in `src/modules/tabs/lib/useTabs.ts`:
+  pending, reviewing, done, applied, rejected, conflict; labels in
+  `src/modules/tabs/lib/aiDiffStatus.ts`). Clicking a file activates its
+  ai-diff tab via `activateAiDiffTab`. The card derives its data with the
+  shared `extractFileMutation` / `deriveProposed` in
+  `src/modules/ai/lib/fileMutations.ts`, the same functions `AgentRunBridge`
+  uses to open the tab. An answered approval no longer closes the ai-diff
+  tab; the decision is recorded with `setAiDiffStatus` instead, so the tab
+  stays open until the user closes it. The write path is unchanged in Fase 1
+  (per-file approval flow). Fase 2 adds per-line decisions and the
+  `apply_reviewed_edit` tool; its contract lives in
+  `src/modules/ai/lib/reviewApply.ts`.
 - **Tools** (`tools/tools.ts`): `read_file`, `list_directory`, `fs_search`, `fs_grep` auto-execute. `write_file`, `create_directory`, `rename`, `delete`, `run_command`, `shell_session_run`, `shell_bg_spawn` set `needsApproval: true` and the AI SDK pauses for an in-UI confirmation card. Auto-send after approval uses `lastAssistantMessageIsCompleteWithApprovalResponses`. `lib/security.ts` is a deny-list refusing obvious secret paths (`.env*`, `.ssh/`, credentials, keychain dirs) - apply on **both** read and write paths and don't bypass it.
 - **Edit diffs**: AI-proposed edits open in a side-by-side diff tab (`ai-diff` tab kind); user accepts/rejects per hunk before the write tool actually runs.
 - **Prompt snippets** (`#handle`): reusable prompt fragments surfaced in the composer. Do not describe these as skills; a reusable tool-bundled skills system is not implemented yet.
