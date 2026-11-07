@@ -176,7 +176,7 @@ export default function App() {
     setMarkdownView,
     setOverrideLanguage,
     openAiDiffTab,
-    closeAiDiffTab,
+    setAiDiffStatus,
     openGitDiffTab,
     openCommitHistoryTab,
     openCommitFileDiffTab,
@@ -1599,7 +1599,7 @@ export default function App() {
             <>
               <AgentRunBridge
                 openAiDiffTab={openAiDiffTab}
-                closeAiDiffTab={closeAiDiffTab}
+                setAiDiffStatus={setAiDiffStatus}
               />
               <LocalAgentNotificationsBridge />
             </>

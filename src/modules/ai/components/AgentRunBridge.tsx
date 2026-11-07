@@ -1,5 +1,6 @@
 import { useChat, type UIMessage } from "@ai-sdk/react";
 import type { ToolUIPart, UIMessagePart } from "ai";
+import type { AiDiffStatus } from "@/modules/tabs";
 import { useEffect, useMemo, useRef } from "react";
 import {
   deriveProposed,
@@ -38,7 +39,7 @@ export type DiffOpenInput = {
 
 export type AgentRunBridgeProps = {
   openAiDiffTab: (input: DiffOpenInput) => number | null;
-  closeAiDiffTab: (approvalId: string) => void;
+  setAiDiffStatus: (approvalId: string, status: AiDiffStatus) => void;
 };
 
 export function AgentRunBridge(props: AgentRunBridgeProps) {
@@ -61,7 +62,7 @@ type AnyPart = UIMessagePart<Record<string, never>, Record<string, never>>;
 function Bridge({
   sessionId,
   openAiDiffTab,
-  closeAiDiffTab,
+  setAiDiffStatus,
 }: BridgeProps) {
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
   const { status, messages, addToolApprovalResponse } = useChat<UIMessage>({
@@ -74,10 +75,15 @@ function Bridge({
 
   // Expose the approval responder so the diff tab can resolve approvals.
   // We keep it in a ref-stable closure so identity is stable per render.
+  // Every answer is also recorded: it is the only place that knows whether
+  // an approval was accepted or rejected.
+  const decisionsRef = useRef(new Map<string, boolean>());
+  const statusRecordedRef = useRef(new Set<string>());
   useEffect(() => {
-    setApprovalResponder((id, approved) =>
-      addToolApprovalResponse({ id, approved }),
-    );
+    setApprovalResponder((id, approved) => {
+      decisionsRef.current.set(id, approved);
+      addToolApprovalResponse({ id, approved });
+    });
     return () => setApprovalResponder(null);
   }, [setApprovalResponder, addToolApprovalResponse]);
 
@@ -136,6 +142,8 @@ function Bridge({
   useEffect(() => {
     openedRef.current = new Set();
     fileMutationFingerprintRef.current = "";
+    decisionsRef.current = new Map();
+    statusRecordedRef.current = new Set();
   }, [sessionId]);
 
   // Cheap fingerprint of file-mutation tool parts only. The diff-tab effect
@@ -180,7 +188,7 @@ function Bridge({
     fileMutationFingerprintRef.current = fileMutationFingerprint;
 
     const pending: Pending[] = [];
-    const toClose = new Set<string>();
+    const toResolve = new Set<string>();
 
     for (const m of messages) {
       if (m.role !== "assistant") continue;
@@ -198,14 +206,20 @@ function Bridge({
           state === "output-available" ||
           state === "output-error"
         ) {
-          if (openedRef.current.has(approvalId)) toClose.add(approvalId);
+          if (openedRef.current.has(approvalId)) toResolve.add(approvalId);
         }
       }
     }
 
-    for (const id of toClose) {
-      openedRef.current.delete(id);
-      closeAiDiffTab(id);
+    // The diff tab stays open until the user closes it, so the change can
+    // be re-opened from the Changed Files card after the task finishes
+    // (FR-02). The recorded decision becomes the file's review status.
+    for (const id of toResolve) {
+      if (statusRecordedRef.current.has(id)) continue;
+      const approved = decisionsRef.current.get(id);
+      if (approved === undefined) continue;
+      statusRecordedRef.current.add(id);
+      setAiDiffStatus(id, approved ? "applied" : "rejected");
     }
 
     if (pending.length === 0) return;
@@ -240,7 +254,7 @@ function Bridge({
     return () => {
       cancelled = true;
     };
-  }, [messages, fileMutationFingerprint, openAiDiffTab, closeAiDiffTab]);
+  }, [messages, fileMutationFingerprint, openAiDiffTab, setAiDiffStatus]);
 
   return null;
 }
