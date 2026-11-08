@@ -1,4 +1,4 @@
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import { resolveDisplayName, resolveLanguage } from "./languageResolver";
@@ -54,7 +54,12 @@ describe("resolveDisplayName", () => {
       doc: "{#if ready}<button on:click={run}>{label}</button>{/if}",
       extensions: [result.ext],
     });
-    const tree = syntaxTree(state).toString();
+    // The Svelte parser is incremental: reading the tree straight after
+    // state creation can return a partial tree (top-level IfBlock parsed,
+    // nested `on:click` directive not yet) when workers share CPU under a
+    // full-suite run — one such flake in the batch run. ensureSyntaxTree
+    // forces the parse to complete (5s work budget) instead of racing it.
+    const tree = ensureSyntaxTree(state, state.doc.length, 5000)?.toString();
     expect(tree).toContain("IfBlock");
     expect(tree).toContain("DirectiveOn");
   });

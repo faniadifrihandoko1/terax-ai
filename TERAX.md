@@ -495,8 +495,10 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   checkpoint, so a deleted file is recreated and a renamed file is moved
   back on restore. Plan mode refuses both tools (never queued as writes).
   If the agent deletes or renames through the shell (`run_command`), that
-  still goes through the approval card, and a file deleted on disk while a
-  proposal is pending is caught by the FR-07 conflict guard. Delete/rename
+  is caught by the destructive-shell guard (see "Bug-fix batch" below):
+  broad targets are refused outright, scoped deletes show an explicit
+  warning on the approval card. A file deleted on disk while a proposal
+  is pending is caught by the FR-07 conflict guard. Delete/rename
   proposals never render inline in the editor.
   Click fix (after Fase 5): a click on a Changed Files row never does
   nothing. The ai-diff tab is created by `AgentRunBridge` after the
@@ -542,6 +544,47 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   guard); on session restore the registry is empty, so multiple parts for
   one file open separate tabs (pre-existing behaviour) while the card
   still shows one row per file.
+  Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
+  change to the review flow itself. (1) Destructive shell commands:
+  `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
+  classifies `rm` / `mv` / `del` / `Remove-Item` (and `find -delete` /
+  `-exec rm|mv`) in `bash_run` / `bash_background` before they run.
+  Catastrophic targets — filesystem root, home, the workspace root
+  itself, bare wildcards, system dirs, home secret dirs, `rm -rf` under
+  `~` — are refused in `execute` even after the card was approved, with
+  a redirect to `delete_file` / `rename_file`; the refusal also closes
+  the gap where `rm -r -f ~/x` slipped past `checkShellCommand`'s
+  single-bundle flag regex. Scoped deletes/moves inside the workspace
+  run as approved, but the approval card (`AiToolApproval.tsx`) shows an
+  explicit warning with the kind, the parsed targets, and the fact that
+  a shell delete has no checkpoint and cannot be Restored. Detection
+  reads the command text (segments split on `;` / `&&` / `||` / `|` /
+  `&`, first-word match only, so `echo "rm -rf /"`, `grep -r "rm"`,
+  `pnpm remove` and `git rm` / `git mv` are not flagged — git
+  operations are versioned and recoverable). Known limits, documented
+  honestly: indirection the text cannot see is missed (`xargs rm`,
+  `$(rm ...)`, backticks, commands assembled from variables, paths
+  piped into `rm`); the approval card showing the command verbatim
+  remains the backstop for those. Directory deletes have no reviewed
+  tool (`delete_file` refuses directories), so they can only happen
+  through the warned shell path. (2) The djb2 hash is a single shared
+  copy now (`src/modules/ai/lib/hash.ts`, value-locking test in
+  `hash.test.ts`): the old triplicate across `reviewApply.ts`,
+  `reviewCheckpoint.ts` and `tools/fs.ts` ("kept in sync by hand") is
+  gone — a drift between copies would silently break the conflict and
+  checkpoint hash guards. The hash output is part of persisted review
+  state and must never change. (3) Two CPU-heavy upstream terminal
+  tests are slow, not flaky: the 100,000-update renewal test (~3.4s
+  standalone) and the `selectionBoundsContain` test (300 seeded trials
+  x 480 cells = 144,000 expects, ~1.5s standalone) both sit too close
+  to vitest's default 5s test timeout once workers share CPU under a
+  full-suite run — that is the measured cause of the repeated
+  `AdaptedGhosttyGpu` timeout flakes since Fase 2 and the single
+  `selectionBoundsContain` flake in Fase 6. Both keep their full
+  coverage (the 100,000 threshold and the 300 trials ARE the test) and
+  carry explicit per-test timeouts (30s / 15s) with comments citing
+  the measurements; the default suite still uses the 5s default, only
+  the soak/profile configs raise it globally.
 - **Tools** (`tools/tools.ts`): `read_file`, `list_directory`, `fs_search`, `fs_grep` auto-execute. `edit`, `multi_edit`, `write_file`, `delete_file`, `rename_file` are proposal-only (see AI review above): they never write to disk and never pause the run; `create_directory` auto-executes. `run_command` (`bash_run` / `bash_background` in `tools/shell.ts`), `spawn_coding_agent`, `send_to_agent` set `needsApproval: true` and the AI SDK pauses for an in-UI confirmation card. `delete_file` and `rename_file` are fork additions (Fase 5, see AI review above): they propose, never execute directly, and are refused in plan mode. The Rust backend has `fs_rename` / `fs_move` / `fs_delete` / `fs_delete_batch` (`src-tauri/src/modules/fs/mutate.rs`); the agent's reviewed delete/rename apply reuses `fs_delete` / `fs_rename`, which the file explorer / editor UI also calls. Auto-send after approval uses `lastAssistantMessageIsCompleteWithApprovalResponses`. `lib/security.ts` is a deny-list refusing obvious secret paths (`.env*`, `.ssh/`, credentials, keychain dirs) - apply on **both** read and write paths and don't bypass it.
 - **Edit diffs**: AI-proposed edits are reviewed per hunk (see AI review above) before anything is written: inline in the editor when `aiReviewInline` is on (Settings → General), otherwise in a side-by-side diff tab (`ai-diff` tab kind).
 - **Prompt snippets** (`#handle`): reusable prompt fragments surfaced in the composer. Do not describe these as skills; a reusable tool-bundled skills system is not implemented yet.

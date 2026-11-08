@@ -81,6 +81,11 @@ describe("selectionUniform", () => {
     expect(selectionUniformContains(uniform, 23, 79)).toBe(true);
   });
 
+  // Slow by volume, not flaky logic: 300 seeded trials x 24x20 cells =
+  // 144,000 expect() calls take ~1.5s standalone, so the default 5s
+  // test timeout is too tight once vitest workers share CPU under a
+  // full-suite run (one timeout flake in Fase 6, never reproduced
+  // standalone). The trial count is the coverage — it stays.
   it("matches the legacy selectionBoundsContain rules for every cell", () => {
     let seed = 7;
     const random = (limit: number) => {
@@ -103,7 +108,7 @@ describe("selectionUniform", () => {
         }
       }
     }
-  });
+  }, 15_000);
 
   it("selects a wide character only through its lead column, as the previous renderer did", () => {
     // Columns 2 and 3 hold one wide glyph. The shader maps the trailing half

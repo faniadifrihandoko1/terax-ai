@@ -949,6 +949,12 @@ describe.each([
   });
 
   describe("periodic render-state renewal", () => {
+    // Slow by construction, not flaky logic: 100,050 updates through the
+    // terminal + render-state path take ~3.4s even standalone, so the
+    // default 5s test timeout leaves no headroom once vitest workers
+    // share CPU under a full-suite run (measured timeout flakes since
+    // Fase 2). The 100,000 threshold IS what this test verifies, so the
+    // iteration count cannot be reduced — the timeout is raised instead.
     it("re-uploads once and stays correct across the 100,000-update renewal", () => {
       const harness = gpu(20, 4);
       try {
@@ -977,7 +983,7 @@ describe.each([
       } finally {
         harness.terminal.dispose();
       }
-    });
+    }, 30_000);
   });
 
   describe("glyph epochs", () => {
