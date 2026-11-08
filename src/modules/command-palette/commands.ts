@@ -1,4 +1,5 @@
 import type { SearchTarget } from "@/modules/header";
+import { isLintablePath } from "@/modules/eslint/lib/eslintPaths";
 import { MAX_PANES_PER_TAB, type Tab } from "@/modules/tabs";
 import { leafIds } from "@/modules/terminal";
 import {
@@ -24,6 +25,7 @@ import type { PaletteItem } from "./types";
 
 export const COMMAND_GROUPS = [
   "General",
+  "Editor",
   "Spaces",
   "Tabs",
   "Panes",
@@ -39,6 +41,10 @@ export type CommandPaletteActionContext = {
   searchTarget: SearchTarget;
   explorerRoot: string | null;
   home: string | null;
+  /** Absolute path of the active editor file, or null. */
+  activeFilePath: string | null;
+  eslintEnabled: boolean;
+  runEslintOnCurrentFile: () => void;
   openNewTab: () => void;
   openNewBlock: () => void;
   openNewPrivate: () => void;
@@ -83,6 +89,13 @@ export function createCommandItems(
       : undefined;
   const closeDisabled =
     onlyOneTab && activePaneCount < 2 ? "Last tab" : undefined;
+  const eslintDisabledReason = !ctx.eslintEnabled
+    ? "ESLint diagnostics off"
+    : !ctx.activeFilePath
+      ? "No file open"
+      : !isLintablePath(ctx.activeFilePath)
+        ? "Not a JavaScript/TypeScript file"
+        : undefined;
 
   return [
     {
@@ -109,6 +122,15 @@ export function createCommandItems(
       keywords: ["keys", "keybindings", "settings"],
       icon: KeyboardIcon,
       run: ctx.openKeyboardShortcuts,
+    },
+    {
+      id: "eslint.run",
+      title: "Run ESLint on current file",
+      group: "Editor",
+      keywords: ["eslint", "lint", "diagnostics", "check"],
+      icon: SourceCodeIcon,
+      disabledReason: eslintDisabledReason,
+      run: ctx.runEslintOnCurrentFile,
     },
     {
       id: "spaces.overview",

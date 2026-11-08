@@ -39,6 +39,7 @@ import {
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
+import { requestEslintRunWithReport } from "@/modules/eslint";
 import { useControlBridge } from "@/modules/control";
 import {
   type EditorPaneHandle,
@@ -449,6 +450,7 @@ export default function App() {
   // itself is not ready (inline decorations sync from the ai-diff tab,
   // so without a tab there is nothing to decorate yet).
   const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
+  const eslintEnabled = usePreferencesStore((s) => s.eslintEnabled);
   const handleOpenFileDiff = useCallback(
     (approvalId: string, path: string) => {
       const tab = tabs.find(
@@ -1423,6 +1425,11 @@ export default function App() {
             searchTarget,
             explorerRoot,
             home,
+            activeFilePath,
+            eslintEnabled,
+            runEslintOnCurrentFile: () => {
+              if (activeFilePath) requestEslintRunWithReport(activeFilePath);
+            },
             openNewTab,
             openNewBlock: openNewBlockTab,
             openNewPrivate: openNewPrivateTab,
@@ -1455,6 +1462,8 @@ export default function App() {
       searchTarget,
       explorerRoot,
       home,
+      activeFilePath,
+      eslintEnabled,
       openNewTab,
       openNewBlockTab,
       openNewPrivateTab,

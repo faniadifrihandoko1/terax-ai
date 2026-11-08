@@ -24,3 +24,8 @@ export function onEslintRunRequested(
     if (set.size === 0) listeners.delete(path);
   };
 }
+
+/** True when an open editor is listening for run requests for this path. */
+export function hasEslintRunListener(path: string): boolean {
+  return (listeners.get(path)?.size ?? 0) > 0;
+}

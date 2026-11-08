@@ -28,6 +28,9 @@ function baseContext(
     home: "/home/me",
     spaces: [],
     activeSpaceId: null,
+    activeFilePath: null,
+    eslintEnabled: true,
+    runEslintOnCurrentFile: noop,
     openNewTab: noop,
     openNewBlock: noop,
     openNewPrivate: noop,
@@ -100,5 +103,43 @@ describe("createCommandItems", () => {
       "spaces.switch.sp1",
     );
     expect(reason).toBe("Current space");
+  });
+
+  it("enables Run ESLint for a lintable active file", () => {
+    expect(
+      reasonById({ activeFilePath: "/proj/src/a.tsx" }, "eslint.run"),
+    ).toBeUndefined();
+  });
+
+  it("disables Run ESLint when ESLint is off, no file is open, or the file is not lintable", () => {
+    expect(
+      reasonById(
+        { activeFilePath: "/proj/src/a.tsx", eslintEnabled: false },
+        "eslint.run",
+      ),
+    ).toBe("ESLint diagnostics off");
+    expect(reasonById({ activeFilePath: null }, "eslint.run")).toBe(
+      "No file open",
+    );
+    expect(
+      reasonById({ activeFilePath: "/proj/src/a.py" }, "eslint.run"),
+    ).toBe("Not a JavaScript/TypeScript file");
+  });
+
+  it("runs the manual ESLint command for the current file", () => {
+    let ran = 0;
+    const items = createCommandItems(
+      baseContext({
+        activeFilePath: "/proj/src/a.tsx",
+        runEslintOnCurrentFile: () => {
+          ran += 1;
+        },
+      }),
+    );
+    const item = items.find((i) => i.id === "eslint.run");
+    expect(item).toBeDefined();
+    expect(item?.group).toBe("Editor");
+    item?.run();
+    expect(ran).toBe(1);
   });
 });
