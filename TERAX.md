@@ -749,6 +749,36 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   neither diagnostics nor any toast after the CRLF fix (ESLint 8.57.0
   flags the file manually), and none of the silent exits could be
   localized from the laptop alone.
+  Fase 10.2 (manual-run path matching): running "Run ESLint on
+  current file" from the Command Palette toasted "Tidak ada editor
+  ESLint untuk file ini" even though the .tsx file was open. The
+  cause, traced from the code rather than guessed: the plugin — and
+  therefore the run listener — only exists while the document is
+  "ready" (`useEslintExtension(path, doc.status)`), so a file still
+  loading from disk (or unreadable) leaves the enabled command with
+  no listener and a misleading toast. For a plain editor tab the
+  subscribe and lookup keys were already the same string
+  (`tab.path`), so a separator/case mismatch between those two was
+  ruled out; the real holes were the not-ready window, git-diff /
+  git-commit-file tabs (enabled with a constructed lintable path but
+  no editor at all), and ai-diff tabs (disabled with the wrong
+  "No file open" reason). The fix: `eslintPathKey` in
+  `lib/eslintPaths.ts` (forward slashes, lowercased on Windows, where
+  the filesystem is case-insensitive) is now the single map-key form
+  for the listener registry (`lib/eslintRequests.ts`), the store's
+  `byPath`/`runStatus` keys (normalized in the setters; readers in
+  the plugin, the manual helper, and the status pill look up by the
+  same key), and the hook records editor presence
+  (`loading`/`ready`/`unavailable`) so the manual-run toast names
+  the real cause — still loading, plugin still attaching, file
+  unreadable, or no editor tab at all (review/diff tabs named
+  explicitly). The palette command is now disabled with the correct
+  reason on ai-diff ("Buka file di tab editor, bukan tab review")
+  and git-diff/git-commit-file tabs ("…bukan tab diff"). Adjacent
+  finding, not fixed here: `findResultForFile` in `lib/eslintJson.ts`
+  canonicalizes separators but not case, so on Windows an
+  ESLint-returned path differing only in casing still yields
+  "no-result-match".
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
