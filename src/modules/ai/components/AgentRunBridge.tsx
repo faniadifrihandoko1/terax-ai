@@ -244,7 +244,7 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
     tabByPathRef.current = new Map();
     reviewStateCacheRef.current = null;
     clearAllPendingProposals();
-  }, [sessionId]);
+  }, [sessionId, tracker]);
 
   // Cheap fingerprint of file-mutation tool parts only. The diff-tab effect
   // is the most expensive thing on the streaming path, so we skip it when
@@ -275,6 +275,11 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
     return fp;
   }, [messages]);
 
+  // bridgeRetryTick is a deliberate re-run trigger, not a value the
+  // effect reads: a cancelled run bumps it so the effect retries the
+  // stranded proposals. The exhaustive-deps check cannot see that,
+  // so it is silenced for this effect only.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bridgeRetryTick intentionally re-runs the effect after a cancelled bridge run
   useEffect(() => {
     if (!tracker.shouldProcess(fileMutationFingerprint)) {
       return;
