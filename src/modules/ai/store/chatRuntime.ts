@@ -10,6 +10,12 @@ import { useAgentsStore } from "./agentsStore";
 import { usePlanStore } from "./planStore";
 import { createContextAwareTransport } from "../lib/transport";
 import type { ToolContext } from "../tools/tools";
+import { useTodosStore } from "./todoStore";
+import { revertInProgressTodos } from "../lib/todos";
+import {
+  isAbnormalOutcome,
+  resolveRunOutcome,
+} from "../lib/runOutcome";
 import {
   chats,
   getActiveProviderKey,
@@ -112,7 +118,31 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       useChatStore.getState().patchAgentMeta({
         status: "error",
         error: e instanceof Error ? e.message : String(e),
+        // Fase 9: record the outcome here too — onFinish below refines it
+        // to "interrupted" for network errors, but this covers any path
+        // where onFinish never fires.
+        lastRunOutcome: "error",
       });
+    },
+    // Fase 9: the SDK tells us exactly how the stream ended (isAbort /
+    // isDisconnect / isError / finishReason) — previously this callback
+    // was never wired, so Stop was indistinguishable from a clean finish
+    // and a dropped connection collapsed into a generic error. The
+    // outcome survives the run (unlike `status`, which returns to idle)
+    // so the resume reminder and the interrupted-run notice can read it.
+    onFinish: ({ isAbort, isDisconnect, isError }) => {
+      const outcome = resolveRunOutcome({ isAbort, isDisconnect, isError });
+      useChatStore.getState().patchAgentMeta({ lastRunOutcome: outcome });
+      if (!isAbnormalOutcome(outcome)) return;
+      // The run is no longer working on anything: a todo left
+      // `in_progress` by it would spin in the UI forever with no run
+      // behind it. Drop it back to `pending` — still open, just not
+      // currently being done. (Approval pauses end with outcome
+      // "finished", so this never fires while the run is merely waiting
+      // for the user to answer an approval.)
+      const todos = useTodosStore.getState().bySession[sessionId] ?? [];
+      const { todos: next, changed } = revertInProgressTodos(todos);
+      if (changed) useTodosStore.getState().setTodos(sessionId, next);
     },
   });
 }

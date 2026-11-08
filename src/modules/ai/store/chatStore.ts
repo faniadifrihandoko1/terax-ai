@@ -11,6 +11,7 @@ import {
 } from "../config";
 import { useTodosStore } from "./todoStore";
 import type { AgentUsage } from "../lib/agent";
+import type { LastRunOutcome } from "../lib/runOutcome";
 import { EMPTY_PROVIDER_KEYS, type ProviderKeys, type CustomEndpointKeys } from "../lib/keyring";
 import {
   deleteSessionData,
@@ -59,6 +60,15 @@ export type AgentMeta = {
   lastCachedTokens: number;
   hitStepCap: boolean;
   compactionNotice: { droppedCount: number; at: number } | null;
+  /**
+   * Fase 9: how the last run ended (from the AI SDK Chat `onFinish`
+   * callback) — null before any run in this session. Unlike `status`,
+   * this survives the run: "stopped" stays distinguishable from a clean
+   * "finished" after the fact, which is what the resume reminder and the
+   * interrupted-run notice read. Reset to null on session switch/new
+   * session (IDLE_META).
+   */
+  lastRunOutcome: LastRunOutcome | null;
 };
 
 const ZERO_USAGE: AgentUsage = {
@@ -77,6 +87,7 @@ const IDLE_META: AgentMeta = {
   lastCachedTokens: 0,
   hitStepCap: false,
   compactionNotice: null,
+  lastRunOutcome: null,
 };
 
 type MiniState = {

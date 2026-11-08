@@ -49,3 +49,25 @@ export function validateTodos(todos: Todo[]): string | null {
     return `only one todo may be in_progress at a time (got ${inProgress})`;
   return null;
 }
+
+/**
+ * Fase 9: a run that ends abnormally (stopped, interrupted, error) is no
+ * longer working on anything, so a todo left `in_progress` by it is a
+ * lie — the TodoStrip spinner would spin forever with no run behind it.
+ * Drop such items back to `pending`: the work is still open, just not
+ * currently being done. `completed` and `pending` items are untouched.
+ * Returns the list plus whether anything changed, so callers only persist
+ * when there is something to save.
+ */
+export function revertInProgressTodos(todos: Todo[]): {
+  todos: Todo[];
+  changed: boolean;
+} {
+  let changed = false;
+  const next = todos.map((t) => {
+    if (t.status !== "in_progress") return t;
+    changed = true;
+    return { ...t, status: "pending" as const };
+  });
+  return { todos: next, changed };
+}
