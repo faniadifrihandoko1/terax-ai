@@ -71,37 +71,38 @@ export type EslintRunResult =
   | { kind: "timeout" }
   | { kind: "failed"; message: string };
 
+/**
+ * Project-wide run outcome. Like `EslintRunResult`, plus `truncated`:
+ * the 256 KiB one-shot output cap cut the JSON report short, so the
+ * results are unusable and must not be shown as a complete lint.
+ */
+export type EslintProjectRunResult =
+  | { kind: "ok"; results: EslintFileResult[] }
+  | { kind: "missing-config" }
+  | { kind: "timeout" }
+  | { kind: "truncated" }
+  | { kind: "failed"; message: string };
+
+/**
+ * Project-wide runs lint a whole directory tree, so they get a longer
+ * budget than the 30 s single-file run. Still bounded: a runaway lint
+ * must end in a timeout, never hang the UI.
+ */
+export const PROJECT_LINT_TIMEOUT_SECS = 120;
+
 const CONFIG_MISSING =
   /couldn'?t find (a )?configuration file|no eslint configuration|Could not find config file/i;
 
 /**
- * Runs the project's ESLint on one file and parses the JSON report.
- * Exit code 1 means "violations found", not failure. Exit code 2 with a
- * config error means the project has no usable ESLint config.
+ * Shared reading of one `shell_run_command` result: exit 1 means
+ * "violations found", not failure; exit 2 with a config error means
+ * the project has no usable ESLint config. Callers check
+ * `out.truncated` and `out.timed_out` first and map those themselves,
+ * because a truncated single-file run is a failure while a truncated
+ * project-wide run is its own outcome (partial JSON cannot be parsed).
  */
-export async function runEslintFile(args: {
-  binary: EslintBinary;
-  file: string;
-  timeoutSecs?: number;
-  runCommand?: RunCommand;
-}): Promise<EslintRunResult> {
-  const runCommand = args.runCommand ?? tauriRunCommand;
-  let out: CommandOutput;
-  try {
-    out = await runCommand(buildEslintCommand(args.binary, args.file), {
-      cwd: args.binary.root,
-      timeoutSecs: args.timeoutSecs ?? 30,
-    });
-  } catch (e) {
-    return { kind: "failed", message: String(e) };
-  }
+function interpretEslintOutput(out: CommandOutput): EslintRunResult {
   if (out.timed_out) return { kind: "timeout" };
-  if (out.truncated) {
-    return {
-      kind: "failed",
-      message: "ESLint output was truncated; too many violations to display",
-    };
-  }
   const combined = `${out.stdout}\n${out.stderr}`;
   if (out.exit_code === 2 && CONFIG_MISSING.test(combined)) {
     return { kind: "missing-config" };
@@ -126,6 +127,68 @@ export async function runEslintFile(args: {
   } catch (e) {
     return { kind: "failed", message: String(e) };
   }
+}
+
+/**
+ * Runs the project's ESLint on one file and parses the JSON report.
+ * Exit code 1 means "violations found", not failure. Exit code 2 with a
+ * config error means the project has no usable ESLint config.
+ */
+export async function runEslintFile(args: {
+  binary: EslintBinary;
+  file: string;
+  timeoutSecs?: number;
+  runCommand?: RunCommand;
+}): Promise<EslintRunResult> {
+  const runCommand = args.runCommand ?? tauriRunCommand;
+  let out: CommandOutput;
+  try {
+    out = await runCommand(buildEslintCommand(args.binary, args.file), {
+      cwd: args.binary.root,
+      timeoutSecs: args.timeoutSecs ?? 30,
+    });
+  } catch (e) {
+    return { kind: "failed", message: String(e) };
+  }
+  if (out.truncated) {
+    return {
+      kind: "failed",
+      message: "ESLint output was truncated; too many violations to display",
+    };
+  }
+  return interpretEslintOutput(out);
+}
+
+/**
+ * Lints the whole directory the binary belongs to (`eslint .` from the
+ * binary root, so `.eslintignore` and the project config apply exactly
+ * as they do for a manual run). The caller owns the binary resolution:
+ * pass the binary `resolveEslintBinary` found for this project.
+ */
+export function buildEslintProjectCommand(binary: EslintBinary): string {
+  return buildEslintCommand(binary, ".");
+}
+
+export async function runEslintProject(args: {
+  binary: EslintBinary;
+  timeoutSecs?: number;
+  runCommand?: RunCommand;
+}): Promise<EslintProjectRunResult> {
+  const runCommand = args.runCommand ?? tauriRunCommand;
+  let out: CommandOutput;
+  try {
+    out = await runCommand(buildEslintProjectCommand(args.binary), {
+      cwd: args.binary.root,
+      timeoutSecs: args.timeoutSecs ?? PROJECT_LINT_TIMEOUT_SECS,
+    });
+  } catch (e) {
+    return { kind: "failed", message: String(e) };
+  }
+  if (out.timed_out) return { kind: "timeout" };
+  if (out.truncated) return { kind: "truncated" };
+  const result = interpretEslintOutput(out);
+  if (result.kind === "timeout") return { kind: "timeout" };
+  return result;
 }
 
 /** True when an eslint is reachable through npx without installing. */
