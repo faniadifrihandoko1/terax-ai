@@ -783,6 +783,37 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   can no longer end in a silent "no-result-match" with zero
   diagnostics. The `no-result-match` detail text no longer blames case
   on Windows; symlink / 8.3 short-name mismatches remain possible.
+  Fase 11 (project-wide lint, Problems panel): per-file lint only
+  covers opened files, so Command Palette now has "Run ESLint on
+  entire project" (Editor group, `lib/runEslintProject.ts`). It runs
+  `eslint .` from the binary root with the same walk-up binary
+  resolution as the per-file runs (`resolveEslintBinary` from a path
+  inside the root; a binary found in an ancestor lints that
+  ancestor), a 120 s timeout (`PROJECT_LINT_TIMEOUT_SECS` in
+  `lib/eslintRunner.ts`), and the same output interpreter as
+  `runEslintFile`, except a truncated run is its own outcome: the
+  256 KiB one-shot cap can cut a project-wide JSON report short, and
+  the panel then says the results are incomplete instead of showing a
+  partial list as complete. One run at a time (a second invocation
+  toasts "still running"); the run is async and never blocks the
+  editor, and a stale completion is dropped when a newer run started.
+  Results land in `projectLint` in `lib/eslintStore.ts` and render in
+  the sidebar "Problems" view (`components/ProblemsPanel.tsx`,
+  rail badge is the error total), grouped by file, sorted by
+  canonical path then line, each row opening the file at the reported
+  1-based line through the existing `openContentHit` path. The panel
+  is a snapshot: it survives closing the view, goes stale when files
+  change or the root changes (the panel says so and offers a re-run),
+  and is replaced only by the next run. The run also fills the
+  explorer counts (`diagnosticsStore`) for files that are not open,
+  so unopened files show their badge; open files keep their per-file
+  counts, and the editor unmount cleanup restores the project counts
+  for a closed file instead of wiping them. Files fixed since the
+  last run lose their badge on the next run. The command is disabled
+  only when ESLint is off or no project is open; a missing binary is
+  not a palette-time disabled reason (the stored rootStatus keys do
+  not share one form with the explorer root) and the run toasts the
+  honest cause instead, reusing the Fase 10.1 missing-binary text.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`

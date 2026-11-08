@@ -158,11 +158,12 @@ export function EslintProblemsPanel({
                   {countsText(file)}
                 </span>
               </div>
-              {file.messages.map((message, index) => (
+              {file.messages.map((message) => (
                 <button
-                  // A file can hold two identical messages on
-                  // different lines; the index keeps keys unique.
-                  key={`${message.line}:${message.column}:${index}`}
+                  // Position + rule + text: ESLint never emits the
+                  // same message twice for one spot, so this is a
+                  // stable unique key without the array index.
+                  key={`${message.line}:${message.column}:${message.ruleId ?? ""}:${message.message}`}
                   type="button"
                   onClick={() => onOpenFile(file.path, message.line)}
                   title={`${file.path}:${message.line}:${message.column}`}

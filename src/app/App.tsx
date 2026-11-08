@@ -1425,6 +1425,17 @@ export default function App() {
     />
   );
 
+  // Opens the Problems view and starts a project-wide lint for the
+  // current root. The panel shows progress; the run toasts on finish.
+  // Defined before the palette memo below: the memo lists it as a
+  // dependency, and the array is evaluated on every render, so a
+  // definition after the memo would read it in its temporal dead
+  // zone.
+  const runEslintProjectLint = useCallback(() => {
+    openSidebarView("problems");
+    void requestEslintProjectLint(explorerRoot);
+  }, [openSidebarView, explorerRoot]);
+
   const commandPaletteItems = useMemo(
     () =>
       commandPaletteOpen
@@ -1488,6 +1499,7 @@ export default function App() {
       askFromSelection,
       activeSpaceId,
       handleNewSpace,
+      runEslintProjectLint,
     ],
   );
 
@@ -1504,13 +1516,6 @@ export default function App() {
     },
     [openFileTab],
   );
-
-  // Opens the Problems view and starts a project-wide lint for the
-  // current root. The panel shows progress; the run toasts on finish.
-  const runEslintProjectLint = useCallback(() => {
-    openSidebarView("problems");
-    void requestEslintProjectLint(explorerRoot);
-  }, [openSidebarView, explorerRoot]);
 
   const openControlFile = useCallback(
     ({
