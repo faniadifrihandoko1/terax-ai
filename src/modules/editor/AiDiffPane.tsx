@@ -10,7 +10,11 @@ import {
   applyReviewedDelete,
   applyReviewedEdit,
   applyReviewedRename,
+  checkDiskAgainst,
   checkDiskConflict,
+  confirmReviewedDelete,
+  confirmReviewedEdit,
+  confirmReviewedRename,
   defaultReviewApplyIo,
   discardReviewedProposal,
   type HunkDecision,
@@ -75,6 +79,12 @@ type Props = {
   /** Per-file decision for delete/rename proposals. Absent = undecided. */
   fileDecision?: "accepted" | "rejected";
   hunkDecisions: Record<number, HunkDecision>;
+  /**
+   * True when the agent already wrote this change to disk (Fase 8,
+   * write-first): the pane confirms it instead of applying it. False
+   * for proposals recorded before Fase 8, which still write on Apply.
+   */
+  written: boolean;
   onSetHunkDecision: (hunkIndex: number, decision: HunkDecision) => void;
   onSetFileDecision: (
     decision: "accepted" | "rejected" | "undecided",
@@ -139,6 +149,7 @@ export function AiDiffPane({
   targetPath,
   fileDecision,
   hunkDecisions,
+  written,
   onSetHunkDecision,
   onSetFileDecision,
   onSetStatus,
@@ -206,9 +217,9 @@ export function AiDiffPane({
   const allDecided = counts.total > 0 && counts.decided === counts.total;
   const allRejected = counts.total > 0 && counts.rejected === counts.total;
 
-  // FR-05: reconstruction of the reviewed file, used by Apply and the
-  // FR-08 preview. Undecided hunks fall back to the proposal being
-  // dropped (removed kept, added dropped), so the preview and Apply only
+  // FR-05: reconstruction of the reviewed file, used by Confirm/Apply
+  // and the FR-08 preview. Undecided hunks fall back to the proposal being
+  // dropped (removed kept, added dropped), so the preview and Confirm only
   // run once every hunk is decided.
   const reconstruction = useMemo(
     () => reconstructFileFromHunks(originalContent, changeSet, decisions),
@@ -228,6 +239,15 @@ export function AiDiffPane({
   const [applyError, setApplyError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [restoreConflict, setRestoreConflict] = useState<string | null>(null);
+  /**
+   * Why a restore is running: "undo-apply" restores the file to before
+   * the confirm (status becomes "restored"); "reject-file-op" restores
+   * it because the user rejected an already-executed delete/rename
+   * (status becomes "rejected").
+   */
+  const [restoreMode, setRestoreMode] = useState<
+    "undo-apply" | "reject-file-op"
+  >("undo-apply");
   const restorable =
     status === "applied" && getCheckpoint(approvalId) !== undefined;
   const [focusedHunk, setFocusedHunk] = useState<number | null>(null);
@@ -332,13 +352,58 @@ export function AiDiffPane({
     setHistoryVersion((v) => v + 1);
   };
 
-  const handleApply = async () => {
+  const handleConfirm = async () => {
     if (applying || status === "conflict") return;
     if (isFileOp) {
       if (!fileDecision) return;
       setApplying(true);
       setApplyError(null);
       try {
+        if (written) {
+          // Fase 8: the delete/rename already happened on disk.
+          if (fileDecision === "rejected") {
+            // Revert it from its checkpoint.
+            const result = await restoreCheckpoint(approvalId, {});
+            if (result.outcome === "restored") {
+              onSetStatus("rejected");
+            } else if (result.outcome === "conflict") {
+              setRestoreMode("reject-file-op");
+              setRestoreConflict(result.reason);
+            } else if (result.outcome === "restore-failed") {
+              setApplyError(result.reason);
+            } else {
+              setApplyError("No checkpoint for this file.");
+            }
+            return;
+          }
+          const result =
+            mutationKind === "delete"
+              ? await confirmReviewedDelete({
+                  approvalId,
+                  sessionId,
+                  path,
+                  originalContent,
+                })
+              : await confirmReviewedRename({
+                  approvalId,
+                  sessionId,
+                  path,
+                  targetPath: targetPath ?? path,
+                  originalContent,
+                });
+          if (result.outcome === "applied") {
+            onSetStatus("applied");
+          } else if (result.outcome === "conflict") {
+            setConflict(result.reason);
+            onSetStatus("conflict");
+          } else if (
+            result.outcome === "not-writable" ||
+            result.outcome === "write-failed"
+          ) {
+            setApplyError(result.reason);
+          }
+          return;
+        }
         if (fileDecision === "rejected") {
           discardReviewedProposal(path);
           onSetStatus("rejected");
@@ -382,15 +447,29 @@ export function AiDiffPane({
       const acceptedHunks = [...decisions.entries()]
         .filter(([, d]) => d === "accepted")
         .map(([i]) => i);
-      const result = await applyReviewedEdit({
-        approvalId,
-        sessionId,
-        path,
-        isNewFile,
-        originalContent,
-        reconstructedContent: reconstruction.content,
-        appliedHunks: acceptedHunks,
-      });
+      // Fase 8: for a written proposal Confirm only decides what stays
+      // (Accept is bookkeeping, Reject reverts from the checkpoint);
+      // legacy proposals still write the reconstruction on Apply.
+      const result = written
+        ? await confirmReviewedEdit({
+            approvalId,
+            sessionId,
+            path,
+            isNewFile,
+            originalContent,
+            proposedContent,
+            reconstructedContent: reconstruction.content,
+            appliedHunks: acceptedHunks,
+          })
+        : await applyReviewedEdit({
+            approvalId,
+            sessionId,
+            path,
+            isNewFile,
+            originalContent,
+            reconstructedContent: reconstruction.content,
+            appliedHunks: acceptedHunks,
+          });
       if (result.outcome === "applied") {
         clearReviewHistory(approvalId);
         onSetStatus("applied");
@@ -431,7 +510,8 @@ export function AiDiffPane({
       const result = await restoreCheckpoint(approvalId, { force });
       if (result.outcome === "restored") {
         setRestoreConflict(null);
-        onSetStatus("restored");
+        onSetStatus(restoreMode === "reject-file-op" ? "rejected" : "restored");
+        setRestoreMode("undo-apply");
       } else if (result.outcome === "conflict") {
         setRestoreConflict(result.reason);
       } else if (result.outcome === "restore-failed") {
@@ -445,10 +525,18 @@ export function AiDiffPane({
   };
 
   const handleCheckAgain = async () => {
-    const result = await checkDiskConflict(
-      { path, originalContent, isNewFile },
-      defaultReviewApplyIo(),
-    );
+    // Fase 8: for a written proposal the disk must still hold what the
+    // agent wrote; for a legacy proposal it must still hold the
+    // original the proposal was derived from.
+    const result = written
+      ? await checkDiskAgainst(
+          { path, expectedContent: proposedContent },
+          defaultReviewApplyIo(),
+        )
+      : await checkDiskConflict(
+          { path, originalContent, isNewFile },
+          defaultReviewApplyIo(),
+        );
     if (result.status === "ok") {
       setConflict(null);
       onSetStatus("done");
@@ -584,26 +672,42 @@ export function AiDiffPane({
             <Button
               size="sm"
               variant="default"
-              onClick={handleApply}
+              onClick={handleConfirm}
               disabled={!fileDecision || applying}
               className="h-7 gap-1.5"
               title={
                 fileDecision
                   ? fileDecision === "rejected"
-                    ? "Discard the proposal"
-                    : mutationKind === "delete"
-                      ? "Delete the file from disk"
-                      : "Rename the file on disk"
+                    ? written
+                      ? mutationKind === "delete"
+                        ? "Restore the deleted file from the checkpoint"
+                        : "Rename the file back from the checkpoint"
+                      : "Discard the proposal"
+                    : written
+                      ? mutationKind === "delete"
+                        ? "Confirm the deletion — the file is already deleted"
+                        : "Confirm the rename — the file already moved"
+                      : mutationKind === "delete"
+                        ? "Delete the file from disk"
+                        : "Rename the file on disk"
                   : "Accept or reject the proposal first"
               }
             >
               {applying
-                ? "Applying…"
+                ? "Confirming…"
                 : fileDecision === "rejected"
-                  ? "Discard"
-                  : mutationKind === "delete"
-                    ? "Delete file"
-                    : "Rename file"}
+                  ? written
+                    ? mutationKind === "delete"
+                      ? "Restore file"
+                      : "Rename back"
+                    : "Discard"
+                  : written
+                    ? mutationKind === "delete"
+                      ? "Confirm deletion"
+                      : "Confirm rename"
+                    : mutationKind === "delete"
+                      ? "Delete file"
+                      : "Rename file"}
             </Button>
           </div>
         ) : null}
@@ -615,7 +719,11 @@ export function AiDiffPane({
               onClick={() => handleRestore(false)}
               disabled={restoring}
               className="h-7"
-              title="Undo this apply: write back the content from before it"
+              title={
+                written
+                  ? "Undo this confirm: write back the content from before the agent's change"
+                  : "Undo this apply: write back the content from before it"
+              }
             >
               {restoring ? "Restoring…" : "Restore"}
             </Button>
@@ -682,7 +790,9 @@ export function AiDiffPane({
               className="h-7"
               title={
                 allDecided
-                  ? "Show the file as it will look after applying"
+                  ? written
+                    ? "Show the file as it will look after confirming"
+                    : "Show the file as it will look after applying"
                   : "Decide every hunk to preview the result"
               }
             >
@@ -691,16 +801,28 @@ export function AiDiffPane({
             <Button
               size="sm"
               variant="default"
-              onClick={handleApply}
+              onClick={handleConfirm}
               disabled={!allDecided || applying}
               className="h-7 gap-1.5"
               title={
                 allDecided
-                  ? "Write the reviewed file to disk"
+                  ? written
+                    ? allRejected
+                      ? "Revert the file to its state before the agent's changes"
+                      : "Confirm the review: accepted hunks stay as written, rejected hunks are reverted from the checkpoint"
+                    : "Write the reviewed file to disk"
                   : "Decide every hunk before applying"
               }
             >
-              {applying ? "Applying…" : allRejected ? "Discard" : "Apply"}
+              {applying
+                ? "Confirming…"
+                : written
+                  ? allRejected
+                    ? "Revert all"
+                    : "Confirm"
+                  : allRejected
+                    ? "Discard"
+                    : "Apply"}
             </Button>
           </div>
         ) : null}
@@ -710,16 +832,38 @@ export function AiDiffPane({
         <div className="shrink-0 border-b border-border/60 px-3 py-2 text-[12px] text-muted-foreground">
           {mutationKind === "delete" ? (
             <span>
-              This proposal deletes the file (
-              {stats.removed} line{stats.removed === 1 ? "" : "s"}). The
-              content below is what would be lost; accepting removes it from
-              disk, and it can be restored afterwards.
+              {written ? (
+                <>
+                  This file is already deleted — the change is on disk (
+                  {stats.removed} line{stats.removed === 1 ? "" : "s"}).
+                  The content below is what was lost; accepting confirms
+                  the deletion, rejecting restores the file.
+                </>
+              ) : (
+                <>
+                  This proposal deletes the file (
+                  {stats.removed} line{stats.removed === 1 ? "" : "s"}). The
+                  content below is what would be lost; accepting removes it
+                  from disk, and it can be restored afterwards.
+                </>
+              )}
             </span>
           ) : (
             <span>
-              This proposal renames the file to{" "}
-              <span className="font-mono">{targetPath}</span>. Content is
-              unchanged.
+              {written ? (
+                <>
+                  This file is already renamed to{" "}
+                  <span className="font-mono">{targetPath}</span> — the
+                  change is on disk. Content is unchanged; accepting
+                  confirms the rename, rejecting renames it back.
+                </>
+              ) : (
+                <>
+                  This proposal renames the file to{" "}
+                  <span className="font-mono">{targetPath}</span>. Content is
+                  unchanged.
+                </>
+              )}
             </span>
           )}
         </div>
@@ -728,8 +872,10 @@ export function AiDiffPane({
       {restoreConflict ? (
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-800 dark:text-amber-200">
           <span>
-            Restore refused: {restoreConflict}. The file changed since the
-            apply, so restoring would overwrite those changes.
+            Restore refused: {restoreConflict}.{" "}
+            {restoreMode === "reject-file-op"
+              ? "The file changed since the delete/rename, so restoring would overwrite those changes."
+              : "The file changed since the confirm, so restoring would overwrite those changes."}
           </span>
           <span className="flex shrink-0 items-center gap-1.5">
             <Button
@@ -756,8 +902,9 @@ export function AiDiffPane({
       {conflict ? (
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-800 dark:text-amber-200">
           <span>
-            File changed on disk since this proposal was made ({conflict}). The
-            write was blocked.
+            {written
+              ? `File changed on disk since the agent wrote it (${conflict}). Confirming or reverting was blocked.`
+              : `File changed on disk since this proposal was made (${conflict}). The write was blocked.`}
           </span>
           <span className="flex shrink-0 items-center gap-1.5">
             <Button
@@ -782,7 +929,11 @@ export function AiDiffPane({
 
       {applyError ? (
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-800 dark:text-rose-200">
-          <span>Could not apply the reviewed file: {applyError}</span>
+          <span>
+            {written
+              ? `Could not confirm the reviewed file: ${applyError}`
+              : `Could not apply the reviewed file: ${applyError}`}
+          </span>
           <Button
             size="sm"
             variant="ghost"

@@ -8,7 +8,9 @@ export const AI_DIFF_STATUS_LABEL: Record<AiDiffStatus, string> = {
   pending: "Pending review",
   reviewing: "Reviewing",
   done: "Reviewed",
-  applied: "Applied",
+  // Fase 8: the review is confirmed, not applied — the agent already
+  // wrote the change; confirming only decides what stays.
+  applied: "Confirmed",
   rejected: "Rejected",
   conflict: "Conflict",
   restored: "Restored",

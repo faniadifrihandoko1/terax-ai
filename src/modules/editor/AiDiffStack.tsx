@@ -46,6 +46,7 @@ export function AiDiffStack({
         targetPath={active.targetPath}
         fileDecision={active.fileDecision}
         hunkDecisions={active.hunkDecisions}
+        written={active.written}
         onSetHunkDecision={(hunkIndex, decision) =>
           onSetHunkDecision(active.approvalId, hunkIndex, decision)
         }

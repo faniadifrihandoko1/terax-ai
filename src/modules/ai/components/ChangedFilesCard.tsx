@@ -271,7 +271,7 @@ function statusShortLabel(status: AiDiffStatus): string {
     case "done":
       return "Selesai";
     case "applied":
-      return "Diterapkan";
+      return "Dikonfirmasi";
     case "rejected":
       return "Ditolak";
     case "conflict":
