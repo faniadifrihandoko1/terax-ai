@@ -774,11 +774,15 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   unreadable, or no editor tab at all (review/diff tabs named
   explicitly). The palette command is now disabled with the correct
   reason on ai-diff ("Buka file di tab editor, bukan tab review")
-  and git-diff/git-commit-file tabs ("…bukan tab diff"). Adjacent
-  finding, not fixed here: `findResultForFile` in `lib/eslintJson.ts`
-  canonicalizes separators but not case, so on Windows an
-  ESLint-returned path differing only in casing still yields
-  "no-result-match".
+  and git-diff/git-commit-file tabs ("…bukan tab diff").
+  Fase 10.3 (ESLint result matching): `findResultForFile` in
+  `lib/eslintJson.ts` now compares with the same canonical key as the
+  rest of the ESLint chain (`eslintPathKey` — forward slashes,
+  lowercased on Windows), so an ESLint-returned path differing only in
+  casing (drive letter, a segment) still matches and a successful run
+  can no longer end in a silent "no-result-match" with zero
+  diagnostics. The `no-result-match` detail text no longer blames case
+  on Windows; symlink / 8.3 short-name mismatches remain possible.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
