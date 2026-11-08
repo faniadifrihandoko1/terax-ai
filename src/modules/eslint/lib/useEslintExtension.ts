@@ -184,12 +184,14 @@ class EslintPlugin {
       return;
     }
     if (result.kind === "timeout" || result.kind === "failed") {
+      const message =
+        result.kind === "timeout" ? "ESLint timed out" : result.message;
       store.setRootStatus(binary.root, {
         kind: "error",
         root: binary.root,
-        message:
-          result.kind === "timeout" ? "ESLint timed out" : result.message,
+        message,
       });
+      notifyEslintRunFailed(binary.root, message);
       return;
     }
     if (result.kind === "missing-config") {
@@ -214,6 +216,25 @@ class EslintPlugin {
 
 export function eslintPluginExtension(path: string): Extension {
   return ViewPlugin.define((view) => new EslintPlugin(view, path));
+}
+
+/**
+ * Warns once per root per session that ESLint runs are failing for
+ * that project (timeout, spawn failure, bad output). Shares the
+ * once-per-root guard with the missing-binary/config toasts, so a
+ * broken project does not spam a toast on every debounced trigger.
+ * Previously a failed run only set rootStatus to "error" and the user
+ * saw nothing at all.
+ */
+export function notifyEslintRunFailed(root: string, message: string): void {
+  const store = useEslintStore.getState();
+  if (store.notifiedRoots[root]) return;
+  store.markRootNotified(root);
+  toast.warning("ESLint gagal dijalankan", {
+    description:
+      message ||
+      "Periksa instalasi ESLint di project ini, atau matikan diagnostik ESLint di Settings → General.",
+  });
 }
 
 /**

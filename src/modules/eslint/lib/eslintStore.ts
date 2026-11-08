@@ -14,7 +14,8 @@ type State = {
   byPath: Record<string, Diagnostic[]>;
   /** Detection / run status per project root. */
   rootStatus: Record<string, EslintRootStatus>;
-  /** Roots already shown a missing-ESLint toast this session. */
+  /** Roots already shown an ESLint-problem toast this session
+   * (missing binary/config, or a failed run). */
   notifiedRoots: Record<string, true>;
   setPathDiagnostics: (path: string, diags: Diagnostic[]) => void;
   clearPath: (path: string) => void;
