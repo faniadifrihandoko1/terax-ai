@@ -19,6 +19,7 @@ describe("pendingProposals", () => {
       originalContent: "hello",
       proposedContent: "hello world",
       isNewFile: false,
+      kind: "edit",
     });
     expect(getPendingProposal(FILE)).toEqual(p);
   });
@@ -28,6 +29,37 @@ describe("pendingProposals", () => {
     const p = composePendingProposal(FILE, "one two", "one two three", false);
     expect(p.originalContent).toBe("one");
     expect(p.proposedContent).toBe("one two three");
+  });
+
+  it("records a delete with its kind and an empty written content", () => {
+    const p = composePendingProposal(FILE, "gone\n", "", false, "delete");
+    expect(p).toEqual({
+      originalContent: "gone\n",
+      proposedContent: "",
+      isNewFile: false,
+      kind: "delete",
+    });
+  });
+
+  it("records a rename with its kind and target path", () => {
+    const p = composePendingProposal(
+      FILE,
+      "same\n",
+      "same\n",
+      false,
+      "rename",
+      "/workspace/b.txt",
+    );
+    expect(p.kind).toBe("rename");
+    expect(p.targetPath).toBe("/workspace/b.txt");
+    expect(p.proposedContent).toBe("same\n");
+  });
+
+  it("keeps the first kind when a later write composes on top", () => {
+    composePendingProposal(FILE, "one", "one two", false, "delete");
+    const p = composePendingProposal(FILE, "one two", "one two three", false);
+    expect(p.kind).toBe("delete");
+    expect(p.originalContent).toBe("one");
   });
 
   it("lets a whole-file write replace the composed content", () => {
@@ -50,6 +82,7 @@ describe("pendingProposals", () => {
       originalContent: "x",
       proposedContent: "y",
       isNewFile: true,
+      kind: "edit",
     });
   });
 

@@ -1,20 +1,24 @@
 /**
- * In-memory pending proposals (Fase 6, Antigravity-style).
+ * In-memory written baseline (Fase 6 proposal registry, write-first
+ * since Fase 8).
  *
- * Since Fase 6 the agent's file tools no longer write to disk: their
- * `execute` only *proposes*. A proposal lives here, keyed by canonical
- * absolute path, until the user applies or discards it in the review tab
- * (or the session changes). The registry is what lets several tool calls
- * to the same file in one run compose into a single reviewable proposal
+ * Since Fase 8 the agent's file tools write to disk immediately: their
+ * `execute` records the write here, keyed by canonical absolute path,
+ * until the user confirms or reverts it in the review tab (or the
+ * session changes). The registry is what lets several tool calls to
+ * the same file in one run compose into a single reviewable change
  * instead of racing each other:
  *
- * - The first proposal for a path records the on-disk content as the
- *   original; later proposals apply their delta on top of the composed
- *   proposed content, so the review tab shows one accumulated diff.
+ * - The first write for a path records the on-disk content as the
+ *   original (the baseline); later writes advance only the written
+ *   content, so the review tab shows one accumulated diff against the
+ *   original file — and a Reject reverts to the original, never to an
+ *   intermediate write.
  * - The bridge opens (or updates) one ai-diff tab per path from this
- *   registry; without a registry entry it falls back to deriving the
- *   proposal from the on-disk content, as before.
- * - Apply/Discard (reviewApply) and plan-apply (planStore) clear the
+ *   registry and takes the checkpoint from it; without a registry
+ *   entry it falls back to the persisted checkpoint, or to deriving
+ *   the proposal from the on-disk content (pre-Fase-8 sessions only).
+ * - Confirm/Revert (reviewApply) and plan-apply (planStore) clear the
  *   entry, so the next edit starts from the new on-disk content.
  * - Plan mode never touches the registry: queued plan edits keep their
  *   own per-item proposed content.
@@ -22,15 +26,22 @@
  * Module-level state, deliberately not in a store: tools run outside
  * React, and the bridge reads it from an effect. It is wiped on session
  * change by AgentRunBridge; a restart loses it, and the bridge then
- * re-derives proposals from the persisted messages instead.
+ * re-derives proposals from the persisted checkpoint or messages
+ * instead.
  */
+export type PendingProposalKind = "edit" | "delete" | "rename";
+
 export type PendingProposal = {
-  /** On-disk content when the first proposal for this path was made. */
+  /** On-disk content when the first write for this path happened. */
   originalContent: string;
-  /** Composed content of every pending proposal for this path. */
+  /** Content of the latest write for this path (what is on disk now). */
   proposedContent: string;
-  /** True when the file did not exist on disk at proposal time. */
+  /** True when the file did not exist on disk at first-write time. */
   isNewFile: boolean;
+  /** What the write did. Defaults to "edit". */
+  kind: PendingProposalKind;
+  /** Rename destination. Only set when kind is "rename". */
+  targetPath?: string;
 };
 
 const pending = new Map<string, PendingProposal>();
@@ -42,21 +53,29 @@ export function getPendingProposal(
 }
 
 /**
- * Records (or extends) the pending proposal for a path. An existing
- * entry keeps its original content — the review is always against the
- * on-disk baseline the first proposal saw — and only the proposed
- * content moves forward.
+ * Records (or extends) the written baseline for a path. An existing
+ * entry keeps its original content and its kind — the review is always
+ * against the on-disk baseline the first write saw — and only the
+ * written content moves forward.
  */
 export function composePendingProposal(
   path: string,
   originalContent: string,
   proposedContent: string,
   isNewFile: boolean,
+  kind: PendingProposalKind = "edit",
+  targetPath?: string,
 ): PendingProposal {
   const existing = pending.get(path);
   const next: PendingProposal = existing
     ? { ...existing, proposedContent }
-    : { originalContent, proposedContent, isNewFile };
+    : {
+        originalContent,
+        proposedContent,
+        isNewFile,
+        kind,
+        ...(targetPath !== undefined ? { targetPath } : {}),
+      };
   pending.set(path, next);
   return next;
 }
