@@ -45,13 +45,15 @@ import type {
   ToolUIPart,
   UIMessage,
 } from "ai";
-import { memo, useCallback, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import type { AiDiffStatus } from "@/modules/tabs";
 import { AiToolApproval } from "./AiToolApproval";
 import { ChangedFilesCard } from "./ChangedFilesCard";
 import { shouldShowChangesCard } from "../lib/changesCardVisibility";
 import { buildPartGroups, partType, type AnyPart } from "../lib/partGroups";
 import { estimateMessageHeight } from "./messageHeightEstimate";
+import { useTodosStore } from "../store/todoStore";
+import { isAbnormalOutcome, runOutcomeLabel } from "../lib/runOutcome";
 
 function CommandSnippet({ name }: { name: string }) {
   const meta = SLASH_COMMANDS[name];
@@ -212,6 +214,31 @@ export function AiChatView({
   const hitStepCap = useChatStore((s) => s.agentMeta.hitStepCap);
   const compactionNotice = useChatStore((s) => s.agentMeta.compactionNotice);
   const patchAgentMeta = useChatStore((s) => s.patchAgentMeta);
+  const lastRunOutcome = useChatStore((s) => s.agentMeta.lastRunOutcome);
+  const sessionId = useChatStore((s) => s.activeSessionId);
+  const sessionTodos = useTodosStore((s) =>
+    sessionId ? s.bySession[sessionId] : undefined,
+  );
+  const openTodos = useMemo(
+    () => (sessionTodos ?? []).filter((t) => t.status !== "completed"),
+    [sessionTodos],
+  );
+  // The todos live in their own store; make sure this session's list is
+  // loaded so the interrupted-run notice below can count open items.
+  useEffect(() => {
+    if (sessionId) void useTodosStore.getState().hydrate(sessionId);
+  }, [sessionId]);
+  // Dismissal is keyed on the outcome + open count, so a new run (or a
+  // changed todo list) shows the notice again.
+  const [dismissedNoticeKey, setDismissedNoticeKey] = useState<string | null>(
+    null,
+  );
+  const noticeKey =
+    lastRunOutcome !== null && openTodos.length > 0
+      ? `${sessionId}:${lastRunOutcome}:${openTodos.length}`
+      : null;
+  const showRunNotice =
+    !isBusy && noticeKey !== null && dismissedNoticeKey !== noticeKey;
   const showContinue =
     !isBusy && hitStepCap && lastMessage?.role === "assistant";
 
@@ -253,6 +280,20 @@ export function AiChatView({
           <CompactionNotice
             droppedCount={compactionNotice.droppedCount}
             onDismiss={() => patchAgentMeta({ compactionNotice: null })}
+          />
+        )}
+        {showRunNotice && lastRunOutcome !== null && (
+          <InterruptedRunNotice
+            outcome={lastRunOutcome}
+            openCount={openTodos.length}
+            onContinue={() =>
+              void sendMessage(
+                "Lanjutkan task ini. Pertama verifikasi di disk apakah perubahan dari run sebelumnya benar-benar ada (baca ulang file yang disentuh); selesaikan todo yang masih terbuka; jangan menyatakan selesai sebelum semua todo completed dan perubahan terverifikasi.",
+              )
+            }
+            onDismiss={() =>
+              setDismissedNoticeKey(noticeKey)
+            }
           />
         )}
         {showSpinner && (
@@ -310,6 +351,57 @@ const CompactionNotice = memo(function CompactionNotice({
         type="button"
         onClick={onDismiss}
         className="text-[10.5px] underline opacity-70 hover:opacity-100"
+      >
+        Dismiss
+      </button>
+    </div>
+  );
+});
+
+/**
+ * Fase 9: a run that ended with open todos must not look like a success.
+ * After an abnormal end (stopped / interrupted / error) the notice says
+ * so plainly; after a clean finish with todos still open it says the
+ * agent claimed done while work remains. In both cases the written
+ * changes are still on disk and reviewable — nothing is lost, but
+ * nothing is finished either. "Lanjutkan" resumes with a verify-first
+ * instruction (the transport also injects the <previous-run> reminder).
+ */
+const InterruptedRunNotice = memo(function InterruptedRunNotice({
+  outcome,
+  openCount,
+  onContinue,
+  onDismiss,
+}: {
+  outcome: "finished" | "stopped" | "interrupted" | "error";
+  openCount: number;
+  onContinue: () => void;
+  onDismiss: () => void;
+}) {
+  const abnormal = isAbnormalOutcome(outcome);
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[11px]">
+      <span className="size-1.5 shrink-0 rounded-full bg-amber-500/80" />
+      <span className="flex-1 leading-relaxed text-foreground">
+        {abnormal
+          ? `Run ${runOutcomeLabel(outcome)} — ${openCount} todo belum selesai.`
+          : `Agent menyatakan selesai, tapi ${openCount} todo masih terbuka.`}{" "}
+        <span className="text-muted-foreground">
+          Perubahan yang sudah tertulis tetap ada di disk dan bisa di-review
+          di Changed Files.
+        </span>
+      </span>
+      <button
+        type="button"
+        onClick={onContinue}
+        className="shrink-0 rounded-md border border-border/60 bg-background px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
+      >
+        Lanjutkan
+      </button>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="shrink-0 text-[10.5px] underline opacity-70 hover:opacity-100"
       >
         Dismiss
       </button>
