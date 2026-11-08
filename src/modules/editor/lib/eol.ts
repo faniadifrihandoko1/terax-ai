@@ -15,6 +15,20 @@ export function normalizeToLf(text: string): string {
   return text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text;
 }
 
+/**
+ * True when raw on-disk text matches buffer text. Buffers live in LF
+ * space, so a CRLF file on disk matches its LF buffer — comparing raw
+ * bytes would report every CRLF file as dirty forever (this is what
+ * silently disabled ESLint runs for CRLF files: the dirty check
+ * compared raw disk text against the LF buffer and never matched).
+ */
+export function diskTextMatchesBuffer(
+  diskText: string,
+  bufferText: string,
+): boolean {
+  return normalizeToLf(diskText) === bufferText;
+}
+
 export function restoreEol(text: string, eol: Eol): string {
   return eol === "\n" ? text : text.replace(/\n/g, "\r\n");
 }

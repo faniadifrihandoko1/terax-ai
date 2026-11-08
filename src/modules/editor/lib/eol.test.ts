@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { detectEol, normalizeToLf, restoreEol } from "./eol";
+import {
+  detectEol,
+  diskTextMatchesBuffer,
+  normalizeToLf,
+  restoreEol,
+} from "./eol";
 
 describe("detectEol", () => {
   it("detects LF", () => {
@@ -45,5 +50,54 @@ describe("restoreEol", () => {
 
   it("leaves LF content untouched", () => {
     expect(restoreEol("a\nb", "\n")).toBe("a\nb");
+  });
+});
+
+describe("diskTextMatchesBuffer", () => {
+  // A saved CRLF file matches its LF buffer: this is the ESLint
+  // dirty check. Comparing raw bytes here skipped every CRLF file
+  // forever, so no diagnostics ever appeared for them.
+  it("matches a saved CRLF file against its LF buffer", () => {
+    const disk = "const a = 1;\r\nconst b = 2;\r\n";
+    const buffer = "const a = 1;\nconst b = 2;\n";
+    expect(diskTextMatchesBuffer(disk, buffer)).toBe(true);
+  });
+
+  it("matches a realistic CRLF TSX file against its LF buffer", () => {
+    const disk =
+      "const cvReport = useMemo(\r\n" +
+      "  () =>\r\n" +
+      "    cvResult\r\n" +
+      "      ? null // buildCvScreeningReport dinonaktifkan sementara\r\n" +
+      "      : null,\r\n" +
+      "  [cvResult],\r\n" +
+      ");\r\n";
+    const buffer = normalizeToLf(disk);
+    expect(diskTextMatchesBuffer(disk, buffer)).toBe(true);
+  });
+
+  it("still reports a genuinely dirty buffer", () => {
+    const disk = "const a = 1;\r\nconst b = 2;\r\n";
+    const buffer = "const a = 1;\nconst b = 3;\n";
+    expect(diskTextMatchesBuffer(disk, buffer)).toBe(false);
+  });
+
+  it("still reports a genuinely dirty buffer when only a line is added", () => {
+    const disk = "const a = 1;\r\nconst b = 2;\r\n";
+    const buffer = "const a = 1;\nconst b = 2;\nconst c = 3;\n";
+    expect(diskTextMatchesBuffer(disk, buffer)).toBe(false);
+  });
+
+  it("matches LF files (no regression)", () => {
+    expect(diskTextMatchesBuffer("a\nb\n", "a\nb\n")).toBe(true);
+    expect(diskTextMatchesBuffer("a\nb\n", "a\nc\n")).toBe(false);
+  });
+
+  it("matches an empty file", () => {
+    expect(diskTextMatchesBuffer("", "")).toBe(true);
+  });
+
+  it("treats lone CR the same way the buffer does", () => {
+    expect(diskTextMatchesBuffer("a\rb\r", "a\nb\n")).toBe(true);
   });
 });

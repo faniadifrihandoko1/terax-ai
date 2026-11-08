@@ -6,6 +6,7 @@ import {
 } from "@codemirror/lint";
 import type { Extension } from "@codemirror/state";
 import { ViewPlugin, type EditorView, type ViewUpdate } from "@codemirror/view";
+import { diskTextMatchesBuffer } from "@/modules/editor/lib/eol";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -38,8 +39,11 @@ const CHANGE_DELAY_MS = 600;
  * re-applies the stored ESLint diagnostics whenever another publisher
  * wipes them. ESLint lints the file on disk, never the buffer: a run
  * is skipped while the buffer is dirty, so the diagnostics shown
- * always match the saved file. Diagnostics refresh on open, on save,
- * and when an external write reloads the buffer.
+ * always match the saved file. "Dirty" is judged after LF
+ * normalization (diskTextMatchesBuffer): buffers live in LF space,
+ * so a saved CRLF file matches its buffer — comparing raw bytes
+ * would skip every CRLF file forever. Diagnostics refresh on open,
+ * on save, and when an external write reloads the buffer.
  */
 class EslintPlugin {
   private view: EditorView;
@@ -149,7 +153,7 @@ class EslintPlugin {
       return;
     }
     if (disk === null) return;
-    if (disk !== docAtStart.toString()) return;
+    if (!diskTextMatchesBuffer(disk, docAtStart.toString())) return;
     const binary = await resolveEslintBinary(this.path);
     if (
       this.destroyed ||
