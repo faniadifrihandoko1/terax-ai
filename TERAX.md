@@ -706,10 +706,17 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   (agent write), debounced (600 ms) with a generation guard that drops
   stale runs. A run is skipped while the buffer is dirty: ESLint lints
   the file on disk, so diagnostics always describe the saved file.
+  "Dirty" is judged after LF normalization (`diskTextMatchesBuffer` in
+  `src/modules/editor/lib/eol.ts`): buffers live in LF space, so a saved
+  CRLF file matches its buffer. Before this fix the check compared raw
+  bytes, which silently skipped every CRLF file forever — no
+  diagnostics, no toast (reported against a Next.js project with
+  ESLint 8.57.0, `@typescript-eslint/no-unused-vars: error`).
   Settings → General → "ESLint diagnostics" (`eslintEnabled` in
   `src/modules/settings/store.ts`, default on). When the project has no
   ESLint or no config, a warning toast appears once per root per session
-  instead of failing silently. Known limits: diagnostics cover the saved
+  instead of failing silently; a timed-out or failed run now warns the
+  same way (`notifyEslintRunFailed`). Known limits: diagnostics cover the saved
   file only, never unsaved typing; badges appear only for open files
   (the LSP has the same limit); a very dirty file can exceed the 256 KiB
   one-shot output cap and report a failure; a global eslint is used only
