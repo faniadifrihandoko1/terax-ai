@@ -106,6 +106,14 @@ function parseDigitKeyed<T>(
  * Snapshots restorable review state for one session. An "applied"
  * proposal is only restorable when it has a checkpoint; without one,
  * restoring it would show an Applied file that cannot be undone.
+ *
+ * Fase 9 (slice 2): checkpoints without an open tab are snapshotted
+ * too, as pending checkpoint-only proposals. The tool already wrote
+ * the change, but the bridge never opened the tab (or it was closed
+ * before the debounced save) — without this the checkpoint would be
+ * lost on restart and Restore would stop working. A checkpoint has
+ * no isNewFile flag; like ChangedFilesCard, an empty baseline means
+ * a new file. A tab's proposal always wins over its checkpoint.
  */
 export function snapshotReviewState(
   sessionId: string,
@@ -113,42 +121,58 @@ export function snapshotReviewState(
   now: number = Date.now(),
   checkpoints: ReadonlyMap<string, FileCheckpoint> = new Map(),
 ): PersistedReviewState {
+  const covered = new Set(tabs.map((tab) => tab.approvalId));
+  const proposals: PersistedReviewProposal[] = tabs
+    .filter(
+      (tab) =>
+        isRestorable(tab.status) &&
+        (tab.status !== "applied" || checkpoints.has(tab.approvalId)),
+    )
+    .map((tab) => {
+      const hunkDecisions: Record<string, HunkDecision> = {};
+      for (const [key, decision] of Object.entries(tab.hunkDecisions)) {
+        if (decision === "accepted" || decision === "rejected") {
+          hunkDecisions[key] = decision;
+        }
+      }
+      const checkpoint = checkpoints.get(tab.approvalId);
+      return {
+        approvalId: tab.approvalId,
+        path: tab.path,
+        isNewFile: tab.isNewFile,
+        status: tab.status as RestorableReviewStatus,
+        hunkDecisions,
+        ...(tab.mutationKind !== "edit"
+          ? { mutationKind: tab.mutationKind }
+          : {}),
+        ...(tab.targetPath !== undefined
+          ? { targetPath: tab.targetPath }
+          : {}),
+        ...(tab.fileDecision !== undefined
+          ? { fileDecision: tab.fileDecision }
+          : {}),
+        ...(checkpoint !== undefined ? { checkpoint } : {}),
+        savedAt: now,
+      };
+    });
+  for (const cp of checkpoints.values()) {
+    if (covered.has(cp.approvalId)) continue;
+    proposals.push({
+      approvalId: cp.approvalId,
+      path: cp.path,
+      isNewFile: cp.kind === "edit" && cp.contentBefore === "",
+      status: "pending",
+      hunkDecisions: {},
+      ...(cp.kind !== "edit" ? { mutationKind: cp.kind } : {}),
+      ...(cp.targetPath !== undefined ? { targetPath: cp.targetPath } : {}),
+      checkpoint: cp,
+      savedAt: now,
+    });
+  }
   return {
     version: REVIEW_STATE_VERSION,
     sessionId,
-    proposals: tabs
-      .filter(
-        (tab) =>
-          isRestorable(tab.status) &&
-          (tab.status !== "applied" || checkpoints.has(tab.approvalId)),
-      )
-      .map((tab) => {
-        const hunkDecisions: Record<string, HunkDecision> = {};
-        for (const [key, decision] of Object.entries(tab.hunkDecisions)) {
-          if (decision === "accepted" || decision === "rejected") {
-            hunkDecisions[key] = decision;
-          }
-        }
-        const checkpoint = checkpoints.get(tab.approvalId);
-        return {
-          approvalId: tab.approvalId,
-          path: tab.path,
-          isNewFile: tab.isNewFile,
-          status: tab.status as RestorableReviewStatus,
-          hunkDecisions,
-          ...(tab.mutationKind !== "edit"
-            ? { mutationKind: tab.mutationKind }
-            : {}),
-          ...(tab.targetPath !== undefined
-            ? { targetPath: tab.targetPath }
-            : {}),
-          ...(tab.fileDecision !== undefined
-            ? { fileDecision: tab.fileDecision }
-            : {}),
-          ...(checkpoint !== undefined ? { checkpoint } : {}),
-          savedAt: now,
-        };
-      }),
+    proposals,
   };
 }
 

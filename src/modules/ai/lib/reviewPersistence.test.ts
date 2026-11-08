@@ -173,6 +173,143 @@ describe("snapshotReviewState (FR-10, Fase 5)", () => {
   });
 });
 
+describe("snapshotReviewState checkpoint-only proposals (Fase 9, slice 2)", () => {
+  const editCheckpoint = {
+    approvalId: "c1",
+    path: "src/a.ts",
+    kind: "edit" as const,
+    contentBefore: "a\n",
+    contentAfter: "b\n",
+    hashBefore: 1,
+    hashAfter: 2,
+    appliedAt: 5,
+    appliedHunks: [],
+  };
+
+  it("persists a checkpoint with no open tab as a pending proposal", () => {
+    const state = snapshotReviewState(
+      "s-1",
+      [],
+      123,
+      new Map([["c1", editCheckpoint]]),
+    );
+    expect(state.proposals).toEqual([
+      {
+        approvalId: "c1",
+        path: "src/a.ts",
+        isNewFile: false,
+        status: "pending",
+        hunkDecisions: {},
+        checkpoint: editCheckpoint,
+        savedAt: 123,
+      },
+    ]);
+    // The synthesized proposal round-trips through parse.
+    expect(
+      parseReviewState(JSON.parse(serializeReviewState(state))),
+    ).toEqual(state);
+  });
+
+  it("marks an edit checkpoint with an empty baseline as a new file", () => {
+    const state = snapshotReviewState(
+      "s-1",
+      [],
+      123,
+      new Map([
+        [
+          "c2",
+          { ...editCheckpoint, approvalId: "c2", contentBefore: "" },
+        ],
+      ]),
+    );
+    expect(state.proposals[0]?.isNewFile).toBe(true);
+  });
+
+  it("keeps delete/rename fields on checkpoint-only proposals", () => {
+    const state = snapshotReviewState(
+      "s-1",
+      [],
+      123,
+      new Map([
+        [
+          "d1",
+          {
+            approvalId: "d1",
+            path: "src/a.ts",
+            kind: "delete" as const,
+            contentBefore: "gone\n",
+            contentAfter: null,
+            hashBefore: 1,
+            hashAfter: null,
+            appliedAt: 5,
+            appliedHunks: [],
+          },
+        ],
+        [
+          "r1",
+          {
+            approvalId: "r1",
+            path: "src/a.ts",
+            kind: "rename" as const,
+            contentBefore: "same\n",
+            contentAfter: "same\n",
+            hashBefore: 1,
+            hashAfter: 1,
+            targetPath: "src/b.ts",
+            appliedAt: 5,
+            appliedHunks: [],
+          },
+        ],
+      ]),
+    );
+    expect(state.proposals).toEqual([
+      {
+        approvalId: "d1",
+        path: "src/a.ts",
+        isNewFile: false,
+        status: "pending",
+        hunkDecisions: {},
+        mutationKind: "delete",
+        checkpoint: expect.objectContaining({ kind: "delete" }),
+        savedAt: 123,
+      },
+      {
+        approvalId: "r1",
+        path: "src/a.ts",
+        isNewFile: false,
+        status: "pending",
+        hunkDecisions: {},
+        mutationKind: "rename",
+        targetPath: "src/b.ts",
+        checkpoint: expect.objectContaining({ kind: "rename" }),
+        savedAt: 123,
+      },
+    ]);
+  });
+
+  it("lets an open tab win over its checkpoint instead of duplicating", () => {
+    const state = snapshotReviewState(
+      "s-1",
+      [tab({ approvalId: "c1", status: "reviewing" })],
+      123,
+      new Map([
+        ["c1", editCheckpoint],
+        [
+          "c9",
+          { ...editCheckpoint, approvalId: "c9", path: "src/z.ts" },
+        ],
+      ]),
+    );
+    expect(state.proposals.map((p) => p.approvalId)).toEqual(["c1", "c9"]);
+    expect(state.proposals[0]?.status).toBe("reviewing");
+    expect(state.proposals[1]?.status).toBe("pending");
+  });
+
+  it("saves nothing when there are no tabs and no checkpoints", () => {
+    expect(snapshotReviewState("s-1", [], 123).proposals).toEqual([]);
+  });
+});
+
 describe("parseReviewState (FR-10, Fase 4)", () => {
   it("rejects wrong versions and malformed shapes", () => {
     expect(parseReviewState(null)).toBeNull();
