@@ -39,7 +39,7 @@ import {
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
-import { requestEslintRunWithReport } from "@/modules/eslint";
+import { requestEslintRunWithReport } from "@/modules/eslint/lib/runEslintManual";
 import { useControlBridge } from "@/modules/control";
 import {
   type EditorPaneHandle,

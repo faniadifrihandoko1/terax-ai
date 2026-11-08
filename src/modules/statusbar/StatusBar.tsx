@@ -16,7 +16,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { CwdBreadcrumb } from "./CwdBreadcrumb";
 import { DiagnosticsBadge } from "./DiagnosticsBadge";
 import { WorkspaceEnvSelector } from "./WorkspaceEnvSelector";
-import { EslintStatusPill } from "@/modules/eslint";
+import { EslintStatusPill } from "@/modules/eslint/components/EslintStatusPill";
 
 type Props = {
   cwd: string | null;
