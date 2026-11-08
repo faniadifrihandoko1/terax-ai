@@ -22,6 +22,7 @@ import {
   setAutostart,
   setConfirmCloseRunningTerminal,
   setDefaultWorkspaceEnv,
+  setEslintEnabled,
   setExplorerGitDecorations,
   setRestoreWindowState,
   setShowHidden,
@@ -119,6 +120,7 @@ export function GeneralSection() {
   );
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
   const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
+  const eslintEnabled = usePreferencesStore((s) => s.eslintEnabled);
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
   const agentNotificationSound = usePreferencesStore(
     (s) => s.agentNotificationSound,
@@ -256,6 +258,19 @@ export function GeneralSection() {
           <Switch
             checked={aiReviewInline}
             onCheckedChange={(v) => void setAiReviewInline(v)}
+          />
+        </SettingRow>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label>ESLint</Label>
+        <SettingRow
+          title="ESLint diagnostics"
+          description="Lint open JavaScript/TypeScript files with the project's own ESLint install and config. Violations show as red underlines in the editor and counts in the file explorer and status bar. Runs on open and on save, never while typing."
+        >
+          <Switch
+            checked={eslintEnabled}
+            onCheckedChange={(v) => void setEslintEnabled(v)}
           />
         </SettingRow>
       </div>

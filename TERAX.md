@@ -683,6 +683,37 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   edits, which is why the tool-side checkpoint exists); local tool
   execution still cannot be cancelled by Stop or a dropped connection
   (the write already happened, only its result is discarded).
+  Fase 10 (ESLint diagnostics, Antigravity-style): open JavaScript/TypeScript
+  files are linted with the project's own ESLint install and config, never a
+  bundled copy (`src/modules/eslint/`). Detection walks up from the file to
+  `node_modules/.bin/eslint` (or `eslint.cmd` on Windows), falling back to
+  `npx --no-install eslint`; nothing is installed into the project. Runs go
+  through the existing one-shot `shell_run_command` (`--format json
+  --no-warn-ignored`, 30 s timeout; exit 1 means violations found, exit 2
+  with a config error means the project has no usable config). Results are
+  mapped to CodeMirror diagnostics (`eslintMessagesToDiagnostics` in
+  `lib/eslintJson.ts`: 1-based positions clamped to the document, severity
+  2 is error, 1 is warning, rule id in the message) and published into the
+  shared lint state merged with the LSP diagnostics (`mergeDiagnostics` in
+  `lib/eslintMerge.ts`, ESLint entries tagged `source: "eslint"`): the LSP
+  plugin publishes with setDiagnostics, which replaces the whole set, so a
+  merge guard re-applies the stored ESLint diagnostics whenever another
+  publisher wipes them. The existing `diagnosticsReporter` counts the
+  merged set, so the status bar badge and the explorer row counts
+  (`DiagnosticsMark` in `src/modules/explorer/`, folders aggregate their
+  subtree) update with no extra wiring. Triggers are open, save
+  (`requestEslintRun` from `EditorPane.performSave`) and external reload
+  (agent write), debounced (600 ms) with a generation guard that drops
+  stale runs. A run is skipped while the buffer is dirty: ESLint lints
+  the file on disk, so diagnostics always describe the saved file.
+  Settings → General → "ESLint diagnostics" (`eslintEnabled` in
+  `src/modules/settings/store.ts`, default on). When the project has no
+  ESLint or no config, a warning toast appears once per root per session
+  instead of failing silently. Known limits: diagnostics cover the saved
+  file only, never unsaved typing; badges appear only for open files
+  (the LSP has the same limit); a very dirty file can exceed the 256 KiB
+  one-shot output cap and report a failure; a global eslint is used only
+  through npx without install.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
