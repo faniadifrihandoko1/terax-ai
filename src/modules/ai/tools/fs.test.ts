@@ -1,9 +1,13 @@
-import type { ToolExecutionOptions } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearAllPendingProposals,
   getPendingProposal,
 } from "../lib/pendingProposals";
+import {
+  clearAllCheckpoints,
+  getCheckpoint,
+  listCheckpoints,
+} from "../lib/reviewCheckpoint";
 import type { ToolContext } from "./context";
 
 function djb2(s: string): number {
@@ -49,11 +53,6 @@ vi.mock("../store/planStore", () => ({
 
 import { buildFsTools } from "./fs";
 
-const toolOptions: ToolExecutionOptions = {
-  toolCallId: "tool-call",
-  messages: [],
-};
-
 const FILE = "/workspace/a.txt";
 const TARGET = "/workspace/b.txt";
 
@@ -88,16 +87,21 @@ async function runTool(
   ctx: ToolContext,
   name: "write_file" | "create_directory" | "delete_file" | "rename_file",
   input: Record<string, unknown>,
+  toolCallId = "tool-call",
 ): Promise<FsResult> {
   const tools = buildFsTools(ctx);
   const execute = tools[name].execute;
   if (!execute) throw new Error(`${name} tool has no execute`);
-  return (await execute(input as never, toolOptions)) as unknown as FsResult;
+  return (await execute(input as never, {
+    toolCallId,
+    messages: [],
+  })) as unknown as FsResult;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   clearAllPendingProposals();
+  clearAllCheckpoints();
   planMock.active = false;
   nativeMock.canonicalize.mockImplementation(async (p: string) => p);
 });
@@ -117,6 +121,7 @@ describe("write_file writes to disk first (Fase 8)", () => {
       proposedContent: "new",
       isNewFile: false,
       kind: "edit",
+      approvalId: "tool-call",
     });
   });
 
@@ -192,6 +197,7 @@ describe("delete_file deletes immediately (Fase 8)", () => {
       proposedContent: "",
       isNewFile: false,
       kind: "delete",
+      approvalId: "tool-call",
     });
     // The read cache no longer claims the file exists.
     expect(ctx.readCache.has(FILE)).toBe(false);
@@ -242,6 +248,7 @@ describe("rename_file renames immediately (Fase 8)", () => {
       isNewFile: false,
       kind: "rename",
       targetPath: TARGET,
+      approvalId: "tool-call",
     });
     // The read cache follows the file to its new path.
     expect(ctx.readCache.has(FILE)).toBe(false);
@@ -283,5 +290,101 @@ describe("rename_file renames immediately (Fase 8)", () => {
     });
     expect(result.error).toBeTruthy();
     expect(nativeMock.renameFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("file tools checkpoint at write time (Fase 9, slice 2)", () => {
+  it("write_file records the checkpoint in the registry as soon as it writes", async () => {
+    nativeMock.readFile.mockResolvedValue(textFile("old"));
+    const result = await runTool(makeContext(new Map()), "write_file", {
+      path: FILE,
+      content: "new",
+    });
+    expect(result.written).toBe(true);
+    const cp = getCheckpoint("tool-call");
+    expect(cp?.kind).toBe("edit");
+    expect(cp?.contentBefore).toBe("old");
+    expect(cp?.contentAfter).toBe("new");
+  });
+
+  it("write_file keeps the first baseline on a second write to the same file", async () => {
+    nativeMock.readFile.mockResolvedValue(textFile("old"));
+    const ctx = makeContext(new Map());
+    await runTool(ctx, "write_file", { path: FILE, content: "v2" }, "tool-call-1");
+    nativeMock.readFile.mockResolvedValue(textFile("v2"));
+    await runTool(ctx, "write_file", { path: FILE, content: "v3" }, "tool-call-2");
+    expect(listCheckpoints().size).toBe(1);
+    expect(getCheckpoint("tool-call-2")).toBeUndefined();
+    const cp = getCheckpoint("tool-call-1");
+    expect(cp?.contentBefore).toBe("old");
+    expect(cp?.contentAfter).toBe("v3");
+  });
+
+  it("write_file records no checkpoint when the write fails or in plan mode", async () => {
+    nativeMock.readFile.mockResolvedValue(textFile("old"));
+    nativeMock.writeFile.mockRejectedValueOnce(new Error("disk full"));
+    const failed = await runTool(makeContext(new Map()), "write_file", {
+      path: FILE,
+      content: "new",
+    });
+    expect(failed.error).toContain("disk full");
+    expect(listCheckpoints().size).toBe(0);
+
+    planMock.active = true;
+    const queued = await runTool(makeContext(new Map()), "write_file", {
+      path: FILE,
+      content: "new",
+    });
+    expect(queued.queued_for_plan_review).toBe(true);
+    expect(listCheckpoints().size).toBe(0);
+  });
+
+  it("delete_file records a delete checkpoint, and none when the delete fails", async () => {
+    nativeMock.readFile.mockResolvedValue(textFile("content"));
+    const ctx = makeContext(
+      new Map([[FILE, { size: 7, hash: djb2("content") }]]),
+    );
+    const result = await runTool(ctx, "delete_file", { path: FILE });
+    expect(result.written).toBe(true);
+    const cp = getCheckpoint("tool-call");
+    expect(cp?.kind).toBe("delete");
+    expect(cp?.contentBefore).toBe("content");
+    expect(cp?.contentAfter).toBeNull();
+
+    nativeMock.deleteFile.mockRejectedValueOnce(new Error("permission denied"));
+    clearAllCheckpoints();
+    const failed = await runTool(
+      makeContext(new Map([[FILE, { size: 7, hash: djb2("content") }]])),
+      "delete_file",
+      { path: FILE },
+    );
+    expect(failed.error).toContain("permission denied");
+    expect(listCheckpoints().size).toBe(0);
+  });
+
+  it("rename_file records a rename checkpoint, and none when the rename fails", async () => {
+    nativeMock.readFile.mockImplementation(async (p: string) => {
+      if (p === FILE) return textFile("content");
+      throw new Error("no such file");
+    });
+    const result = await runTool(makeContext(new Map()), "rename_file", {
+      path: FILE,
+      to: TARGET,
+    });
+    expect(result.written).toBe(true);
+    const cp = getCheckpoint("tool-call");
+    expect(cp?.kind).toBe("rename");
+    expect(cp?.targetPath).toBe(TARGET);
+    expect(cp?.contentBefore).toBe("content");
+    expect(cp?.contentAfter).toBe("content");
+
+    nativeMock.renameFile.mockRejectedValueOnce(new Error("permission denied"));
+    clearAllCheckpoints();
+    const failed = await runTool(makeContext(new Map()), "rename_file", {
+      path: FILE,
+      to: TARGET,
+    });
+    expect(failed.error).toContain("permission denied");
+    expect(listCheckpoints().size).toBe(0);
   });
 });

@@ -4,7 +4,14 @@ import { native } from "../lib/native";
 import { djb2Hash } from "../lib/hash";
 import {
   composePendingProposal,
+  getPendingProposal,
 } from "../lib/pendingProposals";
+import {
+  buildDeleteCheckpoint,
+  buildEditCheckpoint,
+  buildRenameCheckpoint,
+  recordToolWriteCheckpoint,
+} from "../lib/reviewCheckpoint";
 import {
   checkDeleteGuard,
   checkRenameGuard,
@@ -152,7 +159,7 @@ export function buildFsTools(ctx: ToolContext) {
         path: z.string(),
         content: z.string(),
       }),
-      execute: async ({ path, content }) => {
+      execute: async ({ path, content }, { toolCallId }) => {
         const reqPath = resolvePath(path, ctx.getCwd());
         const safety = await checkWritableCanonical(reqPath, native.canonicalize);
         if (!safety.ok) return { error: safety.reason, path: reqPath };
@@ -188,6 +195,7 @@ export function buildFsTools(ctx: ToolContext) {
         // git shows the change at once and later terminal commands run
         // against the new file. A failed write records nothing, so the
         // run can retry it.
+        const prior = getPendingProposal(abs);
         try {
           await native.writeFile(abs, content);
         } catch (error) {
@@ -198,7 +206,28 @@ export function buildFsTools(ctx: ToolContext) {
             path: abs,
           };
         }
-        composePendingProposal(abs, original, content, isNewFile);
+        composePendingProposal(
+          abs,
+          original,
+          content,
+          isNewFile,
+          "edit",
+          undefined,
+          toolCallId,
+        );
+        // Fase 9 (slice 2): the checkpoint is taken here, at write
+        // time — see edit.ts for the reasoning.
+        recordToolWriteCheckpoint(
+          prior?.approvalId,
+          buildEditCheckpoint({
+            approvalId: toolCallId,
+            sessionId: ctx.getSessionId() ?? undefined,
+            path: abs,
+            originalContent: original,
+            reconstructedContent: content,
+            appliedHunks: [],
+          }),
+        );
         // The read cache must track the new content, so the delete
         // guard still passes for the agent's own write.
         ctx.readCache.set(abs, {
@@ -257,7 +286,7 @@ export function buildFsTools(ctx: ToolContext) {
           .optional()
           .describe("Why the file should be deleted."),
       }),
-      execute: async ({ path }) => {
+      execute: async ({ path }, { toolCallId }) => {
         const reqPath = resolvePath(path, ctx.getCwd());
         const safety = await checkWritableCanonical(reqPath, native.canonicalize);
         if (!safety.ok) return { error: safety.reason, path: reqPath };
@@ -297,6 +326,7 @@ export function buildFsTools(ctx: ToolContext) {
         // Fase 8 (write-first): the delete executes immediately — the
         // file is gone at once, and Reject restores it from the
         // checkpoint. A failed delete records nothing.
+        const prior = getPendingProposal(abs);
         try {
           await native.deleteFile(abs);
         } catch (error) {
@@ -307,7 +337,26 @@ export function buildFsTools(ctx: ToolContext) {
             path: abs,
           };
         }
-        composePendingProposal(abs, content, "", false, "delete");
+        composePendingProposal(
+          abs,
+          content,
+          "",
+          false,
+          "delete",
+          undefined,
+          toolCallId,
+        );
+        // Fase 9 (slice 2): the checkpoint is taken here, at delete
+        // time — see edit.ts for the reasoning.
+        recordToolWriteCheckpoint(
+          prior?.approvalId,
+          buildDeleteCheckpoint({
+            approvalId: toolCallId,
+            sessionId: ctx.getSessionId() ?? undefined,
+            path: abs,
+            content,
+          }),
+        );
         ctx.readCache.delete(abs);
         return {
           path: abs,
@@ -333,7 +382,7 @@ export function buildFsTools(ctx: ToolContext) {
           .optional()
           .describe("Why the file should be renamed."),
       }),
-      execute: async ({ path, to }) => {
+      execute: async ({ path, to }, { toolCallId }) => {
         const reqPath = resolvePath(path, ctx.getCwd());
         const reqTo = resolvePath(to, ctx.getCwd());
         const sourceSafety = await checkWritableCanonical(
@@ -413,6 +462,7 @@ export function buildFsTools(ctx: ToolContext) {
         // Fase 8 (write-first): the rename executes immediately — the
         // file already moved, and Reject renames it back from the
         // checkpoint. A failed rename records nothing.
+        const prior = getPendingProposal(abs);
         try {
           await native.renameFile(abs, absTo);
         } catch (error) {
@@ -423,7 +473,27 @@ export function buildFsTools(ctx: ToolContext) {
             path: abs,
           };
         }
-        composePendingProposal(abs, content, content, false, "rename", absTo);
+        composePendingProposal(
+          abs,
+          content,
+          content,
+          false,
+          "rename",
+          absTo,
+          toolCallId,
+        );
+        // Fase 9 (slice 2): the checkpoint is taken here, at rename
+        // time — see edit.ts for the reasoning.
+        recordToolWriteCheckpoint(
+          prior?.approvalId,
+          buildRenameCheckpoint({
+            approvalId: toolCallId,
+            sessionId: ctx.getSessionId() ?? undefined,
+            path: abs,
+            targetPath: absTo,
+            content,
+          }),
+        );
         ctx.readCache.delete(abs);
         ctx.readCache.set(absTo, {
           size: content.length,

@@ -2,7 +2,14 @@ import { tool } from "ai";
 import { z } from "zod";
 import { djb2Hash } from "../lib/hash";
 import { native } from "../lib/native";
-import { composePendingProposal } from "../lib/pendingProposals";
+import {
+  composePendingProposal,
+  getPendingProposal,
+} from "../lib/pendingProposals";
+import {
+  buildEditCheckpoint,
+  recordToolWriteCheckpoint,
+} from "../lib/reviewCheckpoint";
 import { checkWritableCanonical } from "../lib/security";
 import { newQueuedEditId, usePlanStore } from "../store/planStore";
 import { resolvePath, type ToolContext } from "./context";
@@ -131,6 +138,7 @@ async function proposeEdits(
   edits: { old_string: string; new_string: string; replace_all?: boolean }[],
   kind: "edit" | "multi_edit",
   ctx: ToolContext,
+  toolCallId: string,
 ): Promise<EditResult> {
   if (!ctx.readCache.has(abs)) {
     return {
@@ -163,9 +171,9 @@ async function proposeEdits(
   }
   // Fase 8 (write-first): the edit goes to disk immediately, like
   // Antigravity's write-first model — git shows the change at once and
-  // later terminal commands run against the new code. The checkpoint
-  // is taken from the registry baseline when the bridge opens the tab.
-  // A failed write records nothing, so the run can retry the edit.
+  // later terminal commands run against the new code. A failed write
+  // records nothing, so the run can retry the edit.
+  const prior = getPendingProposal(abs);
   try {
     await native.writeFile(abs, computed.content);
   } catch (error) {
@@ -176,7 +184,34 @@ async function proposeEdits(
       path: abs,
     };
   }
-  composePendingProposal(abs, computed.original, computed.content, false);
+  composePendingProposal(
+    abs,
+    computed.original,
+    computed.content,
+    false,
+    "edit",
+    undefined,
+    toolCallId,
+  );
+  // Fase 9 (slice 2): the checkpoint is taken here, at write time —
+  // the registry holds the written baseline from this moment on, so
+  // Restore works even if the run is interrupted before the bridge
+  // opens the review tab. A second write to the same file only
+  // advances the written state of the first write's checkpoint; the
+  // baseline never moves. The tool call id is the checkpoint id, and
+  // also the review tab's proposal id, so the bridge's later
+  // ensureWriteCheckpoint for the same id just advances it.
+  recordToolWriteCheckpoint(
+    prior?.approvalId,
+    buildEditCheckpoint({
+      approvalId: toolCallId,
+      sessionId: ctx.getSessionId() ?? undefined,
+      path: abs,
+      originalContent: computed.original,
+      reconstructedContent: computed.content,
+      appliedHunks: [],
+    }),
+  );
   // The read cache must track the new content: the delete guard compares
   // the file against the last read, and the agent's own write is not a
   // foreign change.
@@ -207,7 +242,10 @@ export function buildEditTools(ctx: ToolContext) {
         new_string: z.string().describe("Replacement substring."),
         replace_all: z.boolean().optional(),
       }),
-      execute: async ({ path, old_string, new_string, replace_all }) => {
+      execute: async (
+        { path, old_string, new_string, replace_all },
+        { toolCallId },
+      ) => {
         const reqPath = resolvePath(path, ctx.getCwd());
         const safety = await checkWritableCanonical(reqPath, native.canonicalize);
         if (!safety.ok) return { error: safety.reason, path: reqPath };
@@ -216,6 +254,7 @@ export function buildEditTools(ctx: ToolContext) {
           [{ old_string, new_string, replace_all }],
           "edit",
           ctx,
+          toolCallId,
         );
       },
     }),
@@ -235,11 +274,11 @@ export function buildEditTools(ctx: ToolContext) {
           )
           .min(1),
       }),
-      execute: async ({ path, edits }) => {
+      execute: async ({ path, edits }, { toolCallId }) => {
         const reqPath = resolvePath(path, ctx.getCwd());
         const safety = await checkWritableCanonical(reqPath, native.canonicalize);
         if (!safety.ok) return { error: safety.reason, path: reqPath };
-        return proposeEdits(safety.canonical, edits, "multi_edit", ctx);
+        return proposeEdits(safety.canonical, edits, "multi_edit", ctx, toolCallId);
       },
     }),
   } as const;

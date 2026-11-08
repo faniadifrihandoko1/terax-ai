@@ -1,6 +1,10 @@
-import type { ToolExecutionOptions } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAllPendingProposals, getPendingProposal } from "../lib/pendingProposals";
+import {
+  clearAllCheckpoints,
+  getCheckpoint,
+  listCheckpoints,
+} from "../lib/reviewCheckpoint";
 import type { ToolContext } from "./context";
 
 const nativeMock = vi.hoisted(() => ({
@@ -31,11 +35,6 @@ vi.mock("../store/planStore", () => ({
 }));
 
 import { buildEditTools } from "./edit";
-
-const toolOptions: ToolExecutionOptions = {
-  toolCallId: "tool-call",
-  messages: [],
-};
 
 const FILE = "/workspace/a.txt";
 
@@ -78,24 +77,33 @@ type EditResult = {
 async function runEdit(
   ctx: ToolContext,
   input: Record<string, unknown>,
+  toolCallId = "tool-call",
 ): Promise<EditResult> {
   const execute = buildEditTools(ctx).edit.execute;
   if (!execute) throw new Error("edit tool has no execute");
-  return (await execute(input as never, toolOptions)) as unknown as EditResult;
+  return (await execute(input as never, {
+    toolCallId,
+    messages: [],
+  })) as unknown as EditResult;
 }
 
 async function runMultiEdit(
   ctx: ToolContext,
   input: Record<string, unknown>,
+  toolCallId = "tool-call",
 ): Promise<EditResult> {
   const execute = buildEditTools(ctx).multi_edit.execute;
   if (!execute) throw new Error("multi_edit tool has no execute");
-  return (await execute(input as never, toolOptions)) as unknown as EditResult;
+  return (await execute(input as never, {
+    toolCallId,
+    messages: [],
+  })) as unknown as EditResult;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   clearAllPendingProposals();
+  clearAllCheckpoints();
   planMock.active = false;
   nativeMock.canonicalize.mockImplementation(async (p: string) => p);
   nativeMock.writeFile.mockResolvedValue(undefined);
@@ -332,5 +340,70 @@ describe("edit tools in plan mode", () => {
     );
     expect(nativeMock.writeFile).not.toHaveBeenCalled();
     expect(getPendingProposal(FILE)).toBeUndefined();
+  });
+});
+
+describe("edit tool checkpoints at write time (Fase 9, slice 2)", () => {
+  it("records the checkpoint in the registry as soon as the tool writes", async () => {
+    setFile("hello world");
+    const result = await runEdit(readContext(), {
+      path: FILE,
+      old_string: "world",
+      new_string: "there",
+    });
+    expect(result.written).toBe(true);
+    // No bridge involved: the checkpoint is there right after execute.
+    const cp = getCheckpoint("tool-call");
+    expect(cp?.path).toBe(FILE);
+    expect(cp?.kind).toBe("edit");
+    expect(cp?.contentBefore).toBe("hello world");
+    expect(cp?.contentAfter).toBe("hello there");
+    expect(cp?.sessionId).toBe("session");
+  });
+
+  it("keeps the first baseline when a second edit writes to the same file", async () => {
+    setFile("hello world");
+    const ctx = readContext();
+    await runEdit(
+      ctx,
+      { path: FILE, old_string: "world", new_string: "there" },
+      "tool-call-1",
+    );
+    setFile("hello there");
+    await runEdit(
+      ctx,
+      { path: FILE, old_string: "hello", new_string: "hi" },
+      "tool-call-2",
+    );
+    // One checkpoint, keyed by the first write: the baseline never moves.
+    expect(listCheckpoints().size).toBe(1);
+    expect(getCheckpoint("tool-call-2")).toBeUndefined();
+    const cp = getCheckpoint("tool-call-1");
+    expect(cp?.contentBefore).toBe("hello world");
+    expect(cp?.contentAfter).toBe("hi there");
+  });
+
+  it("records no checkpoint when the write fails", async () => {
+    setFile("hello world");
+    nativeMock.writeFile.mockRejectedValueOnce(new Error("disk full"));
+    const result = await runEdit(readContext(), {
+      path: FILE,
+      old_string: "world",
+      new_string: "there",
+    });
+    expect(result.error).toContain("disk full");
+    expect(listCheckpoints().size).toBe(0);
+  });
+
+  it("records no checkpoint in plan mode", async () => {
+    planMock.active = true;
+    setFile("hello world");
+    const result = await runEdit(readContext(), {
+      path: FILE,
+      old_string: "world",
+      new_string: "there",
+    });
+    expect(result.queued_for_plan_review).toBe(true);
+    expect(listCheckpoints().size).toBe(0);
   });
 });
