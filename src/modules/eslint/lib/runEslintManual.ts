@@ -1,5 +1,6 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { toast } from "sonner";
+import { eslintPathKey } from "./eslintPaths";
 import { hasEslintRunListener, requestEslintRun } from "./eslintRequests";
 import { useEslintStore, type EslintRunStatus } from "./eslintStore";
 import {
@@ -32,7 +33,11 @@ export function requestEslintRunWithReport(path: string): void {
     });
     return;
   }
-  const before = useEslintStore.getState().runStatus[path];
+  // Store keys are normalized (forward slashes, lowercased on
+  // Windows); look the run status up by the same key the plugin
+  // writes, or the waiter never sees the terminal status.
+  const key = eslintPathKey(path);
+  const before = useEslintStore.getState().runStatus[key];
   let done = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const finish = (status: EslintRunStatus | null) => {
@@ -57,7 +62,7 @@ export function requestEslintRunWithReport(path: string): void {
     }
   };
   const unsubscribe = useEslintStore.subscribe((state) => {
-    const next = state.runStatus[path];
+    const next = state.runStatus[key];
     if (next && next !== before && isTerminalEslintRunStatus(next)) {
       finish(next);
     }

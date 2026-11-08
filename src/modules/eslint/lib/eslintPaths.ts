@@ -1,3 +1,5 @@
+import { IS_WINDOWS } from "@/lib/platform";
+
 /** Extensions ESLint can lint with a stock JS/TS setup. */
 export const LINTABLE_EXTENSIONS: readonly string[] = [
   "js",
@@ -20,6 +22,19 @@ export function isLintablePath(path: string): boolean {
 /** Forward-slash canonical form, matching the rest of the frontend. */
 export function canonicalPath(path: string): string {
   return path.replace(/\\/g, "/");
+}
+
+/**
+ * Map-key form of a file path. Forward slashes, and on Windows folded
+ * to lowercase: the filesystem is case-insensitive but case-preserving,
+ * so the same file can arrive as `C:\Proj\…` from one source and
+ * `c:/proj/…` from another, and those must not become two different
+ * listeners, store entries, or run statuses. Only ever a map key —
+ * never displayed, and never passed to a fs command.
+ */
+export function eslintPathKey(path: string, windows: boolean = IS_WINDOWS): string {
+  const slash = canonicalPath(path);
+  return windows ? slash.toLowerCase() : slash;
 }
 
 export function dirnameOf(path: string): string {

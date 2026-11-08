@@ -576,7 +576,7 @@ export const EditorPane = memo(
     }, [lspExt]);
 
     // Fase 10: ESLint diagnostics from the project's own install.
-    const eslintExt = useEslintExtension(path, doc.status === "ready");
+    const eslintExt = useEslintExtension(path, doc.status);
     useEffect(() => {
       const view = cmRef.current?.view;
       if (!view) return;

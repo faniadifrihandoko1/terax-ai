@@ -7,6 +7,7 @@ import {
 import type { Extension } from "@codemirror/state";
 import { ViewPlugin, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { diskTextMatchesBuffer } from "@/modules/editor/lib/eol";
+import type { DocumentState } from "@/modules/editor/lib/useDocument";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -19,8 +20,11 @@ import {
   mergeDiagnostics,
   needsEslintReapply,
 } from "./eslintMerge";
-import { dirnameOf, isLintablePath } from "./eslintPaths";
-import { onEslintRunRequested } from "./eslintRequests";
+import { dirnameOf, eslintPathKey, isLintablePath } from "./eslintPaths";
+import {
+  onEslintRunRequested,
+  setEslintEditorPresence,
+} from "./eslintRequests";
 import {
   readDiskText,
   resolveEslintBinary,
@@ -91,7 +95,8 @@ class EslintPlugin {
   private checkReapplyNeeded(
     effectDiagnostics: readonly Diagnostic[],
   ): boolean {
-    const stored = useEslintStore.getState().byPath[this.path] ?? [];
+    const stored =
+      useEslintStore.getState().byPath[eslintPathKey(this.path)] ?? [];
     if (stored.length === 0) return false;
     return needsEslintReapply(effectDiagnostics, stored);
   }
@@ -108,7 +113,8 @@ class EslintPlugin {
 
   /** Publishes the stored ESLint diagnostics merged with the rest. */
   private applyStored(): void {
-    const stored = useEslintStore.getState().byPath[this.path] ?? [];
+    const stored =
+      useEslintStore.getState().byPath[eslintPathKey(this.path)] ?? [];
     const current: Diagnostic[] = [];
     forEachDiagnostic(this.view.state, (d) => {
       current.push(d);
@@ -328,23 +334,46 @@ export function notifyEslintNoResultMatch(
 /**
  * Mirrors useLspExtension: returns the ESLint diagnostics extension for
  * an open editor, or null when ESLint is off, the file is not lintable,
- * or the document is not ready yet.
+ * or the document is not ready yet. The document status (not just a
+ * boolean) is needed so the hook can record the editor's presence:
+ * the plugin — and therefore the run listener — only exists once the
+ * document is ready, and the manual-run command must be able to tell
+ * "editor open but still loading" apart from "no editor at all".
  */
 export function useEslintExtension(
   path: string,
-  ready: boolean,
+  docStatus: DocumentState["status"],
 ): Extension | null {
   const enabled = usePreferencesStore((s) => s.eslintEnabled);
   const [ext, setExt] = useState<Extension | null>(null);
 
+  // Fase 10.2: record that an editor pane is open for this path and
+  // whether its document has loaded, so a manual run that finds no
+  // listener can report the real cause. Registered only for lintable
+  // paths — the command is disabled for anything else anyway.
+  // Cleanup on unmount or path change removes the marker.
   useEffect(() => {
+    if (!isLintablePath(path)) return;
+    setEslintEditorPresence(
+      path,
+      docStatus === "ready"
+        ? "ready"
+        : docStatus === "loading"
+          ? "loading"
+          : "unavailable",
+    );
+    return () => setEslintEditorPresence(path, null);
+  }, [path, docStatus]);
+
+  useEffect(() => {
+    const ready = docStatus === "ready";
     if (!ready || !enabled || !isLintablePath(path)) {
       setExt(null);
       return;
     }
     setExt(eslintPluginExtension(path));
     return () => setExt(null);
-  }, [path, ready, enabled]);
+  }, [path, docStatus, enabled]);
 
   return ext;
 }

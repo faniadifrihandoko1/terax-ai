@@ -1,5 +1,6 @@
 import type { Diagnostic } from "@codemirror/lint";
 import { create } from "zustand";
+import { eslintPathKey } from "./eslintPaths";
 
 export type EslintRootStatus =
   | { kind: "unknown" }
@@ -35,11 +36,19 @@ export type EslintRunStatus =
   | { kind: "no-result-match"; filePath: string; returnedPaths: string[] };
 
 type State = {
-  /** Latest ESLint diagnostics per file path (canonical forward-slash). */
+  /**
+   * Latest ESLint diagnostics per file path, keyed by
+   * `eslintPathKey` (forward slashes, lowercased on Windows) so a
+   * path that arrives in a different form still hits the same entry.
+   * Readers must look up with `eslintPathKey` too.
+   */
   byPath: Record<string, Diagnostic[]>;
   /** Detection / run status per project root. */
   rootStatus: Record<string, EslintRootStatus>;
-  /** Last run outcome per file path (canonical forward-slash). */
+  /**
+   * Last run outcome per file path, keyed by `eslintPathKey` like
+   * `byPath` above.
+   */
   runStatus: Record<string, EslintRunStatus>;
   /** Roots already shown an ESLint-problem toast this session
    * (missing binary/config, or a failed run). */
@@ -58,23 +67,29 @@ export const useEslintStore = create<State>((set) => ({
   runStatus: {},
   notifiedRoots: {},
   setPathDiagnostics: (path, diags) =>
-    set((s) => ({ byPath: { ...s.byPath, [path]: diags } })),
+    set((s) => ({
+      byPath: { ...s.byPath, [eslintPathKey(path)]: diags },
+    })),
   clearPath: (path) =>
     set((s) => {
-      if (!(path in s.byPath)) return s;
+      const key = eslintPathKey(path);
+      if (!(key in s.byPath)) return s;
       const byPath = { ...s.byPath };
-      delete byPath[path];
+      delete byPath[key];
       return { byPath };
     }),
   setRootStatus: (root, status) =>
     set((s) => ({ rootStatus: { ...s.rootStatus, [root]: status } })),
   setRunStatus: (path, status) =>
-    set((s) => ({ runStatus: { ...s.runStatus, [path]: status } })),
+    set((s) => ({
+      runStatus: { ...s.runStatus, [eslintPathKey(path)]: status },
+    })),
   clearRunStatus: (path) =>
     set((s) => {
-      if (!(path in s.runStatus)) return s;
+      const key = eslintPathKey(path);
+      if (!(key in s.runStatus)) return s;
       const runStatus = { ...s.runStatus };
-      delete runStatus[path];
+      delete runStatus[key];
       return { runStatus };
     }),
   markRootNotified: (root) =>

@@ -6,7 +6,7 @@ import {
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { Loading03Icon, RefreshIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { isLintablePath } from "../lib/eslintPaths";
+import { eslintPathKey, isLintablePath } from "../lib/eslintPaths";
 import { useEslintStore } from "../lib/eslintStore";
 import {
   describeEslintRunStatus,
@@ -39,7 +39,7 @@ const DOT_CLASS: Record<EslintStatusTone, string> = {
 export function EslintStatusPill({ filePath }: Props) {
   const enabled = usePreferencesStore((s) => s.eslintEnabled);
   const status = useEslintStore((s) =>
-    filePath ? s.runStatus[filePath] : undefined,
+    filePath ? s.runStatus[eslintPathKey(filePath)] : undefined,
   );
   if (!filePath || !enabled || !isLintablePath(filePath) || !status) {
     return null;
