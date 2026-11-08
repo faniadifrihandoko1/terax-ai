@@ -598,9 +598,14 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   bookkeeping only (the hunk is marked done, nothing is written), Reject
   reverts the hunk from the checkpoint, and the pane's action is called
   Confirm (all-rejected: "Revert all"), not Apply. The checkpoint is
-  taken at write time from the registry baseline (`AgentRunBridge` saves
-  it when it opens the tab — the tools don't know the proposal id), and
-  the baseline never advances mid-run: sequential writes to the same file
+  taken at write time by the file tools themselves (Fase 9:
+  `recordToolWriteCheckpoint` in `src/modules/ai/lib/reviewCheckpoint.ts`,
+  called from `tools/edit.ts` and `tools/fs.ts` with the tool call id as
+  the checkpoint id) — the bridge's later `ensureWriteCheckpoint` for the
+  same id only advances the written state, so the one-effect window
+  between write and checkpoint is closed: Restore works even if the run
+  is interrupted before the bridge opens the tab. The baseline never
+  advances mid-run: sequential writes to the same file
   compose against the first write's baseline, so Reject always reverts to
   the original file, never to an intermediate write
   (`ensureWriteCheckpoint` / `updateCheckpointAfter` in
@@ -611,10 +616,7 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   session, no checkpoint) still apply through the legacy
   `applyReviewed*` path. The Changed Files card stats read the same
   written baseline (registry, then checkpoint, then legacy derivation).
-  Plan mode still never writes. Known limits: between the agent's write
-  and the bridge opening the tab there is a one-effect window with no
-  checkpoint yet — an app crash in that window leaves a written change
-  with no tab and no checkpoint (git is the only fallback); the
+  Plan mode still never writes. Known limits: the
   checkpoint still stores full file contents, so very large files cost
   memory and session-state size; if the user has unsaved edits in the
   editor when the agent writes the same file, the buffer is not reloaded
@@ -623,6 +625,64 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   agent's baseline, and Reject would restore it, discarding the unsaved
   edits. Still no plan review, no browser/live preview, no automatic
   build/test verification after Confirm.
+  Fase 9 (interrupted runs + card at the end of the message): a run
+  that dies mid-task (connection lost, user Stop, provider error) used
+  to leave no trace — the next run read the previous summary as fact,
+  claimed the work done without a single tool call, and the todos sat
+  at 0/4 with a spinner as if still running. Three layers now. (1)
+  The outcome of every run is recorded (`agentMeta.lastRunOutcome` in
+  `src/modules/ai/store/chatStore.ts`, from the AI SDK Chat `onFinish`
+  callback wired in `chatRuntime.ts`: `isAbort` → stopped,
+  `isDisconnect` → interrupted, `isError` → error, else finished), and
+  a todo left `in_progress` by an abnormally-ended run is reverted to
+  `pending` (`revertInProgressTodos` in
+  `src/modules/ai/lib/todos.ts`) — approval pauses end with outcome
+  "finished", so waiting on the user never reverts a todo. (2) On
+  resume in the same session, the transport prepends a `<previous-run>`
+  block to the next user message (`buildResumeReminder` in
+  `src/modules/ai/lib/resumeReminder.ts`, wired through
+  `createContextAwareTransport`): the old summary is not proof, verify
+  against disk, finish the open todos; nothing is injected after a
+  clean finish, and the injected copy is run-only, never persisted.
+  Tool calls that never returned a result are dropped from history
+  (`convertToModelMessages` with `ignoreIncompleteToolCalls` in
+  `src/modules/ai/lib/agent.ts`) instead of being sent as assistant
+  `tool_calls` with no `tool-result`. The system prompt no longer
+  claims changes are "not on disk yet" (proposal-only leftover) and
+  carries a verify-before-done rule in both the full and lite prompts
+  (`src/modules/ai/config.ts`). (3) The UI says so plainly: the
+  "Terax finished" toast only fires when the recorded outcome is
+  finished (Stop no longer earns it,
+  `LocalAgentNotificationsBridge.tsx`), and the chat shows an
+  interrupted-run notice row whenever a run ends with open todos —
+  "Run terputus karena koneksi — N todo belum selesai" (or "Agent
+  menyatakan selesai, tapi N todo masih terbuka" after a clean finish
+  with work remaining) — with a Lanjutkan button that resumes with a
+  verify-first instruction. The Changed Files card also moved: the
+  `"changes"` group is now emitted last in `buildPartGroups`
+  (`src/modules/ai/lib/partGroups.ts`), so the card renders at the end
+  of the assistant message, below the summary text, like the Todos
+  block; the Fase 7 gating (hidden while streaming / awaiting a bash
+  approval) is unchanged, only the position. The bridge no longer
+  strands proposals when its effect is cancelled mid-await
+  (`BridgeProposalTracker` in
+  `src/modules/ai/lib/fileMutationBridge.ts` — a cancelled run leaves
+  the fingerprint undone and requests a retry, unmarking proposals it
+  marked but never finished), and checkpoints are persisted even when
+  no ai-diff tab is open (`snapshotReviewState` synthesizes
+  checkpoint-only proposals, `src/modules/ai/lib/reviewPersistence.ts`;
+  the App persist effect no longer returns early with zero tabs), so a
+  crash before the first tab no longer loses Restore. Known limits,
+  kept deliberately: no timeout anywhere (a stalled connection hangs
+  in `streaming` — no chunk-timeout in `streamText`, `proxyFetch`, or
+  the Rust stream); a bash approval still hangs forever and Stop is a
+  no-op while one is outstanding; the 20-checkpoint-per-session cap
+  still silently drops the oldest; a second write after review started
+  still opens a second tab; the restore fallback for pre-Fase-8 edits
+  without a checkpoint still derives from disk (wrong for write-first
+  edits, which is why the tool-side checkpoint exists); local tool
+  execution still cannot be cancelled by Stop or a dropped connection
+  (the write already happened, only its result is discarded).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
