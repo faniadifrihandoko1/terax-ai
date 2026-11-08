@@ -16,6 +16,7 @@ function tab(over: Partial<AiDiffTab> = {}): AiDiffTab {
     isNewFile: false,
     mutationKind: "edit",
     hunkDecisions: {},
+    written: false,
     ...over,
   };
 }

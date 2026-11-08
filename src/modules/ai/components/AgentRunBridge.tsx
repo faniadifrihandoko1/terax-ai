@@ -15,7 +15,13 @@ import {
   clearAllPendingProposals,
   getPendingProposal,
 } from "../lib/pendingProposals";
-import { saveCheckpoint } from "../lib/reviewCheckpoint";
+import {
+  buildDeleteCheckpoint,
+  buildEditCheckpoint,
+  buildRenameCheckpoint,
+  ensureWriteCheckpoint,
+  saveCheckpoint,
+} from "../lib/reviewCheckpoint";
 import type {
   HunkDecision,
   LineDecision,
@@ -27,6 +33,7 @@ import {
 import { loadReviewState } from "../lib/sessions";
 import {
   restoreStatus,
+  type PersistedReviewProposal,
   type PersistedReviewState,
 } from "../lib/reviewPersistence";
 import { usePreferencesStore } from "@/modules/settings/preferences";
@@ -47,11 +54,12 @@ import { getOrCreateChat } from "../store/chatRuntime";
  *    to act on it; hiding it would be hostile. Since Fase 6 only terminal
  *    commands (and managed-agent spawns) are approval-gated.
  *  - For finished file-mutation tool calls, opens an AI diff tab in the
- *    editor area so the user can review the proposed change. File tools
- *    are not approval-gated (Fase 6): their execute only records a
- *    proposal, so the tab opens once the tool call finished — the run
- *    never blocks waiting for the user. Edit proposals for one file
- *    compose into a single tab; delete/rename proposals open their own.
+ *    editor area so the user can review the change. Since Fase 8 the
+ *    file tools write to disk immediately (write-first): the tab
+ *    reviews the change that is already on disk, and the checkpoint is
+ *    taken from the written baseline when the tab opens. The run never
+ *    blocks waiting for the user. Edit proposals for one file compose
+ *    into a single tab; delete/rename proposals open their own.
  *  - Persists messages of the active session on every change.
  *
  * The review tab owns the proposal's status (pending → reviewing → done
@@ -75,6 +83,13 @@ export type DiffOpenInput = {
   /** Restored per-file decision for delete/rename proposals. */
   fileDecision?: "accepted" | "rejected";
   hunkDecisions?: Record<number, HunkDecision>;
+  /**
+   * True when the agent already wrote this change to disk (Fase 8,
+   * write-first): the pane confirms it instead of applying it.
+   * False (default) for proposals recorded before Fase 8, which still
+   * write on Apply.
+   */
+  written?: boolean;
   /** False when inline review is on: the tab opens in the background. */
   activate?: boolean;
 };
@@ -94,6 +109,36 @@ export function AgentRunBridge(props: AgentRunBridgeProps) {
 type BridgeProps = { sessionId: string } & AgentRunBridgeProps;
 
 type AnyPart = UIMessagePart<Record<string, never>, Record<string, never>>;
+
+/**
+ * Restores per-hunk decisions for a tab from the persisted review
+ * state. v2 states carry hunk decisions directly; v1 states carry line
+ * decisions, migrated to hunks against the given change set.
+ */
+function restoreHunkDecisions(
+  saved: PersistedReviewProposal | undefined,
+  originalContent: string,
+  proposedContent: string,
+): Record<number, HunkDecision> {
+  const hunkDecisions: Record<number, HunkDecision> = {};
+  if (!saved) return hunkDecisions;
+  for (const [index, decision] of Object.entries(saved.hunkDecisions)) {
+    hunkDecisions[Number(index)] = decision;
+  }
+  if (saved.lineDecisions) {
+    const lineDecisions: Record<number, LineDecision> = {};
+    for (const [index, decision] of Object.entries(saved.lineDecisions)) {
+      lineDecisions[Number(index)] = decision;
+    }
+    const changeSet = computeLineChanges(originalContent, proposedContent);
+    for (const [hunkIndex, decision] of Object.entries(
+      migrateLineDecisionsToHunks(lineDecisions, changeSet),
+    )) {
+      hunkDecisions[Number(hunkIndex)] = decision;
+    }
+  }
+  return hunkDecisions;
+}
 
 function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
@@ -169,8 +214,9 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
   const tabByPathRef = useRef<Map<string, string>>(new Map());
   const fileMutationFingerprintRef = useRef<string>("");
   // FR-10: saved review state for this session, loaded once (the bridge
-  // re-derives the reviewed contents from the messages; only the status
-  // and line decisions are restored).
+  // re-derives the reviewed contents from the persisted checkpoint when
+  // the agent already wrote (Fase 8), or from the messages for legacy
+  // proposals; only the status and decisions are restored).
   const reviewStateCacheRef = useRef<{
     sessionId: string;
     state: PersistedReviewState | null;
@@ -250,38 +296,129 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
         openedRef.current.add(p.proposalId);
         const abs = p.resultPath ?? resolveMutationPath(p.path, cwd);
 
-        // Fase 6: edit proposals compose per file. The registry holds the
-        // accumulated content; the tab for the path absorbs it so the
-        // user reviews one diff per file, not one tab per tool call.
-        if (p.mutationKind === "edit") {
-          const registry = getPendingProposal(abs);
-          if (registry) {
+        // Fase 8 (write-first): the registry holds the written baseline
+        // for every kind now — the agent already wrote, so the tab
+        // reviews the change on disk. The checkpoint is taken from the
+        // registry baseline here (the tools don't know the proposal id):
+        // first write for the path sets the baseline, later writes only
+        // advance the written state, so Reject reverts to the original.
+        const registry = getPendingProposal(abs);
+        if (registry) {
+          if (registry.kind === "edit") {
             const existingId = tabByPathRef.current.get(abs);
             if (
               existingId !== undefined &&
               updateAiDiffTab(existingId, registry.proposedContent)
             ) {
+              ensureWriteCheckpoint(
+                buildEditCheckpoint({
+                  approvalId: existingId,
+                  sessionId,
+                  path: abs,
+                  originalContent: registry.originalContent,
+                  reconstructedContent: registry.proposedContent,
+                  appliedHunks: [],
+                }),
+              );
               continue;
             }
-            openAiDiffTab({
-              path: abs,
-              originalContent: registry.originalContent,
-              proposedContent: registry.proposedContent,
-              approvalId: p.proposalId,
-              isNewFile: registry.isNewFile,
-              mutationKind: "edit",
-              // Fase 4: with inline review on, the proposal shows in the
-              // editor; the ai-diff tab opens in the background as the
-              // side-by-side alternative instead of stealing focus.
-              activate: !usePreferencesStore.getState().aiReviewInline,
-            });
-            tabByPathRef.current.set(abs, p.proposalId);
-            continue;
           }
+          const checkpoint =
+            registry.kind === "delete"
+              ? buildDeleteCheckpoint({
+                  approvalId: p.proposalId,
+                  sessionId,
+                  path: abs,
+                  content: registry.originalContent,
+                })
+              : registry.kind === "rename"
+                ? buildRenameCheckpoint({
+                    approvalId: p.proposalId,
+                    sessionId,
+                    path: abs,
+                    targetPath: registry.targetPath ?? abs,
+                    content: registry.originalContent,
+                  })
+                : buildEditCheckpoint({
+                    approvalId: p.proposalId,
+                    sessionId,
+                    path: abs,
+                    originalContent: registry.originalContent,
+                    reconstructedContent: registry.proposedContent,
+                    appliedHunks: [],
+                  });
+          ensureWriteCheckpoint(checkpoint);
+          openAiDiffTab({
+            path: abs,
+            originalContent: registry.originalContent,
+            proposedContent: registry.proposedContent,
+            approvalId: p.proposalId,
+            isNewFile: registry.isNewFile,
+            mutationKind: registry.kind,
+            ...(registry.targetPath !== undefined
+              ? { targetPath: resolveMutationPath(registry.targetPath, cwd) }
+              : {}),
+            written: true,
+            // Fase 4: with inline review on, the proposal shows in the
+            // editor; the ai-diff tab opens in the background as the
+            // side-by-side alternative instead of stealing focus.
+            // Delete/rename proposals (Fase 5) have no inline view, so
+            // their tab always activates.
+            activate:
+              registry.kind === "edit"
+                ? !usePreferencesStore.getState().aiReviewInline
+                : true,
+          });
+          tabByPathRef.current.set(abs, p.proposalId);
+          continue;
         }
 
-        // Fallback: no registry entry (session restore, or a delete/rename
-        // proposal, which never composes). Derive from the on-disk content.
+        const saved = restored?.proposals.find(
+          (pr) => pr.approvalId === p.proposalId,
+        );
+        // Fase 8 restore: a persisted checkpoint means the agent already
+        // wrote. The tab reviews the checkpoint contents — deriving from
+        // disk would fail, because old_string is already replaced on
+        // disk. (The checkpoint is re-saved below so Restore keeps
+        // working after the restart.)
+        if (saved?.checkpoint) {
+          const cp = saved.checkpoint;
+          const proposed = cp.contentAfter ?? "";
+          openAiDiffTab({
+            path: abs,
+            originalContent: cp.contentBefore,
+            proposedContent: proposed,
+            approvalId: p.proposalId,
+            isNewFile: saved.isNewFile,
+            status: restoreStatus(saved.status),
+            mutationKind: cp.kind,
+            ...(cp.targetPath !== undefined
+              ? { targetPath: resolveMutationPath(cp.targetPath, cwd) }
+              : {}),
+            ...(saved.fileDecision !== undefined
+              ? { fileDecision: saved.fileDecision }
+              : {}),
+            hunkDecisions: restoreHunkDecisions(
+              saved,
+              cp.contentBefore,
+              proposed,
+            ),
+            written: true,
+            activate:
+              cp.kind === "edit"
+                ? !usePreferencesStore.getState().aiReviewInline
+                : true,
+          });
+          tabByPathRef.current.set(abs, p.proposalId);
+          saveCheckpoint(cp);
+          restoredCount += 1;
+          continue;
+        }
+
+        // Fallback: no registry entry and no persisted checkpoint — a
+        // proposal recorded before Fase 8, where the agent never wrote.
+        // Derive from the on-disk content (still the original) and open
+        // a legacy tab that writes on Apply.
         const original = await readOriginal(abs);
         if (cancelled) return;
         const r = deriveProposed(original.content, p.derive);
@@ -291,30 +428,14 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
           continue;
         }
         const proposed = r.content;
-        const saved = restored?.proposals.find(
-          (pr) => pr.approvalId === p.proposalId,
-        );
         // v2 states carry hunk decisions; v1 states carry line decisions,
         // migrated to hunks against the re-derived change set.
-        const hunkDecisions: Record<number, HunkDecision> = {};
+        const hunkDecisions = restoreHunkDecisions(
+          saved,
+          original.content,
+          proposed,
+        );
         if (saved) {
-          for (const [index, decision] of Object.entries(saved.hunkDecisions)) {
-            hunkDecisions[Number(index)] = decision;
-          }
-          if (saved.lineDecisions) {
-            const lineDecisions: Record<number, LineDecision> = {};
-            for (const [index, decision] of Object.entries(
-              saved.lineDecisions,
-            )) {
-              lineDecisions[Number(index)] = decision;
-            }
-            const changeSet = computeLineChanges(original.content, proposed);
-            for (const [hunkIndex, decision] of Object.entries(
-              migrateLineDecisionsToHunks(lineDecisions, changeSet),
-            )) {
-              hunkDecisions[Number(hunkIndex)] = decision;
-            }
-          }
           // v3: an applied proposal restores its checkpoint, so Restore
           // still works after a restart.
           if (saved.checkpoint) saveCheckpoint(saved.checkpoint);

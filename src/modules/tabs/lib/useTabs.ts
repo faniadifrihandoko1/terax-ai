@@ -133,6 +133,12 @@ export type AiDiffTab = TabBase & {
    * pane. Only decided hunks are stored; an absent index means undecided.
    */
   hunkDecisions: Record<number, HunkDecision>;
+  /**
+   * True when the agent already wrote this change to disk (Fase 8,
+   * write-first): the pane confirms it instead of applying it. False
+   * for proposals recorded before Fase 8, which still write on Apply.
+   */
+  written: boolean;
 };
 
 export type GitDiffTab = TabBase & {
@@ -930,6 +936,11 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       /** Restored per-file decision for delete/rename proposals. */
       fileDecision?: "accepted" | "rejected";
       hunkDecisions?: Record<number, HunkDecision>;
+      /**
+       * True when the agent already wrote this change to disk (Fase 8,
+       * write-first). Defaults to false (legacy proposal).
+       */
+      written?: boolean;
       /** False when inline review is on: the tab opens in the background. */
       activate?: boolean;
     }) => {
@@ -966,6 +977,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
               ? { fileDecision: input.fileDecision }
               : {}),
             hunkDecisions: input.hunkDecisions ?? {},
+            written: input.written ?? false,
           },
         ];
       });
