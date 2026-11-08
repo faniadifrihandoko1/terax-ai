@@ -226,3 +226,22 @@ describe("estimateCost", () => {
     expect(estimateCost("gpt-5.6", over)).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe("system prompt write-first wording (Fase 9)", () => {
+  it("full prompt states write-first and a verify-before-done rule, with no proposal-only leftovers", async () => {
+    const { selectSystemPrompt } = await import("./config");
+    const prompt = selectSystemPrompt("gpt-5");
+    expect(prompt).toContain("written to disk immediately");
+    expect(prompt).toContain("Never claim done from a summary");
+    expect(prompt).not.toContain("not on disk yet");
+    expect(prompt).not.toContain("become proposals");
+    expect(prompt).not.toContain("Propose for review");
+  });
+
+  it("lite prompt carries the verify-before-done rule", async () => {
+    const { selectSystemPrompt } = await import("./config");
+    const prompt = selectSystemPrompt("gpt-5.4-nano");
+    expect(prompt).toContain("Before claiming done, verify");
+    expect(prompt).toContain("A previous summary is not proof");
+  });
+});
