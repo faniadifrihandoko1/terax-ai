@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useEslintStore } from "./eslintStore";
 
 beforeEach(() => {
-  useEslintStore.setState({ byPath: {}, rootStatus: {}, runStatus: {} });
+  useEslintStore.setState({
+    byPath: {},
+    rootStatus: {},
+    runStatus: {},
+    projectLint: { status: { kind: "idle" }, files: [] },
+  });
 });
 
 describe("runStatus", () => {
@@ -36,6 +41,43 @@ describe("runStatus", () => {
     store.clearRunStatus("/proj/nope.ts");
     expect(useEslintStore.getState().runStatus).toEqual({
       "/proj/b.ts": { kind: "disk-read-failed" },
+    });
+  });
+});
+
+describe("projectLint", () => {
+  it("records a run status and its files together", () => {
+    const store = useEslintStore.getState();
+    store.setProjectLintStatus({ kind: "running", root: "/proj", startedAt: 7 });
+    expect(useEslintStore.getState().projectLint.status).toEqual({
+      kind: "running",
+      root: "/proj",
+      startedAt: 7,
+    });
+    store.setProjectLintResults(
+      { kind: "ok", root: "/proj", errors: 1, warnings: 0, files: 1, at: 8 },
+      [
+        {
+          path: "/proj/a.ts",
+          errors: 1,
+          warnings: 0,
+          messages: [
+            {
+              ruleId: "r",
+              severity: 2,
+              message: "e",
+              line: 1,
+              column: 1,
+            },
+          ],
+        },
+      ],
+    );
+    expect(useEslintStore.getState().projectLint.files).toHaveLength(1);
+    store.clearProjectLint();
+    expect(useEslintStore.getState().projectLint).toEqual({
+      status: { kind: "idle" },
+      files: [],
     });
   });
 });

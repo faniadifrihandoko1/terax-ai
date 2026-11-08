@@ -1,6 +1,10 @@
 import type { Diagnostic } from "@codemirror/lint";
 import { create } from "zustand";
 import { eslintPathKey } from "./eslintPaths";
+import type {
+  EslintProjectLintFile,
+  EslintProjectLintStatus,
+} from "./eslintProjectLint";
 
 export type EslintRootStatus =
   | { kind: "unknown" }
@@ -53,12 +57,29 @@ type State = {
   /** Roots already shown an ESLint-problem toast this session
    * (missing binary/config, or a failed run). */
   notifiedRoots: Record<string, true>;
+  /**
+   * Last project-wide lint for one root: the outcome plus the files
+   * with problems, sorted by path. The Problems panel renders this
+   * directly, and the explorer counts for closed files come from it.
+   * A run for another root does not clear this; the panel compares
+   * `status.root` with the current root and says so.
+   */
+  projectLint: {
+    status: EslintProjectLintStatus;
+    files: EslintProjectLintFile[];
+  };
   setPathDiagnostics: (path: string, diags: Diagnostic[]) => void;
   clearPath: (path: string) => void;
   setRootStatus: (root: string, status: EslintRootStatus) => void;
   setRunStatus: (path: string, status: EslintRunStatus) => void;
   clearRunStatus: (path: string) => void;
   markRootNotified: (root: string) => void;
+  setProjectLintStatus: (status: EslintProjectLintStatus) => void;
+  setProjectLintResults: (
+    status: EslintProjectLintStatus,
+    files: EslintProjectLintFile[],
+  ) => void;
+  clearProjectLint: () => void;
 };
 
 export const useEslintStore = create<State>((set) => ({
@@ -66,6 +87,7 @@ export const useEslintStore = create<State>((set) => ({
   rootStatus: {},
   runStatus: {},
   notifiedRoots: {},
+  projectLint: { status: { kind: "idle" }, files: [] },
   setPathDiagnostics: (path, diags) =>
     set((s) => ({
       byPath: { ...s.byPath, [eslintPathKey(path)]: diags },
@@ -94,4 +116,10 @@ export const useEslintStore = create<State>((set) => ({
     }),
   markRootNotified: (root) =>
     set((s) => ({ notifiedRoots: { ...s.notifiedRoots, [root]: true } })),
+  setProjectLintStatus: (status) =>
+    set((s) => ({ projectLint: { ...s.projectLint, status } })),
+  setProjectLintResults: (status, files) =>
+    set(() => ({ projectLint: { status, files } })),
+  clearProjectLint: () =>
+    set(() => ({ projectLint: { status: { kind: "idle" }, files: [] } })),
 }));
