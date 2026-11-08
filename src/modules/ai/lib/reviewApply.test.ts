@@ -599,7 +599,9 @@ describe("confirmReviewedDelete (Fase 8)", () => {
     const { io } = makeIo({ readError: "permission denied" });
     const result = await confirmReviewedDelete(input, io);
     expect(result.outcome).toBe("conflict");
-    expect(result.reason).toContain("permission denied");
+    if (result.outcome === "conflict") {
+      expect(result.reason).toContain("permission denied");
+    }
   });
 });
 
