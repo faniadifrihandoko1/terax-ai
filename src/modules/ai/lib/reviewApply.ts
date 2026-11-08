@@ -137,7 +137,7 @@ export function allHunksDecided(
  *
  * Re-exported so existing imports (`./reviewApply`) keep working.
  */
-export { djb2Hash };
+export { djb2Hash } from "./hash";
 import { djb2Hash } from "./hash";
 
 // ---------------------------------------------------------------------------
