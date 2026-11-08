@@ -389,7 +389,13 @@ export async function runAgentStream(opts: RunAgentOptions) {
     opts.projectMemory ?? null,
   );
 
-  const history = await convertToModelMessages(opts.uiMessages);
+  // Fase 9: drop tool calls that never returned a result (e.g. the
+  // stream died mid-call) instead of sending a malformed history —
+  // without this, the model receives assistant `tool_calls` with no
+  // `tool-result` attached.
+  const history = await convertToModelMessages(opts.uiMessages, {
+    ignoreIncompleteToolCalls: true,
+  });
   const keepsReasoning = modelKeepsReasoning(info);
   const prunedHistory = pruneMessages({
     messages: history,

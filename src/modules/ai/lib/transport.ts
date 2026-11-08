@@ -5,6 +5,8 @@ import type { ProviderKeys, CustomEndpointKeys } from "./keyring";
 import { formatAiError } from "./errors";
 import { native } from "./native";
 import type { ToolContext } from "../tools/tools";
+import { buildResumeReminder } from "./resumeReminder";
+import type { LastRunOutcome } from "./runOutcome";
 
 const TERAX_MD_MAX_BYTES = 32 * 1024;
 type MemoryCacheEntry = { content: string | null; mtime: number };
@@ -64,6 +66,10 @@ type Deps = {
   onCompact?: (info: { droppedCount: number }) => void;
   onFinishMeta?: (info: { hitStepCap: boolean; finishReason: string }) => void;
   getPlanMode?: () => boolean;
+  /** Fase 9: outcome of the previous run in this session, if any. */
+  getLastRunOutcome?: () => LastRunOutcome | null;
+  /** Fase 9: titles of the session's open (not completed) todos. */
+  getOpenTodoTitles?: () => string[];
 };
 
 type SendOptions = {
@@ -77,9 +83,19 @@ export function createContextAwareTransport(deps: Deps) {
     const live = deps.getLive();
     const projectMemory = await readTeraxMd(live.workspaceRoot);
     const envBlock = formatEnvBlock(live);
-    const messagesForRun = envBlock
-      ? injectEnvIntoLastUser(options.messages, envBlock)
+    let messagesForRun = envBlock
+      ? injectBlockIntoLastUser(options.messages, envBlock)
       : options.messages;
+    // Fase 9: after an abnormally-ended run, remind the model that the
+    // history's summary is unverified — it must check disk and finish
+    // the open todos before claiming completion.
+    const reminder = buildResumeReminder(
+      deps.getLastRunOutcome?.() ?? null,
+      deps.getOpenTodoTitles?.() ?? [],
+    );
+    if (reminder) {
+      messagesForRun = injectBlockIntoLastUser(messagesForRun, reminder);
+    }
     const result = await runAgentStream({
       keys: deps.getKeys(),
       modelId: deps.getModelId(),
@@ -121,9 +137,9 @@ export function createContextAwareTransport(deps: Deps) {
   };
 }
 
-function injectEnvIntoLastUser(
+function injectBlockIntoLastUser(
   messages: UIMessage[],
-  envBlock: string,
+  block: string,
 ): UIMessage[] {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
@@ -138,10 +154,10 @@ function injectEnvIntoLastUser(
     }
     const nextParts =
       textIdx === -1
-        ? [{ type: "text", text: envBlock }, ...parts]
+        ? [{ type: "text", text: block }, ...parts]
         : parts.map((p, idx) =>
             idx === textIdx
-              ? { ...p, text: `${envBlock}\n\n${p.text ?? ""}` }
+              ? { ...p, text: `${block}\n\n${p.text ?? ""}` }
               : p,
           );
     const out = messages.slice();

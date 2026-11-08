@@ -65,6 +65,12 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       };
     },
     getPlanMode: () => usePlanStore.getState().active,
+    getLastRunOutcome: () =>
+      useChatStore.getState().agentMeta.lastRunOutcome,
+    getOpenTodoTitles: () =>
+      (useTodosStore.getState().bySession[sessionId] ?? [])
+        .filter((t) => t.status !== "completed")
+        .map((t) => t.title),
     getLmstudioBaseURL: () => usePreferencesStore.getState().lmstudioBaseURL,
     getLmstudioModelId: () => usePreferencesStore.getState().lmstudioModelId,
     getMlxBaseURL: () => usePreferencesStore.getState().mlxBaseURL,
