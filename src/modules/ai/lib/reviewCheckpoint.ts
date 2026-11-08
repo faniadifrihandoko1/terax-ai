@@ -7,14 +7,16 @@ import { djb2Hash } from "./hash";
 export { djb2Hash };
 
 /**
- * Checkpoint for one applied AI file operation (Fase 5).
+ * Checkpoint for one applied AI file operation (Fase 5, write-first
+ * since Fase 8).
  *
- * Every reviewed apply first records what the file looked like before
+ * Every agent write first records what the file looked like before
  * the write, so the user can undo it later ("Restore" / "Undo apply")
  * the way Antigravity checkpoints let you step back. A checkpoint is
- * one file, one apply: the latest apply per file replaces the older
- * one, and at most MAX_CHECKPOINTS_PER_SESSION checkpoints are kept
- * per session (oldest dropped first).
+ * one file, one proposal: the latest write per file advances only the
+ * written state (see updateCheckpointAfter / ensureWriteCheckpoint),
+ * never the baseline, and at most MAX_CHECKPOINTS_PER_SESSION
+ * checkpoints are kept per session (oldest dropped first).
  *
  * The checkpoint holds full file contents, never a diff, so restore is
  * exact: write the old content back atomically. Contents are bounded
@@ -141,6 +143,59 @@ export function getCheckpoint(
   approvalId: string,
 ): FileCheckpoint | undefined {
   return checkpoints.get(approvalId);
+}
+
+/**
+ * Advances a write-first checkpoint (Fase 8) after the agent writes
+ * again to the same file: the baseline (contentBefore) never moves —
+ * only the written state (contentAfter / hashAfter) does, so a later
+ * Reject still reverts to the original file, not to an intermediate
+ * write. Optionally records the hunks a confirm accepted. Returns
+ * false when no checkpoint exists for the id (the caller then saves a
+ * fresh one instead).
+ *
+ * A delete checkpoint may only ever advance to "still gone"
+ * (contentAfter null); any other value is refused.
+ */
+export function updateCheckpointAfter(
+  approvalId: string,
+  contentAfter: string | null,
+  appliedHunks?: number[],
+): boolean {
+  const cp = checkpoints.get(approvalId);
+  if (!cp) return false;
+  if (cp.kind === "delete" && contentAfter !== null) return false;
+  checkpoints.set(approvalId, {
+    ...cp,
+    contentAfter,
+    hashAfter: contentAfter === null ? null : djb2Hash(contentAfter),
+    ...(appliedHunks !== undefined ? { appliedHunks: [...appliedHunks] } : {}),
+  });
+  return true;
+}
+
+/**
+ * Records the checkpoint for a write-first proposal (Fase 8), keyed by
+ * the review tab's proposal id. When no checkpoint exists yet it is
+ * saved as-is; when one already exists (the agent wrote again to the
+ * same file and the tab composed the new proposal) only the written
+ * state advances — the baseline, the accepted hunks and the timestamp
+ * are kept, so Reject still reverts to the original file.
+ */
+export function ensureWriteCheckpoint(cp: FileCheckpoint): FileCheckpoint {
+  const existing = checkpoints.get(cp.approvalId);
+  if (!existing) {
+    saveCheckpoint(cp);
+    return cp;
+  }
+  const next: FileCheckpoint = {
+    ...existing,
+    contentAfter: cp.contentAfter,
+    hashAfter: cp.hashAfter,
+    ...(cp.targetPath !== undefined ? { targetPath: cp.targetPath } : {}),
+  };
+  checkpoints.set(cp.approvalId, next);
+  return next;
 }
 
 export function clearCheckpoint(approvalId: string): void {

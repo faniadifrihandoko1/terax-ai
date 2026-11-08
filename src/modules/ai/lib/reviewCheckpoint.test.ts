@@ -4,12 +4,14 @@ import {
   buildEditCheckpoint,
   buildRenameCheckpoint,
   clearAllCheckpoints,
+  ensureWriteCheckpoint,
   getCheckpoint,
   isFileCheckpoint,
   listCheckpoints,
   MAX_CHECKPOINTS_PER_SESSION,
   restoreCheckpoint,
   saveCheckpoint,
+  updateCheckpointAfter,
   type CheckpointIo,
   type FileCheckpoint,
 } from "./reviewCheckpoint";
@@ -116,6 +118,75 @@ describe("checkpoint registry bound", () => {
     saveCheckpoint(mk("c"));
     expect(listCheckpoints().size).toBe(1);
     expect(getCheckpoint("a1")?.contentAfter).toBe("c");
+    clearAllCheckpoints();
+  });
+});
+
+describe("updateCheckpointAfter / ensureWriteCheckpoint (Fase 8)", () => {
+  const mk = (after: string, hunks: number[] = []) =>
+    buildEditCheckpoint({
+      approvalId: "w1",
+      path: "/x/f.ts",
+      originalContent: "a\n",
+      reconstructedContent: after,
+      appliedHunks: hunks,
+    });
+
+  it("advances only the written state, never the baseline", () => {
+    clearAllCheckpoints();
+    saveCheckpoint(mk("b\n"));
+    expect(updateCheckpointAfter("w1", "c\n")).toBe(true);
+    const cp = getCheckpoint("w1");
+    expect(cp?.contentBefore).toBe("a\n");
+    expect(cp?.hashBefore).toBe(djb2Hash("a\n"));
+    expect(cp?.contentAfter).toBe("c\n");
+    expect(cp?.hashAfter).toBe(djb2Hash("c\n"));
+    expect(cp?.appliedHunks).toEqual([]);
+    clearAllCheckpoints();
+  });
+
+  it("records accepted hunks when given", () => {
+    clearAllCheckpoints();
+    saveCheckpoint(mk("b\n"));
+    updateCheckpointAfter("w1", "b\n", [0, 2]);
+    expect(getCheckpoint("w1")?.appliedHunks).toEqual([0, 2]);
+    clearAllCheckpoints();
+  });
+
+  it("returns false when no checkpoint exists", () => {
+    clearAllCheckpoints();
+    expect(updateCheckpointAfter("missing", "b\n")).toBe(false);
+    clearAllCheckpoints();
+  });
+
+  it("refuses to give a delete checkpoint an after-content", () => {
+    clearAllCheckpoints();
+    saveCheckpoint(
+      buildDeleteCheckpoint({ approvalId: "d1", path: "/x/g.ts", content: "x\n" }),
+    );
+    expect(updateCheckpointAfter("d1", "back\n")).toBe(false);
+    expect(getCheckpoint("d1")?.contentAfter).toBeNull();
+    expect(updateCheckpointAfter("d1", null)).toBe(true);
+    clearAllCheckpoints();
+  });
+
+  it("ensureWriteCheckpoint saves a fresh checkpoint as-is", () => {
+    clearAllCheckpoints();
+    const saved = ensureWriteCheckpoint(mk("b\n", [1]));
+    expect(saved).toEqual(getCheckpoint("w1"));
+    expect(saved.appliedHunks).toEqual([1]);
+    clearAllCheckpoints();
+  });
+
+  it("ensureWriteCheckpoint on a composed write keeps baseline and hunks", () => {
+    clearAllCheckpoints();
+    saveCheckpoint(mk("b\n", [0, 2]));
+    const advanced = ensureWriteCheckpoint(mk("c\n"));
+    expect(advanced.contentBefore).toBe("a\n");
+    expect(advanced.contentAfter).toBe("c\n");
+    expect(advanced.hashAfter).toBe(djb2Hash("c\n"));
+    // The accepted hunks of the earlier state survive the advance.
+    expect(advanced.appliedHunks).toEqual([0, 2]);
     clearAllCheckpoints();
   });
 });
