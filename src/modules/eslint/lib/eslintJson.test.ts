@@ -163,10 +163,29 @@ describe("findResultForFile", () => {
     expect(findResultForFile([], "C:/proj/src/a.ts")).toBeUndefined();
   });
 
-  it("does not match across case differences", () => {
-    // ESLint echoes the path it was given; a case-different echo means
-    // the result is for a different spelling of the path, and the
-    // plugin must say so instead of silently showing zero diagnostics.
-    expect(findResultForFile(results, "c:/proj/src/a.ts")).toBeUndefined();
+  it("does not match across case differences off Windows", () => {
+    // On a case-sensitive filesystem a case-different echo means the
+    // result is for a different spelling of the path, and the plugin
+    // must say so instead of silently showing zero diagnostics.
+    expect(findResultForFile(results, "c:/proj/src/a.ts", false)).toBeUndefined();
+  });
+
+  it("matches across case differences on Windows", () => {
+    // Windows is case-insensitive but case-preserving: ESLint may
+    // echo the drive letter or a segment with different casing.
+    expect(findResultForFile(results, "c:/proj/src/a.ts", true)).toBe(
+      results[0],
+    );
+    expect(findResultForFile(results, "C:/PROJ/SRC/A.TS", true)).toBe(
+      results[0],
+    );
+    expect(findResultForFile(results, "C:\\PROJ\\src\\a.ts", true)).toBe(
+      results[0],
+    );
+  });
+
+  it("still rejects a genuinely different file on Windows", () => {
+    expect(findResultForFile(results, "C:/proj/src/b.ts", true)).toBeUndefined();
+    expect(findResultForFile(results, "C:/other/src/a.ts", true)).toBeUndefined();
   });
 });
