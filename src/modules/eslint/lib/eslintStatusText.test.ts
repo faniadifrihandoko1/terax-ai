@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  describeEslintProjectLintStatus,
   describeEslintRunStatus,
   isTerminalEslintRunStatus,
 } from "./eslintStatusText";
@@ -96,5 +97,60 @@ describe("isTerminalEslintRunStatus", () => {
     expect(isTerminalEslintRunStatus({ kind: "aborted-doc-changed" })).toBe(
       true,
     );
+  });
+});
+
+describe("describeEslintProjectLintStatus", () => {
+  it("summarizes totals for a finished run", () => {
+    const text = describeEslintProjectLintStatus({
+      kind: "ok",
+      root: "/proj",
+      errors: 2,
+      warnings: 1,
+      files: 2,
+      at: 1,
+    });
+    expect(text.label).toBe("2 error · 1 warning di 2 file");
+    expect(text.tone).toBe("error");
+    expect(
+      describeEslintProjectLintStatus({
+        kind: "ok",
+        root: "/proj",
+        errors: 0,
+        warnings: 0,
+        files: 0,
+        at: 1,
+      }).label,
+    ).toBe("ESLint project bersih");
+  });
+
+  it("names the truncated outcome as incomplete", () => {
+    const text = describeEslintProjectLintStatus({
+      kind: "truncated",
+      root: "/proj",
+      at: 1,
+    });
+    expect(text.label).toContain("tidak lengkap");
+    expect(text.detail).toContain("256 KiB");
+    expect(text.tone).toBe("warn");
+  });
+
+  it("reuses the per-file wording for missing binary and config", () => {
+    const missing = describeEslintProjectLintStatus({
+      kind: "missing-binary",
+      root: "/proj",
+      searchedLevels: 1,
+      truncatedByCap: false,
+      controlStatFailed: false,
+      at: 1,
+    });
+    expect(missing.label).toBe("ESLint: binary tidak ditemukan");
+    expect(
+      describeEslintProjectLintStatus({
+        kind: "missing-config",
+        root: "/proj",
+        at: 1,
+      }).label,
+    ).toBe("ESLint: tidak ada config");
   });
 });

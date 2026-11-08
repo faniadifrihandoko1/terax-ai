@@ -142,17 +142,18 @@ describe("runEslintProject", () => {
   } as const;
 
   it("lints the binary root with a longer timeout", async () => {
-    let seen: { command: string; cwd: string; timeoutSecs: number } | null =
-      null;
+    const seen = { command: "", cwd: "", timeoutSecs: 0 };
     const runCommand: RunCommand = async (command, opts) => {
-      seen = { command, ...opts };
+      seen.command = command;
+      seen.cwd = opts.cwd;
+      seen.timeoutSecs = opts.timeoutSecs;
       return { stdout: okJson, stderr: "", exit_code: 1, timed_out: false };
     };
     const res = await runEslintProject({ binary, runCommand });
     expect(res.kind).toBe("ok");
-    expect(seen?.cwd).toBe("/proj");
-    expect(seen?.timeoutSecs).toBe(PROJECT_LINT_TIMEOUT_SECS);
-    expect(seen?.command).toContain("--format json");
+    expect(seen.cwd).toBe("/proj");
+    expect(seen.timeoutSecs).toBe(PROJECT_LINT_TIMEOUT_SECS);
+    expect(seen.command).toContain("--format json");
     expect(buildEslintProjectCommand(binary)).toContain("'.'");
   });
 

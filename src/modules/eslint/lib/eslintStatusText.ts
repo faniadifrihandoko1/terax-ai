@@ -1,4 +1,5 @@
 import type { EslintRunStatus } from "./eslintStore";
+import type { EslintProjectLintStatus } from "./eslintProjectLint";
 
 export type EslintStatusTone = "ok" | "warn" | "error" | "muted";
 
@@ -118,8 +119,84 @@ export function describeEslintRunStatus(
 }
 
 /** "running" is the only non-terminal outcome; everything else ends a run. */
-export function isTerminalEslintRunStatus(
-  status: EslintRunStatus,
-): boolean {
+export function isTerminalEslintRunStatus(status: EslintRunStatus): boolean {
   return status.kind !== "running";
+}
+
+/**
+ * Human-readable rendering of a project-wide lint outcome, shared by
+ * the Problems panel header and the run toasts. The missing-binary
+ * and missing-config texts reuse the per-file wording: the cause and
+ * the next step are the same, only the scope differs.
+ */
+export function describeEslintProjectLintStatus(
+  status: EslintProjectLintStatus,
+): EslintStatusText {
+  switch (status.kind) {
+    case "idle":
+      return {
+        label: "Belum ada hasil lint project",
+        detail:
+          "Jalankan lint seluruh project untuk melihat semua masalah ESLint di project ini.",
+        tone: "muted",
+      };
+    case "running":
+      return {
+        label: "ESLint: memeriksa project…",
+        detail: "ESLint sedang memeriksa seluruh project.",
+        tone: "muted",
+      };
+    case "ok": {
+      if (status.errors === 0 && status.warnings === 0) {
+        return {
+          label: "ESLint project bersih",
+          detail: "ESLint tidak menemukan error atau warning di project ini.",
+          tone: "ok",
+        };
+      }
+      const parts: string[] = [];
+      if (status.errors > 0) parts.push(`${status.errors} error`);
+      if (status.warnings > 0) parts.push(`${status.warnings} warning`);
+      return {
+        label: `${parts.join(" · ")} di ${status.files} file`,
+        detail: `ESLint menemukan ${parts.join(" dan ")} di ${status.files} file.`,
+        tone: status.errors > 0 ? "error" : "warn",
+      };
+    }
+    case "missing-binary":
+      return describeEslintRunStatus({
+        kind: "missing-binary",
+        root: status.root,
+        searchedLevels: status.searchedLevels,
+        truncatedByCap: status.truncatedByCap,
+        controlStatFailed: status.controlStatFailed,
+      });
+    case "missing-config":
+      return describeEslintRunStatus({
+        kind: "missing-config",
+        root: status.root,
+      });
+    case "failed":
+      return {
+        label: "ESLint: lint project gagal",
+        detail: status.message || "Lint project gagal dijalankan.",
+        tone: "error",
+      };
+    case "timeout":
+      return {
+        label: "ESLint: lint project timeout",
+        // Keep the seconds in sync with PROJECT_LINT_TIMEOUT_SECS in
+        // lib/eslintRunner.ts.
+        detail:
+          "ESLint tidak selesai dalam 120 detik. Coba lint per folder atau per file.",
+        tone: "error",
+      };
+    case "truncated":
+      return {
+        label: "ESLint: hasil tidak lengkap",
+        detail:
+          "Output ESLint melebihi batas 256 KiB sehingga laporannya terpotong dan tidak bisa dibaca. Lint per folder atau per file untuk hasil lengkap.",
+        tone: "warn",
+      };
+  }
 }

@@ -39,7 +39,10 @@ import {
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
+import { EslintProblemsPanel } from "@/modules/eslint/components/ProblemsPanel";
+import { useEslintStore } from "@/modules/eslint/lib/eslintStore";
 import { requestEslintRunWithReport } from "@/modules/eslint/lib/runEslintManual";
+import { requestEslintProjectLint } from "@/modules/eslint/lib/runEslintProject";
 import { useControlBridge } from "@/modules/control";
 import {
   type EditorPaneHandle,
@@ -388,6 +391,12 @@ export default function App() {
 
   const [newEditorOpen, setNewEditorOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  // Rail badge for the Problems view: errors from the last
+  // project-wide lint run (0 while idle, running, or failed).
+  const eslintProblemsCount = useEslintStore((s) =>
+    s.projectLint.status.kind === "ok" ? s.projectLint.status.errors : 0,
+  );
   const [paletteInitialMode, setPaletteInitialMode] = useState<
     "commands" | "content"
   >("commands");
@@ -1495,6 +1504,13 @@ export default function App() {
     [openFileTab],
   );
 
+  // Opens the Problems view and starts a project-wide lint for the
+  // current root. The panel shows progress; the run toasts on finish.
+  const runEslintProjectLint = useCallback(() => {
+    openSidebarView("problems");
+    void requestEslintProjectLint(explorerRoot);
+  }, [openSidebarView, explorerRoot]);
+
   const openControlFile = useCallback(
     ({
       path,
@@ -1667,6 +1683,12 @@ export default function App() {
                           pathDropTarget={terminalPathDropTarget}
                           visible={!sidebarCollapsed}
                         />
+                      ) : sidebarView === "problems" ? (
+                        <EslintProblemsPanel
+                          root={explorerRoot}
+                          onOpenFile={openContentHit}
+                          onRunProjectLint={runEslintProjectLint}
+                        />
                       ) : (
                         <SourceControlPanel
                           open
@@ -1686,6 +1708,7 @@ export default function App() {
                       activeView={sidebarView}
                       onSelectView={persistSidebarView}
                       changedCount={sourceControl.changedCount}
+                      problemsCount={eslintProblemsCount}
                     />
                   </div>
                 </div>
