@@ -129,16 +129,16 @@ export function allHunksDecided(
 }
 
 /**
- * djb2 hash, same function as the one in tools/edit.ts (kept in sync by
- * hand). Used for the FR-07 conflict guard; a hash is enough here because
- * the comparison is against content we read back a moment later, not
- * against untrusted input.
+ * djb2 hash, shared implementation in `./hash` (single copy — the old
+ * "kept in sync by hand" triplicate across reviewApply, reviewCheckpoint
+ * and tools/fs is gone). Used for the FR-07 conflict guard; a hash is
+ * enough here because the comparison is against content we read back
+ * a moment later, not against untrusted input.
+ *
+ * Re-exported so existing imports (`./reviewApply`) keep working.
  */
-export function djb2Hash(s: string): number {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return h >>> 0;
-}
+export { djb2Hash };
+import { djb2Hash } from "./hash";
 
 // ---------------------------------------------------------------------------
 // Injectable IO (the real implementation talks to Tauri + the chat store)

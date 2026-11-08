@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { native } from "../lib/native";
+import { djb2Hash } from "../lib/hash";
 import {
   composePendingProposal,
 } from "../lib/pendingProposals";
@@ -25,12 +26,6 @@ const PROPOSAL_NOTE =
 
 const READ_BYTE_CAP = 25 * 1024;
 const READ_LINE_CAP = 2000;
-
-function djb2(s: string): number {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return h >>> 0;
-}
 
 export function buildFsTools(ctx: ToolContext) {
   return {
@@ -70,7 +65,7 @@ export function buildFsTools(ctx: ToolContext) {
               path: abs,
             };
 
-          const hash = djb2(r.content);
+          const hash = djb2Hash(r.content);
           const isFullRead = offset === undefined && limit === undefined;
           const prior = ctx.readCache.get(abs);
           if (isFullRead && prior && prior.size === r.size && prior.hash === hash) {
@@ -261,7 +256,7 @@ export function buildFsTools(ctx: ToolContext) {
           const r = await native.readFile(abs);
           if (r.kind === "text") {
             exists = true;
-            currentHash = djb2(r.content);
+            currentHash = djb2Hash(r.content);
           } else {
             return { error: "file is not readable as text", path: abs };
           }

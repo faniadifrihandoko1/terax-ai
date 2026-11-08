@@ -1,16 +1,10 @@
 import { native, type ReadResult } from "./native";
+import { djb2Hash } from "./hash";
 
-/**
- * djb2 hash, same function as the one in reviewApply.ts and tools/fs.ts
- * (kept in sync by hand). Used for the checkpoint guards; a hash is
- * enough here because the comparison is against content we read back
- * a moment later, not against untrusted input.
- */
-export function djb2Hash(s: string): number {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return h >>> 0;
-}
+// djb2 hash lives in `./hash` (single copy); used for the checkpoint
+// guards. A hash is enough here because the comparison is against
+// content we read back a moment later, not against untrusted input.
+export { djb2Hash };
 
 /**
  * Checkpoint for one applied AI file operation (Fase 5).
