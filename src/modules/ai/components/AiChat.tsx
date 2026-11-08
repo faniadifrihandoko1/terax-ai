@@ -44,14 +44,13 @@ import type {
   DynamicToolUIPart,
   ToolUIPart,
   UIMessage,
-  UIMessagePart,
 } from "ai";
 import { memo, useCallback, useMemo } from "react";
 import type { AiDiffStatus } from "@/modules/tabs";
 import { AiToolApproval } from "./AiToolApproval";
 import { ChangedFilesCard } from "./ChangedFilesCard";
 import { shouldShowChangesCard } from "../lib/changesCardVisibility";
-import { isFileMutationPart } from "../lib/fileMutations";
+import { buildPartGroups, partType, type AnyPart } from "../lib/partGroups";
 import { estimateMessageHeight } from "./messageHeightEstimate";
 
 function CommandSnippet({ name }: { name: string }) {
@@ -172,8 +171,6 @@ function chipLabel(c: ContextChip): string {
   if (c.kind === "file") return c.name;
   return `#${c.name}`;
 }
-type AnyPart = UIMessagePart<Record<string, never>, Record<string, never>>;
-
 type ApprovalArg = {
   id: string;
   approved: boolean;
@@ -477,80 +474,6 @@ const RenderedMessage = memo(function RenderedMessage({
     </Message>
   );
 });
-
-type Group =
-  | { kind: "single"; part: AnyPart; idx: number; key: string }
-  | { kind: "reads"; parts: AnyPart[]; key: string }
-  | { kind: "changes"; parts: AnyPart[]; key: string };
-
-function partType(p: AnyPart): string {
-  return (p as { type?: string }).type ?? "";
-}
-
-function isReadFilePart(p: AnyPart): boolean {
-  if (partType(p) !== "tool-read_file") return false;
-  const state = (p as { state?: string }).state ?? "";
-  return state !== "approval-requested";
-}
-
-function partKey(p: AnyPart, idx: number): string {
-  const tc = (p as { toolCallId?: string }).toolCallId;
-  if (tc) return tc;
-  const id = (p as { approval?: { id?: string } }).approval?.id;
-  if (id) return id;
-  return `i-${idx}`;
-}
-
-function buildPartGroups(parts: AnyPart[]): Group[] {
-  const out: Group[] = [];
-  let run: { parts: AnyPart[]; startIdx: number } | null = null;
-  let changes: { parts: AnyPart[]; startIdx: number } | null = null;
-  const flushChanges = () => {
-    if (!changes) return;
-    out.push({
-      kind: "changes",
-      parts: changes.parts,
-      key: `changes-${partKey(changes.parts[0], changes.startIdx)}`,
-    });
-    changes = null;
-  };
-  const flushRun = () => {
-    if (!run) return;
-    if (run.parts.length >= 2) {
-      out.push({
-        kind: "reads",
-        parts: run.parts,
-        key: `reads-${partKey(run.parts[0], run.startIdx)}`,
-      });
-    } else {
-      run.parts.forEach((p, k) => {
-        const idx = run!.startIdx + k;
-        out.push({ kind: "single", part: p, idx, key: partKey(p, idx) });
-      });
-    }
-    run = null;
-  };
-  parts.forEach((p, i) => {
-    if (isReadFilePart(p)) {
-      flushChanges();
-      if (!run) run = { parts: [], startIdx: i };
-      run.parts.push(p);
-      return;
-    }
-    if (isFileMutationPart(partType(p))) {
-      flushRun();
-      if (!changes) changes = { parts: [], startIdx: i };
-      changes.parts.push(p);
-      return;
-    }
-    flushRun();
-    flushChanges();
-    out.push({ kind: "single", part: p, idx: i, key: partKey(p, i) });
-  });
-  flushRun();
-  flushChanges();
-  return out;
-}
 
 function readPathFromPart(p: AnyPart): string | null {
   const input = (p as { input?: { path?: unknown } }).input;
