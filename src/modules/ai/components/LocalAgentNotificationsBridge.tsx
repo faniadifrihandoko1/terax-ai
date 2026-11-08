@@ -27,6 +27,10 @@ function liveStatus(s: RunStatus): AgentStatus | null {
 export function LocalAgentNotificationsBridge() {
   const status = useChatStore((s) => s.agentMeta.status) as RunStatus;
   const error = useChatStore((s) => s.agentMeta.error);
+  // Fase 9: only a run that actually finished earns the "finished"
+  // toast — Stop used to fire it too, because the status flip to idle
+  // is identical for both.
+  const lastRunOutcome = useChatStore((s) => s.agentMeta.lastRunOutcome);
   const visible = useChatStore((s) => s.panelOpen || s.mini.open);
   const focused = useWindowFocus();
 
@@ -35,15 +39,15 @@ export function LocalAgentNotificationsBridge() {
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
   const prev = useRef<RunStatus>(status);
+  // Latches while a run is busy and clears once its ending is reported,
+  // so the toast fires exactly once however the status flip and the
+  // outcome patch interleave.
+  const wasBusyRef = useRef(false);
 
   useEffect(() => {
     useAgentStore.getState().setLocalAgent(
       liveStatus(status) ? { agent: AGENT, status: liveStatus(status)! } : null,
     );
-
-    const was = prev.current;
-    prev.current = status;
-    if (was === status) return;
 
     const fire = (
       kind: "attention" | "finished" | "error",
@@ -62,14 +66,32 @@ export function LocalAgentNotificationsBridge() {
         onActivate: () => useChatStore.getState().openPanel(),
       });
 
-    if (status === "awaiting-approval") {
-      fire("attention", "Terax needs your approval", "Approve a tool to continue");
-    } else if (status === "error") {
-      fire("error", "Terax run failed", error ?? undefined);
-    } else if (status === "idle" && isBusy(was)) {
-      fire("finished", "Terax finished", "Your task is ready");
+    const was = prev.current;
+    prev.current = status;
+    if (was !== status) {
+      if (status === "awaiting-approval") {
+        fire(
+          "attention",
+          "Terax needs your approval",
+          "Approve a tool to continue",
+        );
+      } else if (status === "error") {
+        fire("error", "Terax run failed", error ?? undefined);
+        wasBusyRef.current = false;
+      }
     }
-  }, [status, error]);
+
+    if (isBusy(status)) wasBusyRef.current = true;
+    if (status === "idle" && wasBusyRef.current && lastRunOutcome !== null) {
+      // The run is over; only a clean finish is announced as finished.
+      // A stopped / interrupted / errored run reports nothing here —
+      // the chat itself shows the interrupted-run notice.
+      if (lastRunOutcome === "finished") {
+        fire("finished", "Terax finished", "Your task is ready");
+      }
+      wasBusyRef.current = false;
+    }
+  }, [status, error, lastRunOutcome]);
 
   return null;
 }
