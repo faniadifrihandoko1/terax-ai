@@ -3,6 +3,7 @@ import { getCustomEndpointKey, getKey } from "@/modules/ai/lib/keyring";
 import { reviewHistoryFor } from "@/modules/ai/lib/reviewHistory";
 import type { HunkDecision, HunkDecisions } from "@/modules/ai/lib/reviewApply";
 import { requestEslintRun, useEslintExtension } from "@/modules/eslint";
+import { getProjectLintCounts } from "@/modules/eslint/lib/eslintProjectLint";
 import { lspFormatDocument, useLspExtension } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { onKeysChanged } from "@/modules/settings/store";
@@ -585,8 +586,16 @@ export const EditorPane = memo(
       });
     }, [eslintExt]);
 
+    // Closing the tab must not wipe the explorer counts the
+    // project-wide run recorded for this file: a closed file keeps
+    // its badge from the last project lint until the next run (or a
+    // fresh per-file lint when it is opened again). Without a
+    // project result the counts are cleared as before.
     useEffect(
-      () => () => useDiagnosticsStore.getState().report(pathRef.current, null),
+      () => () => {
+        const counts = getProjectLintCounts(pathRef.current);
+        useDiagnosticsStore.getState().report(pathRef.current, counts);
+      },
       [],
     );
 
