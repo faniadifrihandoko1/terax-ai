@@ -2,7 +2,7 @@ import { IS_WINDOWS } from "@/lib/platform";
 import { quoteShellArg } from "@/lib/shellQuote";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
-import { detectEslint, type StatFn } from "./eslintDetect";
+import { detectEslint, type EslintDetection, type StatFn } from "./eslintDetect";
 import {
   parseEslintJsonOutput,
   type EslintFileResult,
@@ -144,7 +144,11 @@ export async function probeNpxEslint(
   }
 }
 
-type CacheEntry = { value: EslintBinary | null; at: number };
+type CacheEntry = {
+  value: EslintBinary | null;
+  detection: EslintDetection;
+  at: number;
+};
 const binaryCache = new Map<string, CacheEntry>();
 const MISS_TTL_MS = 60_000;
 
@@ -152,10 +156,17 @@ export function clearEslintBinaryCache(): void {
   binaryCache.clear();
 }
 
+export type EslintBinaryResolution = {
+  binary: EslintBinary | null;
+  /** Walk diagnosis from `detectEslint` (levels checked, cap, control stat). */
+  detection: EslintDetection;
+};
+
 /**
  * Resolves the ESLint binary for a file: project-installed first, then
  * npx without install. Misses are cached briefly so a project without
- * ESLint does not pay a shell spawn on every trigger.
+ * ESLint does not pay a shell spawn on every trigger. The detection
+ * diagnosis rides along so a miss can say why the binary was not found.
  */
 export async function resolveEslintBinary(
   filePath: string,
@@ -164,14 +175,14 @@ export async function resolveEslintBinary(
     runCommand?: RunCommand;
     windows?: boolean;
   } = {},
-): Promise<EslintBinary | null> {
+): Promise<EslintBinaryResolution> {
   const dir = dirnameOf(filePath);
   const cached = binaryCache.get(dir);
   if (
     cached &&
     (cached.value !== null || Date.now() - cached.at < MISS_TTL_MS)
   ) {
-    return cached.value;
+    return { binary: cached.value, detection: cached.detection };
   }
   const stat = deps.stat ?? statExists;
   const windows = deps.windows ?? IS_WINDOWS;
@@ -182,12 +193,12 @@ export async function resolveEslintBinary(
       root: detected.root,
       binary: detected.binary,
     };
-    binaryCache.set(dir, { value, at: Date.now() });
-    return value;
+    binaryCache.set(dir, { value, detection: detected, at: Date.now() });
+    return { binary: value, detection: detected };
   }
   const runCommand = deps.runCommand ?? tauriRunCommand;
   const npxOk = await probeNpxEslint(runCommand, dir);
   const value: EslintBinary | null = npxOk ? { kind: "npx", root: dir } : null;
-  binaryCache.set(dir, { value, at: Date.now() });
-  return value;
+  binaryCache.set(dir, { value, detection: detected, at: Date.now() });
+  return { binary: value, detection: detected };
 }

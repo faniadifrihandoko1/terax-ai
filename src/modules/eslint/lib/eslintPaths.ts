@@ -29,11 +29,17 @@ export function dirnameOf(path: string): string {
   return clean.slice(0, idx);
 }
 
+/** Maximum ancestor levels `detectEslint` climbs looking for a binary. */
+export const ANCESTOR_MAX_DEPTH = 12;
+
 /**
  * Ancestor directories of a file, innermost first, bounded so a walk
  * never climbs past the filesystem root.
  */
-export function ancestorDirs(filePath: string, maxDepth = 12): string[] {
+export function ancestorDirs(
+  filePath: string,
+  maxDepth = ANCESTOR_MAX_DEPTH,
+): string[] {
   const out: string[] = [];
   let dir = dirnameOf(filePath);
   while (dir && out.length < maxDepth) {

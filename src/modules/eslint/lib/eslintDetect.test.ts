@@ -97,11 +97,47 @@ describe("detectEslint", () => {
     });
   });
 
-  it("reports missing when no binary exists", async () => {
+  it("reports missing with a diagnosis when no binary exists", async () => {
+    const res = await detectEslint("/proj/src/a.ts", {
+      // The file's own directory is visible; only the binary is absent.
+      stat: statFor(new Set(["/proj/src"])),
+      windows: false,
+    });
+    expect(res).toEqual({
+      status: "missing",
+      searchedLevels: 3,
+      truncatedByCap: false,
+      controlStatFailed: false,
+    });
+  });
+
+  it("reports a failed control stat when even the file's directory is invisible", async () => {
     const res = await detectEslint("/proj/src/a.ts", {
       stat: statFor(new Set()),
       windows: false,
     });
-    expect(res).toEqual({ status: "missing" });
+    expect(res).toEqual({
+      status: "missing",
+      searchedLevels: 3,
+      truncatedByCap: false,
+      controlStatFailed: true,
+    });
+  });
+
+  it("reports a truncated walk for a very deep file", async () => {
+    const res = await detectEslint(
+      "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o.ts",
+      {
+        // Directories exist, but no binary anywhere in the walk.
+        stat: async (p) => !p.includes("node_modules"),
+        windows: false,
+      },
+    );
+    expect(res.status).toBe("missing");
+    if (res.status === "missing") {
+      expect(res.searchedLevels).toBe(12);
+      expect(res.truncatedByCap).toBe(true);
+      expect(res.controlStatFailed).toBe(false);
+    }
   });
 });

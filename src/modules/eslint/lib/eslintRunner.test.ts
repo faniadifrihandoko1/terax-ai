@@ -138,9 +138,16 @@ describe("resolveEslintBinary", () => {
     const first = await resolveEslintBinary("/proj/src/a.ts", deps);
     const second = await resolveEslintBinary("/proj/src/a.ts", deps);
     expect(first).toEqual({
-      kind: "path",
-      root: "/proj",
-      binary: "/proj/node_modules/.bin/eslint",
+      binary: {
+        kind: "path",
+        root: "/proj",
+        binary: "/proj/node_modules/.bin/eslint",
+      },
+      detection: {
+        status: "found",
+        root: "/proj",
+        binary: "/proj/node_modules/.bin/eslint",
+      },
     });
     expect(second).toEqual(first);
     expect(probes).toBe(0);
@@ -159,7 +166,15 @@ describe("resolveEslintBinary", () => {
       runCommand: npxOk,
       windows: false,
     });
-    expect(npx).toEqual({ kind: "npx", root: "/proj/src" });
+    expect(npx).toEqual({
+      binary: { kind: "npx", root: "/proj/src" },
+      detection: {
+        status: "missing",
+        searchedLevels: 3,
+        truncatedByCap: false,
+        controlStatFailed: true,
+      },
+    });
 
     clearEslintBinaryCache();
     const none = await resolveEslintBinary("/proj/src/a.ts", {
@@ -167,7 +182,13 @@ describe("resolveEslintBinary", () => {
       runCommand: fakeRun({ exit_code: 1 }),
       windows: false,
     });
-    expect(none).toBeNull();
+    expect(none.binary).toBeNull();
+    expect(none.detection).toEqual({
+      status: "missing",
+      searchedLevels: 3,
+      truncatedByCap: false,
+      controlStatFailed: true,
+    });
   });
 });
 
