@@ -258,7 +258,11 @@ describe("built startup graph", () => {
     );
     // Nothing was emitted by either attempt.
     expect(existsSync(join(outDir, "guarded"))).toBe(false);
-  });
+    // Two full production vite builds back-to-back: ~40 s for this
+    // file standalone, ~77 s under full-suite load on the 1.5-CPU
+    // VM, so the default 5 s test timeout flakes. The 60 s
+    // subprocess timeout per build above is the real bound.
+  }, 120_000);
 
   it("contains none of the app-lab benchmark driver (TERAX_BENCH is off)", () => {
     // The driver (src/bench) and its Tauri commands exist only in builds made with
