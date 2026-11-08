@@ -1,7 +1,10 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { native } from "../lib/native";
-import { checkShellCommand } from "../lib/security";
+import {
+  checkShellCommand,
+  detectDestructiveShellCommand,
+} from "../lib/security";
 import type { ToolContext } from "./context";
 import { currentWorkspaceEnv, workspaceScopeKey } from "@/modules/workspace";
 
@@ -31,7 +34,7 @@ export function buildShellTools(ctx: ToolContext) {
   return {
     bash_run: tool({
       description:
-        "Run a foreground shell command in this session's persistent agent shell. cwd persists across calls (so `cd foo` then `bash_run pwd` works). Use for short-lived commands (lint, test, search, build). For long-running or daemon processes (dev servers, watch tasks), use `bash_background`. NEVER invoke interactive tools (vim, less, top) — they will hang. Asks for user approval.",
+        "Run a foreground shell command in this session's persistent agent shell. cwd persists across calls (so `cd foo` then `bash_run pwd` works). Use for short-lived commands (lint, test, search, build). For long-running or daemon processes (dev servers, watch tasks), use `bash_background`. NEVER invoke interactive tools (vim, less, top) — they will hang. Asks for user approval. Destructive file commands (rm/mv/del/Remove-Item) run WITHOUT a checkpoint and cannot be restored — prefer the delete_file / rename_file tools for files (they are reviewed and restorable). Directory deletes have no reviewed tool; they show an explicit warning on the approval card, and broad targets (root, home, workspace root) are refused outright.",
       inputSchema: z.object({
         command: z.string(),
         timeout_secs: z.number().int().min(1).max(300).optional(),
@@ -40,6 +43,15 @@ export function buildShellTools(ctx: ToolContext) {
       execute: async ({ command, timeout_secs }) => {
         const safety = checkShellCommand(command);
         if (!safety.ok) return { error: safety.reason };
+        // Catastrophic deletes/moves (root, home, workspace root, system
+        // dirs) are refused here even after the user approved the card —
+        // the card warns about them, but the refusal is the backstop.
+        // Scoped destructive commands proceed: the approval card already
+        // showed the user the targets and the missing checkpoint.
+        const destructive = detectDestructiveShellCommand(command);
+        if (destructive?.catastrophic) {
+          return { error: destructive.reason };
+        }
         const sid = ctx.getSessionId();
         if (!sid) return { error: "no active chat session" };
         try {
@@ -68,7 +80,7 @@ export function buildShellTools(ctx: ToolContext) {
 
     bash_background: tool({
       description:
-        "Spawn a long-running background process (e.g. `pnpm dev`, `cargo watch`, log tailers). Returns a handle; use `bash_logs` to read its output and `bash_kill` to stop it. Output is captured into a 4MB ring buffer. Asks for user approval.",
+        "Spawn a long-running background process (e.g. `pnpm dev`, `cargo watch`, log tailers). Returns a handle; use `bash_logs` to read its output and `bash_kill` to stop it. Output is captured into a 4MB ring buffer. Asks for user approval. Do NOT use this to run destructive file commands (rm/mv/del) in the background — they run WITHOUT a checkpoint and cannot be restored; prefer the delete_file / rename_file tools for files.",
       inputSchema: z.object({
         command: z.string(),
         cwd: z.string().nullable().optional(),
@@ -77,6 +89,12 @@ export function buildShellTools(ctx: ToolContext) {
       execute: async ({ command, cwd }) => {
         const safety = checkShellCommand(command);
         if (!safety.ok) return { error: safety.reason };
+        // Same catastrophic refusal as bash_run: a background process
+        // must never be the way a broad delete slips past review.
+        const destructive = detectDestructiveShellCommand(command);
+        if (destructive?.catastrophic) {
+          return { error: destructive.reason };
+        }
         const effectiveCwd = cwd ?? ctx.getCwd();
         try {
           const handle = await native.shellBgSpawn(command, effectiveCwd);

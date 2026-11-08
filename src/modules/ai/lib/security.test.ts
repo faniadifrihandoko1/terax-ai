@@ -5,6 +5,7 @@ import {
   checkShellCommand,
   checkWritable,
   checkWritableCanonical,
+  detectDestructiveShellCommand,
 } from "./security";
 
 describe("checkReadable — secret basenames", () => {
@@ -368,5 +369,148 @@ describe("checkShellCommand — home directory rm guard", () => {
 
   it("does not block rm -rf on explicit absolute paths", () => {
     expect(checkShellCommand("rm -rf /home/me/safe")).toMatchObject({ ok: true });
+  });
+});
+
+describe("detectDestructiveShellCommand — scoped deletes/moves", () => {
+  it("detects a plain file delete with its target", () => {
+    const d = detectDestructiveShellCommand("rm foo.txt");
+    expect(d).toMatchObject({
+      kind: "delete",
+      targets: ["foo.txt"],
+      catastrophic: false,
+    });
+    expect(d?.commands).toEqual(["rm foo.txt"]);
+  });
+
+  it("detects recursive directory deletes as destructive, not catastrophic", () => {
+    expect(detectDestructiveShellCommand("rm -rf dist")).toMatchObject({
+      kind: "delete",
+      targets: ["dist"],
+      catastrophic: false,
+    });
+    expect(
+      detectDestructiveShellCommand("rm -rf ./dist node_modules"),
+    ).toMatchObject({
+      kind: "delete",
+      targets: ["./dist", "node_modules"],
+      catastrophic: false,
+    });
+  });
+
+  it("detects moves/renames with sources and destination", () => {
+    expect(
+      detectDestructiveShellCommand("mv a.txt b.txt"),
+    ).toMatchObject({
+      kind: "move",
+      targets: ["a.txt", "b.txt"],
+      catastrophic: false,
+    });
+    expect(
+      detectDestructiveShellCommand("mv src/old.ts src/new.ts"),
+    ).toMatchObject({ kind: "move", catastrophic: false });
+  });
+
+  it("detects the destructive segment in a compound command", () => {
+    const d = detectDestructiveShellCommand("pnpm build && rm -rf dist");
+    expect(d).toMatchObject({
+      kind: "delete",
+      targets: ["dist"],
+      catastrophic: false,
+    });
+    expect(d?.commands).toEqual(["rm -rf dist"]);
+  });
+
+  it("strips sudo / env wrappers and unquotes targets", () => {
+    expect(
+      detectDestructiveShellCommand("sudo rm -rf node_modules"),
+    ).toMatchObject({ kind: "delete", targets: ["node_modules"] });
+    expect(
+      detectDestructiveShellCommand('rm "my file.txt"'),
+    ).toMatchObject({ targets: ["my file.txt"] });
+    expect(
+      detectDestructiveShellCommand("FOO=1 rm foo.txt"),
+    ).toMatchObject({ kind: "delete", targets: ["foo.txt"] });
+  });
+
+  it("detects Windows and PowerShell equivalents", () => {
+    expect(
+      detectDestructiveShellCommand("del C:\\temp\\file.txt"),
+    ).toMatchObject({ kind: "delete", catastrophic: false });
+    expect(
+      detectDestructiveShellCommand("Remove-Item foo.txt -Recurse"),
+    ).toMatchObject({ kind: "delete", targets: ["foo.txt"] });
+    expect(
+      detectDestructiveShellCommand("rd /s /q C:\\foo"),
+    ).toMatchObject({ kind: "delete", catastrophic: false });
+  });
+
+  it("detects find -delete and find -exec rm", () => {
+    expect(detectDestructiveShellCommand("find . -delete")).toMatchObject({
+      kind: "delete",
+      catastrophic: true,
+    });
+    expect(
+      detectDestructiveShellCommand("find /tmp -name '*.log' -exec rm {} +"),
+    ).toMatchObject({ kind: "delete", catastrophic: false });
+  });
+
+  it("treats a scoped glob as destructive, not catastrophic", () => {
+    expect(detectDestructiveShellCommand("rm *.log")).toMatchObject({
+      kind: "delete",
+      catastrophic: false,
+    });
+    expect(detectDestructiveShellCommand("rm -rf dist/*.log")).toMatchObject({
+      catastrophic: false,
+    });
+  });
+});
+
+describe("detectDestructiveShellCommand — catastrophic targets", () => {
+  it.each([
+    "rm -rf /",
+    "rm -rf /*",
+    "rm -rf ~",
+    "rm -rf ~/",
+    "rm -rf .",
+    "rm -rf *",
+    "rm -rf ./*",
+    "rm -rf ../",
+    "rm -rf /etc/passwd",
+    "rm -rf ~/.ssh",
+    "rm -rf ~/subdir",
+    "rm -r -f ~/subdir",
+    "rm -rf $HOME/subdir",
+    "rm -rf /var/log/app",
+  ])("marks %s as catastrophic", (cmd) => {
+    expect(detectDestructiveShellCommand(cmd)).toMatchObject({
+      catastrophic: true,
+    });
+  });
+});
+
+describe("detectDestructiveShellCommand — not destructive", () => {
+  it.each([
+    ["quoted rm in echo", 'echo "rm -rf /"'],
+    ["git rm (versioned, recoverable)", "git rm --cached foo.txt"],
+    ["git mv (versioned, recoverable)", "git mv a.txt b.txt"],
+    ["package-manager remove", "pnpm remove lodash"],
+    ["npm rm", "npm rm lodash"],
+    ["rm as an argument", 'grep -r "rm" .'],
+    ["plain commands", "ls -la"],
+    ["build/test", "pnpm test"],
+    ["bare rm (no operands)", "rm"],
+    ["rm with flags only", "rm -rf"],
+    ["find without -delete/-exec", 'find . -name "*.log"'],
+  ])("returns null for %s", (_label, cmd) => {
+    expect(detectDestructiveShellCommand(cmd)).toBeNull();
+  });
+
+  it("does not trace indirection it cannot see (documented limitation)", () => {
+    // xargs / $() / backticks / variables hide the real command word.
+    expect(
+      detectDestructiveShellCommand("xargs rm < list.txt"),
+    ).toBeNull();
+    expect(detectDestructiveShellCommand("echo $(rm -rf /)")).toBeNull();
   });
 });

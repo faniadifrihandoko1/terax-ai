@@ -248,11 +248,403 @@ export function checkWritable(path: string): SafetyResult {
 }
 
 /**
- * Lightweight heuristic for blocking obviously destructive shell commands
- * even after the user has approved them. The approval UI shows the command
- * verbatim, so the user is the primary gate; this just catches a couple of
- * patterns that almost certainly indicate the model went off the rails.
+ * Destructive shell commands: `rm`/`mv` (and their Windows / PowerShell
+ * equivalents) executed through `bash_run` / `bash_background` bypass the
+ * file review entirely — no per-file proposal, no checkpoint, no Restore.
+ * File tools (`delete_file` / `rename_file`) are the safe path for files,
+ * but they refuse directories, so directory deletes can only happen
+ * through the shell. This detector gives the approval card something
+ * explicit to show, and lets `execute` refuse the catastrophic cases
+ * outright.
+ *
+ * Two tiers:
+ * - `catastrophic: true` — broad or system targets (root, home, the
+ *   workspace root itself, bare wildcards, system / secret dirs).
+ *   Refused in `execute`; the model is told to use the file tools.
+ * - `catastrophic: false` — a scoped delete/move inside the workspace
+ *   (`rm -rf dist`, `mv a.txt b.txt`). The approval card shows an
+ *   explicit warning with the targets and the missing checkpoint; the
+ *   user's Approve on that card is the informed approval.
+ *
+ * Best-effort by design (see the limitations in TERAX.md): detection
+ * reads the command text, so indirection the text cannot see — `xargs
+ * rm`, `$(rm ...)`, backticks, commands assembled from variables, or a
+ * path smuggled through a pipe — is missed. The approval card, which
+ * shows the command verbatim, remains the backstop for those.
+ *
+ * Deliberately NOT flagged:
+ * - `git rm` / `git mv` — git operations on tracked files, recoverable
+ *   with `git checkout` / `git restore`; flagging them would break
+ *   routine git workflows (`git rm --cached`, `git mv` renames).
+ * - Package-manager removes (`pnpm remove`, `npm rm`) and matches where
+ *   `rm` is only an argument (`grep -r "rm" .`, `echo "rm -rf /"`):
+ *   only the command word itself is matched, never its arguments.
  */
+export type DestructiveShellCommand = {
+  kind: "delete" | "move";
+  /** Matched command segments, verbatim (trimmed). */
+  commands: string[];
+  /** Parsed operand targets (unquoted), in order. */
+  targets: string[];
+  catastrophic: boolean;
+  reason: string;
+};
+
+const DELETE_WORDS = new Set([
+  "rm",
+  "rmdir",
+  "unlink",
+  "del",
+  "erase",
+  "rd",
+  "remove-item",
+]);
+
+const MOVE_WORDS = new Set([
+  "mv",
+  "move",
+  "ren",
+  "rename",
+  "move-item",
+  "rename-item",
+]);
+
+/** System locations a shell delete must never touch. */
+const CATASTROPHIC_PREFIXES = [
+  "/etc",
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/boot",
+  "/system",
+  "/library",
+  "/var",
+  "/private",
+  "/windows",
+  "/program files",
+  "/program files (x86)",
+  "/programdata",
+];
+
+/** Home secret dirs (same set as PROTECTED_DIRS, home-relative). */
+const CATASTROPHIC_HOME_DIRS = [
+  "/.ssh",
+  "/.gnupg",
+  "/.aws",
+  "/.kube",
+  "/.azure",
+  "/.docker",
+  "/.config",
+];
+
+/**
+ * Split a single-line command into `;` / `&&` / `||` / `|` / `&`
+ * segments, respecting single/double quotes and backslash escapes.
+ * (CR/LF are already refused by checkShellCommand, so commands here
+ * are single-line.)
+ */
+function splitShellSegments(cmd: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      current += ch;
+      continue;
+    }
+    if (quote) {
+      current += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === ";" || ch === "&" || ch === "|") {
+      if (
+        (ch === "&" && cmd[i + 1] === "&") ||
+        (ch === "|" && cmd[i + 1] === "|")
+      ) {
+        i += 1;
+      }
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  segments.push(current);
+  return segments.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/** Split one segment into tokens, stripping quotes (keeps the content). */
+function tokenizeSegment(segment: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let hasToken = false;
+  const push = () => {
+    if (hasToken || current.length > 0) tokens.push(current);
+    current = "";
+    hasToken = false;
+  };
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      hasToken = true;
+      continue;
+    }
+    if (ch === " " || ch === "\t") {
+      push();
+      continue;
+    }
+    current += ch;
+    hasToken = true;
+  }
+  push();
+  return tokens;
+}
+
+/** Strip leading wrappers (`sudo`, `command`, `env`, `VAR=x`, flags). */
+function stripWrappers(tokens: string[]): string[] {
+  let i = 0;
+  while (i < tokens.length) {
+    const t = tokens[i];
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) {
+      i += 1;
+      continue;
+    }
+    if (
+      t === "sudo" ||
+      t === "command" ||
+      t === "time" ||
+      t === "nice" ||
+      t === "env"
+    ) {
+      i += 1;
+      continue;
+    }
+    if (t === "-u" || t === "-g") {
+      i += 2;
+      continue;
+    }
+    if (t.startsWith("-") && t !== "-") {
+      i += 1;
+      continue;
+    }
+    break;
+  }
+  return tokens.slice(i);
+}
+
+/** Basename + `.exe` strip + lowercase, for command-word matching. */
+function commandWord(token: string): string {
+  const base = token.replace(/\\/g, "/").split("/").pop() ?? token;
+  return base.replace(/\.(exe|cmd|bat)$/i, "").toLowerCase();
+}
+
+/** Normalization surface for operand comparison (never a real path). */
+function normalizeOperand(op: string): string {
+  let s = op.replace(/\\/g, "/");
+  s = s.replace(/^[a-zA-Z]:/, "");
+  s = s.replace(/^~(?=\/|$)/, "");
+  s = s.replace(/\/{2,}/g, "/");
+  if (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
+  return s.toLowerCase();
+}
+
+function isCatastrophicOperand(op: string): boolean {
+  const n = normalizeOperand(op);
+  // Bare broad targets: root, home, workspace root, bare wildcards.
+  if (
+    n === "" ||
+    n === "/" ||
+    n === "." ||
+    n === ".." ||
+    n === "*" ||
+    n === "**" ||
+    n === "$home" ||
+    // Written as a regex, not the string literal "${home}": the literal
+    // trips noTemplateCurlyInString and reads as a template placeholder.
+    /^\$\{home\}$/.test(n) ||
+    n === "%userprofile%" ||
+    n === "%homepath%"
+  ) {
+    return true;
+  }
+  // Wildcards rooted at a broad location. `*.log` in one directory is
+  // scoped (warn only), but `*`, `./*`, `/*`, `*/*.txt` reach a whole
+  // directory tree or the filesystem root.
+  if (n.includes("*") || n.includes("?")) {
+    const rawPrefix = n.split(/[*?]/)[0];
+    const p = rawPrefix.endsWith("/")
+      ? rawPrefix.slice(0, -1)
+      : rawPrefix;
+    if (p === "" || p === "." || p === "/" || p === "~") {
+      if (/^[*?]+$/.test(n) || n.includes("/")) return true;
+    }
+  }
+  // System locations, exact or descendant (segment boundary).
+  const cmp = n.startsWith("/") ? n : `/${n}`;
+  for (const prefix of CATASTROPHIC_PREFIXES) {
+    if (cmp === prefix || cmp.startsWith(`${prefix}/`)) return true;
+  }
+  // Home secret dirs.
+  for (const dir of CATASTROPHIC_HOME_DIRS) {
+    if (isUnderProtected(cmp, dir)) return true;
+  }
+  return false;
+}
+
+/** Operands of one rm/mv-style command: flags skipped, `--` ends flags. */
+function parseOperands(tokens: string[], isWindowsBuiltin: boolean): string[] {
+  const operands: string[] = [];
+  let endOfFlags = false;
+  for (const t of tokens) {
+    if (!endOfFlags && t === "--") {
+      endOfFlags = true;
+      continue;
+    }
+    if (!endOfFlags && t.startsWith("-") && t !== "-") continue;
+    // cmd builtins take /q /f /s flags; a bare "/" is the root operand.
+    if (!endOfFlags && isWindowsBuiltin && /^\/[a-zA-Z]/.test(t)) continue;
+    operands.push(t);
+  }
+  return operands;
+}
+
+export function detectDestructiveShellCommand(
+  cmd: string,
+): DestructiveShellCommand | null {
+  const found: {
+    kind: "delete" | "move";
+    segment: string;
+    targets: string[];
+    catastrophic: boolean;
+  }[] = [];
+  for (const segment of splitShellSegments(cmd)) {
+    const tokens = tokenizeSegment(segment);
+    if (tokens.length === 0) continue;
+    const stripped = stripWrappers(tokens);
+    if (stripped.length === 0) continue;
+    const word = commandWord(stripped[0]);
+    const rest = stripped.slice(1);
+
+    // `git rm` / `git mv`: versioned, recoverable — not shell deletion.
+    if (word === "git" && (rest[0] === "rm" || rest[0] === "mv")) continue;
+
+    // `find <root> -delete` / `-exec rm|mv ...`: the root is the target.
+    if (word === "find") {
+      const hasDelete = rest.includes("-delete");
+      const execIdx = rest.findIndex(
+        (t) => t === "-exec" || t === "-execdir",
+      );
+      const execWord =
+        execIdx >= 0 && execIdx + 1 < rest.length
+          ? commandWord(rest[execIdx + 1])
+          : null;
+      const kind = hasDelete
+        ? "delete"
+        : execWord && DELETE_WORDS.has(execWord)
+          ? "delete"
+          : execWord && MOVE_WORDS.has(execWord)
+            ? "move"
+            : null;
+      if (!kind) continue;
+      const root = rest.find((t) => !t.startsWith("-")) ?? ".";
+      found.push({
+        kind,
+        segment,
+        targets: [root],
+        catastrophic: isCatastrophicOperand(root),
+      });
+      continue;
+    }
+
+    const isDelete = DELETE_WORDS.has(word);
+    const isMove = MOVE_WORDS.has(word);
+    if (!isDelete && !isMove) continue;
+    const isWindowsBuiltin = ["del", "erase", "rd", "move", "ren", "rename"].includes(word);
+    const targets = parseOperands(rest, isWindowsBuiltin);
+    // A bare `rm` / `mv` with no operands deletes nothing.
+    if (targets.length === 0) continue;
+    // `rm -rf` under the home dir is already refused by
+    // checkShellCommand (even `rm -r -f ~/x`, which its regex misses);
+    // mark it catastrophic here too so the approval card and the
+    // execute refusal agree instead of showing a mere warning.
+    let catastrophic = targets.some(isCatastrophicOperand);
+    if (!catastrophic && word === "rm") {
+      const flags = rest.filter((t) => t.startsWith("-") && t !== "-");
+      const recursive = flags.some(
+        (f) => /^-[a-zA-Z]*[rR]/.test(f) || f === "--recursive",
+      );
+      const force = flags.some(
+        (f) => /^-[a-zA-Z]*f/.test(f) || f === "--force",
+      );
+      catastrophic =
+        recursive &&
+        force &&
+        targets.some(
+          (t) =>
+            t === "~" ||
+            t.startsWith("~/") ||
+            t.startsWith("$HOME") ||
+            // Regex, not the "${HOME}" literal (noTemplateCurlyInString).
+            /^\$\{HOME\}/.test(t),
+        );
+    }
+    found.push({
+      kind: isDelete ? "delete" : "move",
+      segment,
+      targets,
+      catastrophic,
+    });
+  }
+  if (found.length === 0) return null;
+  const targets = found.flatMap((f) => f.targets);
+  const catastrophic = found.some((f) => f.catastrophic);
+  const kinds = [...new Set(found.map((f) => f.kind))];
+  const kind = kinds.includes("delete") ? "delete" : "move";
+  const targetList =
+    targets.slice(0, 5).join(", ") +
+    (targets.length > 5 ? ` (+${targets.length - 5} lainnya)` : "");
+  return {
+    kind,
+    commands: found.map((f) => f.segment),
+    targets,
+    catastrophic,
+    reason: catastrophic
+      ? `Refused: ${kinds.join(" + ")} targets a broad or protected location (${targetList}). This command was not executed. To delete specific files use the delete_file tool (reviewed, restorable); to rename use rename_file.`
+      : `${kinds.join(" + ")} ${targetList} via shell — no checkpoint, cannot be Restored. For files, prefer the delete_file / rename_file tools (reviewed, restorable).`,
+  };
+}
+
 /**
  * Two-phase safety check that also defends against symlink traversal: first
  * checks the literal path, then (if it exists) canonicalizes it via the

@@ -9,6 +9,10 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ToolUIPart } from "ai";
 import { memo } from "react";
+import {
+  detectDestructiveShellCommand,
+  type DestructiveShellCommand,
+} from "../lib/security";
 
 type Props = {
   part: Extract<ToolUIPart, { state: "approval-requested" }>;
@@ -103,12 +107,18 @@ function PreviewBlock({
   // preview branch anymore.
   if (toolName === "bash_run" || toolName === "bash_background") {
     const cwd = typeof input.cwd === "string" ? input.cwd : null;
+    const destructive = detectDestructiveShellCommand(
+      String(input.command ?? ""),
+    );
     return (
       <div className="space-y-1.5">
         {cwd && (
           <div className="font-mono text-[10.5px] text-muted-foreground">
             {cwd}
           </div>
+        )}
+        {destructive && (
+          <DestructiveWarning destructive={destructive} />
         )}
         <pre
           className={cn(
@@ -124,6 +134,49 @@ function PreviewBlock({
     <pre className="overflow-auto rounded-md bg-muted/60 p-2 font-mono text-[11px] leading-relaxed">
       {JSON.stringify(input, null, 2)}
     </pre>
+  );
+}
+
+/**
+ * Explicit warning for destructive shell commands on the approval card.
+ * A bare command in a <pre> block is easy to approve without noticing
+ * that it deletes files — and unlike a reviewed file proposal, a shell
+ * delete has no checkpoint and cannot be Restored. Catastrophic targets
+ * are refused when the tool executes, so the card says so instead of
+ * pretending Approve will run them.
+ */
+function DestructiveWarning({
+  destructive,
+}: {
+  destructive: DestructiveShellCommand;
+}) {
+  const shown = destructive.targets.slice(0, 4);
+  const rest = destructive.targets.length - shown.length;
+  return (
+    <div
+      className={cn(
+        "rounded-md border px-2 py-1.5 text-[11px] leading-relaxed",
+        destructive.catastrophic
+          ? "border-rose-500/50 bg-rose-500/10 text-rose-700 dark:text-rose-300"
+          : "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+      )}
+    >
+      <div className="font-medium">
+        {destructive.catastrophic
+          ? "Perintah ini akan ditolak saat dijalankan"
+          : "Perintah destruktif — tanpa checkpoint"}
+      </div>
+      <div className="font-mono">
+        {destructive.kind === "delete" ? "Menghapus: " : "Memindahkan: "}
+        {shown.join(", ")}
+        {rest > 0 ? ` (+${rest} lainnya)` : ""}
+      </div>
+      <div>
+        {destructive.catastrophic
+          ? "Target terlalu luas atau di lokasi sistem — perintah tidak dijalankan. Untuk hapus/rename file, minta agent memakai tool delete_file / rename_file."
+          : "File yang dihapus/dipindah lewat terminal TIDAK punya checkpoint dan tidak bisa di-Restore. Untuk file, minta agent memakai tool delete_file / rename_file (direview, bisa di-Restore)."}
+      </div>
+    </div>
   );
 }
 

