@@ -69,6 +69,7 @@ function setFile(content: string) {
 
 type EditResult = {
   error?: string;
+  written?: boolean;
   proposed?: boolean;
   replacements?: number;
   queued_for_plan_review?: boolean;
@@ -182,17 +183,17 @@ describe("edit tool guards", () => {
   });
 });
 
-describe("edit tool proposals (Fase 6: no disk writes)", () => {
-  it("proposes a single unique replacement without writing", async () => {
+describe("edit tool writes to disk first (Fase 8)", () => {
+  it("writes a single unique replacement to disk immediately", async () => {
     setFile("hello world");
     const result = await runEdit(readContext(), {
       path: FILE,
       old_string: "world",
       new_string: "there",
     });
-    expect(result.proposed).toBe(true);
+    expect(result.written).toBe(true);
     expect(result.replacements).toBe(1);
-    expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(FILE, "hello there");
     expect(getPendingProposal(FILE)?.proposedContent).toBe("hello there");
     expect(getPendingProposal(FILE)?.originalContent).toBe("hello world");
   });
@@ -205,13 +206,13 @@ describe("edit tool proposals (Fase 6: no disk writes)", () => {
       new_string: "z",
       replace_all: true,
     });
-    expect(result.proposed).toBe(true);
+    expect(result.written).toBe(true);
     expect(result.replacements).toBe(3);
-    expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(FILE, "z b z b z");
     expect(getPendingProposal(FILE)?.proposedContent).toBe("z b z b z");
   });
 
-  it("composes a second edit on top of the pending proposal", async () => {
+  it("composes a second edit on top of the written content", async () => {
     setFile("hello world");
     const ctx = readContext();
     await runEdit(ctx, {
@@ -219,20 +220,22 @@ describe("edit tool proposals (Fase 6: no disk writes)", () => {
       old_string: "world",
       new_string: "there",
     });
+    // The first write is on disk now, so the second edit reads it.
+    setFile("hello there");
     const second = await runEdit(ctx, {
       path: FILE,
       old_string: "hello",
       new_string: "hi",
     });
-    expect(second.proposed).toBe(true);
-    expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(second.written).toBe(true);
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(FILE, "hi there");
     const pending = getPendingProposal(FILE);
     expect(pending?.proposedContent).toBe("hi there");
     // The review baseline is still the original on-disk content.
     expect(pending?.originalContent).toBe("hello world");
   });
 
-  it("lets a second edit match text introduced by the first proposal", async () => {
+  it("lets a second edit match text introduced by the first write", async () => {
     setFile("hello world");
     const ctx = readContext();
     await runEdit(ctx, {
@@ -240,18 +243,31 @@ describe("edit tool proposals (Fase 6: no disk writes)", () => {
       old_string: "world",
       new_string: "there",
     });
+    setFile("hello there");
     const second = await runEdit(ctx, {
       path: FILE,
       old_string: "there",
       new_string: "everyone",
     });
-    expect(second.proposed).toBe(true);
+    expect(second.written).toBe(true);
     expect(getPendingProposal(FILE)?.proposedContent).toBe("hello everyone");
+  });
+
+  it("writes nothing and records nothing when the write fails", async () => {
+    setFile("hello world");
+    nativeMock.writeFile.mockRejectedValueOnce(new Error("disk full"));
+    const result = await runEdit(readContext(), {
+      path: FILE,
+      old_string: "world",
+      new_string: "there",
+    });
+    expect(result.error).toContain("disk full");
+    expect(getPendingProposal(FILE)).toBeUndefined();
   });
 });
 
 describe("multi_edit atomicity", () => {
-  it("applies edits in order against the running buffer", async () => {
+  it("applies edits in order against the running buffer and writes once", async () => {
     setFile("one two");
     const result = await runMultiEdit(readContext(), {
       path: FILE,
@@ -260,13 +276,14 @@ describe("multi_edit atomicity", () => {
         { old_string: "two", new_string: "2" },
       ],
     });
-    expect(result.proposed).toBe(true);
+    expect(result.written).toBe(true);
     expect(result.replacements).toBe(2);
-    expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(nativeMock.writeFile).toHaveBeenCalledTimes(1);
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(FILE, "1 2");
     expect(getPendingProposal(FILE)?.proposedContent).toBe("1 2");
   });
 
-  it("proposes nothing when a later edit in the batch fails", async () => {
+  it("writes nothing when a later edit in the batch fails", async () => {
     setFile("one two");
     const result = await runMultiEdit(readContext(), {
       path: FILE,
@@ -280,7 +297,7 @@ describe("multi_edit atomicity", () => {
     expect(getPendingProposal(FILE)).toBeUndefined();
   });
 
-  it("proposes nothing when a later edit is non-unique", async () => {
+  it("writes nothing when a later edit is non-unique", async () => {
     setFile("one dup dup");
     const result = await runMultiEdit(readContext(), {
       path: FILE,

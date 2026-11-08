@@ -79,6 +79,7 @@ function textFile(content: string) {
 type FsResult = {
   error?: string;
   proposed?: boolean;
+  written?: boolean;
   ok?: boolean;
   queued_for_plan_review?: boolean;
 };
@@ -101,20 +102,21 @@ beforeEach(() => {
   nativeMock.canonicalize.mockImplementation(async (p: string) => p);
 });
 
-describe("write_file proposals (Fase 6: no disk writes)", () => {
-  it("proposes new content without writing", async () => {
+describe("write_file writes to disk first (Fase 8)", () => {
+  it("writes new content to disk immediately", async () => {
     nativeMock.readFile.mockResolvedValue(textFile("old"));
     const result = await runTool(makeContext(new Map()), "write_file", {
       path: FILE,
       content: "new",
     });
-    expect(result.proposed).toBe(true);
+    expect(result.written).toBe(true);
     expect(result.ok).toBe(true);
-    expect(nativeMock.writeFile).not.toHaveBeenCalled();
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(FILE, "new");
     expect(getPendingProposal(FILE)).toEqual({
       originalContent: "old",
       proposedContent: "new",
       isNewFile: false,
+      kind: "edit",
     });
   });
 
@@ -124,14 +126,16 @@ describe("write_file proposals (Fase 6: no disk writes)", () => {
       path: FILE,
       content: "fresh",
     });
-    expect(result.proposed).toBe(true);
+    expect(result.written).toBe(true);
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(FILE, "fresh");
     expect(getPendingProposal(FILE)?.isNewFile).toBe(true);
     expect(getPendingProposal(FILE)?.originalContent).toBe("");
   });
 
   it("replaces a pending edit proposal with the literal content", async () => {
-    nativeMock.readFile.mockResolvedValue(textFile("one"));
-    const ctx = makeContext(new Map([[FILE, { size: 3, hash: djb2("one") }]]));
+    // The edit tool already wrote "one two" to disk; write_file replaces it.
+    nativeMock.readFile.mockResolvedValue(textFile("one two"));
+    const ctx = makeContext(new Map([[FILE, { size: 7, hash: djb2("one two") }]]));
     // A pending edit proposal already exists (via the edit tool path).
     const { composePendingProposal } = await import(
       "../lib/pendingProposals"
@@ -141,9 +145,21 @@ describe("write_file proposals (Fase 6: no disk writes)", () => {
       path: FILE,
       content: "brand new",
     });
-    expect(result.proposed).toBe(true);
+    expect(result.written).toBe(true);
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(FILE, "brand new");
     expect(getPendingProposal(FILE)?.proposedContent).toBe("brand new");
     expect(getPendingProposal(FILE)?.originalContent).toBe("one");
+  });
+
+  it("writes nothing and records nothing when the write fails", async () => {
+    nativeMock.readFile.mockResolvedValue(textFile("old"));
+    nativeMock.writeFile.mockRejectedValueOnce(new Error("disk full"));
+    const result = await runTool(makeContext(new Map()), "write_file", {
+      path: FILE,
+      content: "new",
+    });
+    expect(result.error).toContain("disk full");
+    expect(getPendingProposal(FILE)).toBeUndefined();
   });
 });
 
@@ -157,19 +173,36 @@ describe("create_directory (Fase 6: runs immediately, no review)", () => {
   });
 });
 
-describe("delete_file proposals (Fase 6: no disk deletes)", () => {
+describe("delete_file deletes immediately (Fase 8)", () => {
   function readCtx() {
     return makeContext(
       new Map([[FILE, { size: 7, hash: djb2("content") }]]),
     );
   }
 
-  it("proposes the delete without deleting", async () => {
+  it("deletes the file and records the baseline for review", async () => {
     nativeMock.readFile.mockResolvedValue(textFile("content"));
-    const result = await runTool(readCtx(), "delete_file", { path: FILE });
-    expect(result.proposed).toBe(true);
+    const ctx = readCtx();
+    const result = await runTool(ctx, "delete_file", { path: FILE });
+    expect(result.written).toBe(true);
     expect(result.ok).toBe(true);
-    expect(nativeMock.deleteFile).not.toHaveBeenCalled();
+    expect(nativeMock.deleteFile).toHaveBeenCalledWith(FILE);
+    expect(getPendingProposal(FILE)).toEqual({
+      originalContent: "content",
+      proposedContent: "",
+      isNewFile: false,
+      kind: "delete",
+    });
+    // The read cache no longer claims the file exists.
+    expect(ctx.readCache.has(FILE)).toBe(false);
+  });
+
+  it("records nothing when the delete fails", async () => {
+    nativeMock.readFile.mockResolvedValue(textFile("content"));
+    nativeMock.deleteFile.mockRejectedValueOnce(new Error("permission denied"));
+    const result = await runTool(readCtx(), "delete_file", { path: FILE });
+    expect(result.error).toContain("permission denied");
+    expect(getPendingProposal(FILE)).toBeUndefined();
   });
 
   it("refuses when the file changed since the read", async () => {
@@ -189,19 +222,47 @@ describe("delete_file proposals (Fase 6: no disk deletes)", () => {
   });
 });
 
-describe("rename_file proposals (Fase 6: no disk renames)", () => {
-  it("proposes the rename without renaming", async () => {
+describe("rename_file renames immediately (Fase 8)", () => {
+  it("renames the file and records the baseline for review", async () => {
     nativeMock.readFile.mockImplementation(async (p: string) => {
       if (p === FILE) return textFile("content");
       throw new Error("no such file");
     });
+    const ctx = makeContext(new Map());
+    const result = await runTool(ctx, "rename_file", {
+      path: FILE,
+      to: TARGET,
+    });
+    expect(result.written).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(nativeMock.renameFile).toHaveBeenCalledWith(FILE, TARGET);
+    expect(getPendingProposal(FILE)).toEqual({
+      originalContent: "content",
+      proposedContent: "content",
+      isNewFile: false,
+      kind: "rename",
+      targetPath: TARGET,
+    });
+    // The read cache follows the file to its new path.
+    expect(ctx.readCache.has(FILE)).toBe(false);
+    expect(ctx.readCache.get(TARGET)).toEqual({
+      size: 7,
+      hash: djb2("content"),
+    });
+  });
+
+  it("records nothing when the rename fails", async () => {
+    nativeMock.readFile.mockImplementation(async (p: string) => {
+      if (p === FILE) return textFile("content");
+      throw new Error("no such file");
+    });
+    nativeMock.renameFile.mockRejectedValueOnce(new Error("permission denied"));
     const result = await runTool(makeContext(new Map()), "rename_file", {
       path: FILE,
       to: TARGET,
     });
-    expect(result.proposed).toBe(true);
-    expect(result.ok).toBe(true);
-    expect(nativeMock.renameFile).not.toHaveBeenCalled();
+    expect(result.error).toContain("permission denied");
+    expect(getPendingProposal(FILE)).toBeUndefined();
   });
 
   it("refuses when the target already exists", async () => {

@@ -1,10 +1,8 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { djb2Hash } from "../lib/hash";
 import { native } from "../lib/native";
-import {
-  composePendingProposal,
-  getPendingProposal,
-} from "../lib/pendingProposals";
+import { composePendingProposal } from "../lib/pendingProposals";
 import { checkWritableCanonical } from "../lib/security";
 import { newQueuedEditId, usePlanStore } from "../store/planStore";
 import { resolvePath, type ToolContext } from "./context";
@@ -12,10 +10,18 @@ import { resolvePath, type ToolContext } from "./context";
 type EditResult =
   | {
       ok: true;
-      /** True when the change is a review proposal, not a disk write. */
+      /** The change was written to disk immediately (Fase 8). */
+      written: true;
+      replacements: number;
+      bytesWritten: number;
+      path: string;
+      note: string;
+    }
+  | {
+      ok: true;
+      /** Plan mode: the change went to the plan queue, not to disk. */
       proposed: true;
-      /** True when the proposal went to the plan queue instead. */
-      queued_for_plan_review?: boolean;
+      queued_for_plan_review: true;
       replacements: number;
       bytesProposed: number;
       path: string;
@@ -24,12 +30,12 @@ type EditResult =
   | { error: string; path: string };
 
 /**
- * What the model is told after a successful proposal. The on-disk file
- * is untouched until the user applies the review, and further edits to
- * the same file build on the pending proposal, not on the disk content.
+ * What the model is told after a successful write. The file is already
+ * changed on disk; the user reviews it afterwards in the AI diff tab,
+ * where Accept keeps it and Reject reverts it from the checkpoint.
  */
-const PROPOSAL_NOTE =
-  "Proposal recorded for review; the file on disk is unchanged until the user applies it in the review tab. Further edits to this file build on this pending proposal.";
+const WRITTEN_NOTE =
+  "Written to disk; review it in the AI diff tab — Accept keeps it, Reject reverts it from the checkpoint. Further edits to this file build on the written content.";
 
 type ComputedEdits =
   | {
@@ -42,16 +48,15 @@ type ComputedEdits =
 
 /**
  * Applies the edits to a buffer and returns the result — without writing
- * anything. The base is the pending proposal for the path when one
- * exists (so several tool calls to one file in a run compose), otherwise
- * the on-disk content. Plan mode always uses the on-disk content: queued
- * plan edits keep their own per-item proposed content and never touch
- * the pending-proposal registry.
+ * anything. The base is always the on-disk content: since Fase 8 the
+ * previous write is already on disk, so several tool calls to one file
+ * in a run compose naturally. Plan mode always uses the on-disk content
+ * too: queued plan edits keep their own per-item proposed content and
+ * never touch the pending-proposal registry.
  */
 async function computeEdits(
   abs: string,
   edits: { old_string: string; new_string: string; replace_all?: boolean }[],
-  planMode: boolean,
 ): Promise<ComputedEdits> {
   const r = await native.readFile(abs);
   if (r.kind === "binary")
@@ -60,8 +65,7 @@ async function computeEdits(
     return { ok: false, error: `file too large (${r.size} bytes)`, path: abs };
 
   const original = r.content;
-  const pending = planMode ? undefined : getPendingProposal(abs);
-  let content = pending?.proposedContent ?? original;
+  let content = original;
   let totalReplacements = 0;
 
   for (const e of edits) {
@@ -88,7 +92,7 @@ async function computeEdits(
       if (n === 0) {
         return {
           ok: false,
-          error: `old_string not found: ${JSON.stringify(e.old_string.slice(0, 80))}${pending ? " (it may have been changed by your earlier proposal in this run; base the edit on your proposed content, not the on-disk content)" : ""}`,
+          error: `old_string not found: ${JSON.stringify(e.old_string.slice(0, 80))}`,
           path: abs,
         };
       }
@@ -98,7 +102,7 @@ async function computeEdits(
       if (first === -1) {
         return {
           ok: false,
-          error: `old_string not found: ${JSON.stringify(e.old_string.slice(0, 80))}${pending ? " (it may have been changed by your earlier proposal in this run; base the edit on your proposed content, not the on-disk content)" : ""}`,
+          error: `old_string not found: ${JSON.stringify(e.old_string.slice(0, 80))}`,
           path: abs,
         };
       }
@@ -136,7 +140,7 @@ async function proposeEdits(
     };
   }
   const planActive = usePlanStore.getState().active;
-  const computed = await computeEdits(abs, edits, planActive);
+  const computed = await computeEdits(abs, edits);
   if (!computed.ok) return { error: computed.error, path: computed.path };
   if (planActive) {
     usePlanStore.getState().enqueue({
@@ -157,19 +161,36 @@ async function proposeEdits(
       note: "Queued for plan review; the file on disk is unchanged.",
     };
   }
-  composePendingProposal(
-    abs,
-    computed.original,
-    computed.content,
-    false,
-  );
+  // Fase 8 (write-first): the edit goes to disk immediately, like
+  // Antigravity's write-first model — git shows the change at once and
+  // later terminal commands run against the new code. The checkpoint
+  // is taken from the registry baseline when the bridge opens the tab.
+  // A failed write records nothing, so the run can retry the edit.
+  try {
+    await native.writeFile(abs, computed.content);
+  } catch (error) {
+    return {
+      error: `failed to write ${abs}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      path: abs,
+    };
+  }
+  composePendingProposal(abs, computed.original, computed.content, false);
+  // The read cache must track the new content: the delete guard compares
+  // the file against the last read, and the agent's own write is not a
+  // foreign change.
+  ctx.readCache.set(abs, {
+    size: computed.content.length,
+    hash: djb2Hash(computed.content),
+  });
   return {
     ok: true,
-    proposed: true,
+    written: true,
     replacements: computed.replacements,
-    bytesProposed: computed.content.length,
+    bytesWritten: computed.content.length,
     path: abs,
-    note: PROPOSAL_NOTE,
+    note: WRITTEN_NOTE,
   };
 }
 
@@ -177,7 +198,7 @@ export function buildEditTools(ctx: ToolContext) {
   return {
     edit: tool({
       description:
-        "Replace an exact string in a file. Requires read_file on this path first in the current session — this prevents blind edits. `old_string` must be unique in the file unless `replace_all: true`. Proposes the change for user review; nothing is written to disk until the user applies it in the review tab.",
+        "Replace an exact string in a file. Requires read_file on this path first in the current session — this prevents blind edits. `old_string` must be unique in the file unless `replace_all: true`. The change is written to disk immediately and reviewed afterwards in the AI diff tab — Accept keeps it, Reject reverts it from the checkpoint.",
       inputSchema: z.object({
         path: z.string(),
         old_string: z
@@ -201,7 +222,7 @@ export function buildEditTools(ctx: ToolContext) {
 
     multi_edit: tool({
       description:
-        "Apply several exact-string replacements to a single file atomically. Each edit is applied in order to the running buffer; if any edit's old_string is missing or non-unique, the whole batch aborts before proposing anything. Requires prior read_file on the path. Proposes the batch for user review; nothing is written until the user applies it.",
+        "Apply several exact-string replacements to a single file atomically. Each edit is applied in order to the running buffer; if any edit's old_string is missing or non-unique, the whole batch aborts before writing anything. Requires prior read_file on the path. The batch is written to disk immediately and reviewed afterwards in the AI diff tab — Accept keeps it, Reject reverts it from the checkpoint.",
       inputSchema: z.object({
         path: z.string(),
         edits: z

@@ -18,11 +18,13 @@ import { newQueuedEditId, usePlanStore } from "../store/planStore";
 import { resolvePath, type ToolContext } from "./context";
 
 /**
- * What the model is told after a successful file proposal. The on-disk
- * file is untouched until the user applies the review.
+ * What the model is told after a successful file write. The file is
+ * already changed on disk; the user reviews it afterwards in the AI
+ * diff tab, where Accept keeps it and Reject reverts it from the
+ * checkpoint.
  */
-const PROPOSAL_NOTE =
-  "Proposal recorded for review; the file on disk is unchanged until the user applies it in the review tab.";
+const WRITTEN_NOTE =
+  "Written to disk; review it in the AI diff tab — Accept keeps it, Reject reverts it from the checkpoint.";
 
 const READ_BYTE_CAP = 25 * 1024;
 const READ_LINE_CAP = 2000;
@@ -145,7 +147,7 @@ export function buildFsTools(ctx: ToolContext) {
 
     write_file: tool({
       description:
-        "Create or overwrite a file with the given content. Proposes the new content for user review; nothing is written to disk until the user applies it in the review tab. Prefer `edit` / `multi_edit` for in-place changes — only use `write_file` for creating a brand-new file or fully replacing a tiny one.",
+        "Create or overwrite a file with the given content. The content is written to disk immediately and reviewed afterwards in the AI diff tab — Accept keeps it, Reject reverts it from the checkpoint. Prefer `edit` / `multi_edit` for in-place changes — only use `write_file` for creating a brand-new file or fully replacing a tiny one.",
       inputSchema: z.object({
         path: z.string(),
         content: z.string(),
@@ -182,13 +184,33 @@ export function buildFsTools(ctx: ToolContext) {
           };
         }
 
+        // Fase 8 (write-first): the content goes to disk immediately —
+        // git shows the change at once and later terminal commands run
+        // against the new file. A failed write records nothing, so the
+        // run can retry it.
+        try {
+          await native.writeFile(abs, content);
+        } catch (error) {
+          return {
+            error: `failed to write ${abs}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            path: abs,
+          };
+        }
         composePendingProposal(abs, original, content, isNewFile);
+        // The read cache must track the new content, so the delete
+        // guard still passes for the agent's own write.
+        ctx.readCache.set(abs, {
+          size: content.length,
+          hash: djb2Hash(content),
+        });
         return {
           path: abs,
-          bytesProposed: content.length,
-          proposed: true,
+          bytesWritten: content.length,
+          written: true,
           ok: true,
-          note: PROPOSAL_NOTE,
+          note: WRITTEN_NOTE,
         };
       },
     }),
@@ -227,7 +249,7 @@ export function buildFsTools(ctx: ToolContext) {
 
     delete_file: tool({
       description:
-        "Delete a file. Proposes the deletion for user review in the AI diff tab — the file is unchanged on disk until the user accepts it there. Requires a prior read_file on the path in this session, and refuses when the file changed since that read. Never use for directories.",
+        "Delete a file. The deletion executes immediately and is reviewed afterwards in the AI diff tab — Accept confirms it, Reject restores the file from the checkpoint. Requires a prior read_file on the path in this session, and refuses when the file changed since that read. Never use for directories.",
       inputSchema: z.object({
         path: z.string(),
         reason: z
@@ -252,10 +274,12 @@ export function buildFsTools(ctx: ToolContext) {
         const seen = ctx.readCache.get(abs) ?? null;
         let exists = false;
         let currentHash: number | null = null;
+        let content = "";
         try {
           const r = await native.readFile(abs);
           if (r.kind === "text") {
             exists = true;
+            content = r.content;
             currentHash = djb2Hash(r.content);
           } else {
             return { error: "file is not readable as text", path: abs };
@@ -270,20 +294,33 @@ export function buildFsTools(ctx: ToolContext) {
         });
         if (!guard.ok) return { error: guard.reason, path: abs };
 
-        // Proposal only: the file is deleted by the review UI, after the
-        // user accepts it — never here.
+        // Fase 8 (write-first): the delete executes immediately — the
+        // file is gone at once, and Reject restores it from the
+        // checkpoint. A failed delete records nothing.
+        try {
+          await native.deleteFile(abs);
+        } catch (error) {
+          return {
+            error: `failed to delete ${abs}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            path: abs,
+          };
+        }
+        composePendingProposal(abs, content, "", false, "delete");
+        ctx.readCache.delete(abs);
         return {
           path: abs,
-          proposed: true,
+          written: true,
           ok: true,
-          note: "Deletion proposed for review; the file is unchanged on disk until the user accepts it in the review tab.",
+          note: WRITTEN_NOTE,
         };
       },
     }),
 
     rename_file: tool({
       description:
-        "Rename or move a file. Proposes the rename for user review in the AI diff tab — nothing moves on disk until the user accepts it there. Refuses when the target already exists or the target is outside the workspace. Never use for directories.",
+        "Rename or move a file. The rename executes immediately and is reviewed afterwards in the AI diff tab — Accept confirms it, Reject renames it back from the checkpoint. Refuses when the target already exists or the target is outside the workspace. Never use for directories.",
       inputSchema: z.object({
         path: z.string(),
         to: z
@@ -323,9 +360,13 @@ export function buildFsTools(ctx: ToolContext) {
         }
 
         let sourceExists = false;
+        let content = "";
         try {
           const r = await native.readFile(abs);
-          sourceExists = r.kind === "text";
+          if (r.kind === "text") {
+            sourceExists = true;
+            content = r.content;
+          }
         } catch {
           sourceExists = false;
         }
@@ -369,14 +410,31 @@ export function buildFsTools(ctx: ToolContext) {
         });
         if (!guard.ok) return { error: guard.reason, path: abs };
 
-        // Proposal only: the rename is executed by the review UI, after
-        // the user accepts it — never here.
+        // Fase 8 (write-first): the rename executes immediately — the
+        // file already moved, and Reject renames it back from the
+        // checkpoint. A failed rename records nothing.
+        try {
+          await native.renameFile(abs, absTo);
+        } catch (error) {
+          return {
+            error: `failed to rename ${abs}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            path: abs,
+          };
+        }
+        composePendingProposal(abs, content, content, false, "rename", absTo);
+        ctx.readCache.delete(abs);
+        ctx.readCache.set(absTo, {
+          size: content.length,
+          hash: djb2Hash(content),
+        });
         return {
           path: abs,
           to: absTo,
-          proposed: true,
+          written: true,
           ok: true,
-          note: "Rename proposed for review; nothing moves on disk until the user accepts it in the review tab.",
+          note: WRITTEN_NOTE,
         };
       },
     }),

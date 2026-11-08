@@ -15,7 +15,7 @@ function editPart(over: Partial<ToolPartLike>): ToolPartLike {
 describe("collectPendingFileProposals", () => {
   it("picks a finished edit proposal keyed by tool call id", () => {
     const out = collectPendingFileProposals(
-      [editPart({ output: { ok: true, proposed: true, path: "/ws/x.ts" } })],
+      [editPart({ output: { ok: true, written: true, path: "/ws/x.ts" } })],
       new Set(),
     );
     expect(out).toHaveLength(1);
@@ -78,14 +78,14 @@ describe("collectPendingFileProposals", () => {
           state: "output-available",
           toolCallId: "call-d",
           input: { path: "gone.ts" },
-          output: { ok: true, proposed: true, path: "/ws/gone.ts" },
+          output: { ok: true, written: true, path: "/ws/gone.ts" },
         },
         {
           type: "tool-rename_file",
           state: "output-available",
           toolCallId: "call-r",
           input: { path: "old.ts", to: "new.ts" },
-          output: { ok: true, proposed: true, path: "/ws/old.ts" },
+          output: { ok: true, written: true, path: "/ws/old.ts" },
         },
       ],
       new Set(),
