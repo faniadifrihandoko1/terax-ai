@@ -2,7 +2,7 @@ import { useChat, type UIMessage } from "@ai-sdk/react";
 import type { UIMessagePart } from "ai";
 import type { AiDiffStatus } from "@/modules/tabs";
 import type { ToolPartLike } from "../lib/fileMutations";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   deriveProposed,
@@ -11,6 +11,10 @@ import {
   resolveMutationPath,
 } from "../lib/fileMutations";
 import { collectPendingFileProposals } from "../lib/fileProposals";
+import {
+  FileMutationBridgeTracker,
+  type BridgeFlight,
+} from "../lib/fileMutationBridge";
 import {
   clearAllPendingProposals,
   getPendingProposal,
@@ -56,8 +60,9 @@ import { getOrCreateChat } from "../store/chatRuntime";
  *  - For finished file-mutation tool calls, opens an AI diff tab in the
  *    editor area so the user can review the change. Since Fase 8 the
  *    file tools write to disk immediately (write-first): the tab
- *    reviews the change that is already on disk, and the checkpoint is
- *    taken from the written baseline when the tab opens. The run never
+ *    reviews the change that is already on disk, and the checkpoint
+ *    was already taken by the tool at write time (Fase 9, slice 2) —
+ *    the bridge only advances it for a composed write. The run never
  *    blocks waiting for the user. Edit proposals for one file compose
  *    into a single tab; delete/rename proposals open their own.
  *  - Persists messages of the active session on every change.
@@ -210,9 +215,20 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
   // don't open duplicates, and which tab each path's composed proposal
   // lives in so later proposals for the same file update it. Reset when
   // the session changes.
-  const openedRef = useRef<Set<string>>(new Set());
+  // Fase 9 (slice 2): the tracker owns the opened set and the
+  // fingerprint bookkeeping — a fingerprint counts as done only when a
+  // run finishes it without cancellation, and a cancelled run unmarks
+  // the proposals it never finished so the retry run picks them up.
+  const trackerRef = useRef<FileMutationBridgeTracker | null>(null);
+  if (trackerRef.current === null) {
+    trackerRef.current = new FileMutationBridgeTracker();
+  }
+  const tracker = trackerRef.current;
   const tabByPathRef = useRef<Map<string, string>>(new Map());
-  const fileMutationFingerprintRef = useRef<string>("");
+  // Fase 9 (slice 2): a cancelled bridge run bumps this tick so the
+  // effect re-runs and retries the stranded proposals instead of
+  // waiting for a new file mutation to change the fingerprint.
+  const [bridgeRetryTick, setBridgeRetryTick] = useState(0);
   // FR-10: saved review state for this session, loaded once (the bridge
   // re-derives the reviewed contents from the persisted checkpoint when
   // the agent already wrote (Fase 8), or from the messages for legacy
@@ -224,9 +240,8 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
   const reviewToastShownRef = useRef<Set<string>>(new Set());
   // biome-ignore lint/correctness/useExhaustiveDependencies(sessionId): sessionId is a manual reset trigger — the per-session caches reset when the session changes
   useEffect(() => {
-    openedRef.current = new Set();
+    tracker.reset();
     tabByPathRef.current = new Map();
-    fileMutationFingerprintRef.current = "";
     reviewStateCacheRef.current = null;
     clearAllPendingProposals();
   }, [sessionId]);
@@ -261,10 +276,10 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
   }, [messages]);
 
   useEffect(() => {
-    if (fileMutationFingerprint === fileMutationFingerprintRef.current) {
+    if (!tracker.shouldProcess(fileMutationFingerprint)) {
       return;
     }
-    fileMutationFingerprintRef.current = fileMutationFingerprint;
+    const flight: BridgeFlight = tracker.beginFlight();
 
     const allParts: AnyPart[] = [];
     for (const m of messages) {
@@ -273,9 +288,12 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
     }
     const pending = collectPendingFileProposals(
       allParts as unknown as ToolPartLike[],
-      openedRef.current,
+      tracker.opened,
     );
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+      tracker.finishFlight(flight, fileMutationFingerprint, false);
+      return;
+    }
 
     let cancelled = false;
     void (async () => {
@@ -291,17 +309,19 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
       const restored = reviewStateCacheRef.current.state;
       let restoredCount = 0;
       for (const p of pending) {
-        if (cancelled) return;
-        // Mark as opened up-front so a re-render mid-await doesn't double-open.
-        openedRef.current.add(p.proposalId);
+        if (cancelled) break;
+        // Mark as opened up-front so a re-render mid-await doesn't
+        // double-open. When another overlapping run already marked
+        // this id, that run owns the proposal — skip it.
+        if (!tracker.markOpened(flight, p.proposalId)) continue;
         const abs = p.resultPath ?? resolveMutationPath(p.path, cwd);
 
         // Fase 8 (write-first): the registry holds the written baseline
         // for every kind now — the agent already wrote, so the tab
-        // reviews the change on disk. The checkpoint is taken from the
-        // registry baseline here (the tools don't know the proposal id):
-        // first write for the path sets the baseline, later writes only
-        // advance the written state, so Reject reverts to the original.
+        // reviews the change on disk. The checkpoint was already taken
+        // by the tool at write time (Fase 9, slice 2); ensureWriteCheckpoint
+        // here only advances the written state for a composed write, so
+        // Reject reverts to the original.
         const registry = getPendingProposal(abs);
         if (registry) {
           if (registry.kind === "edit") {
@@ -320,6 +340,7 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
                   appliedHunks: [],
                 }),
               );
+              tracker.markCompleted(flight, p.proposalId);
               continue;
             }
           }
@@ -370,6 +391,7 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
                 : true,
           });
           tabByPathRef.current.set(abs, p.proposalId);
+          tracker.markCompleted(flight, p.proposalId);
           continue;
         }
 
@@ -412,6 +434,7 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
           tabByPathRef.current.set(abs, p.proposalId);
           saveCheckpoint(cp);
           restoredCount += 1;
+          tracker.markCompleted(flight, p.proposalId);
           continue;
         }
 
@@ -420,11 +443,12 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
         // Derive from the on-disk content (still the original) and open
         // a legacy tab that writes on Apply.
         const original = await readOriginal(abs);
-        if (cancelled) return;
+        if (cancelled) break;
         const r = deriveProposed(original.content, p.derive);
         if (!r.ok) {
           // Edit precondition failed (string not found / not unique).
           // Skip opening the tab; the tool result already told the model.
+          tracker.markCompleted(flight, p.proposalId);
           continue;
         }
         const proposed = r.content;
@@ -467,7 +491,19 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
               : true,
         });
         tabByPathRef.current.set(abs, p.proposalId);
+        tracker.markCompleted(flight, p.proposalId);
       }
+      if (cancelled) {
+        // Fase 9 (slice 2): the run was cancelled mid-await — the
+        // tracker unmarks the proposals it never finished, and this
+        // tick makes the effect run again to retry them instead of
+        // waiting for a new file mutation to change the fingerprint.
+        if (tracker.finishFlight(flight, fileMutationFingerprint, true)) {
+          setBridgeRetryTick((tick) => tick + 1);
+        }
+        return;
+      }
+      tracker.finishFlight(flight, fileMutationFingerprint, false);
       if (restoredCount > 0 && !reviewToastShownRef.current.has(sessionId)) {
         reviewToastShownRef.current.add(sessionId);
         toast.info(
@@ -486,9 +522,11 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
   }, [
     messages,
     fileMutationFingerprint,
+    bridgeRetryTick,
     openAiDiffTab,
     updateAiDiffTab,
     sessionId,
+    tracker,
   ]);
 
   return null;
