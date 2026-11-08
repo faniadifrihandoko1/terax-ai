@@ -5,7 +5,10 @@ vi.mock("sonner", () => ({ toast: toasts }));
 
 import { toast } from "sonner";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { onEslintRunRequested } from "./eslintRequests";
+import {
+  onEslintRunRequested,
+  setEslintEditorPresence,
+} from "./eslintRequests";
 import { useEslintStore, type EslintRunStatus } from "./eslintStore";
 import {
   MANUAL_RUN_TIMEOUT_MS,
@@ -27,6 +30,8 @@ beforeEach(() => {
 const cleanups: Array<() => void> = [];
 afterEach(() => {
   while (cleanups.length > 0) cleanups.pop()?.();
+  // Presence entries registered by a test must not leak into the next one.
+  setEslintEditorPresence(PATH, null);
 });
 
 /** A fake editor plugin: answers a run request by recording a status. */
@@ -90,7 +95,35 @@ describe("requestEslintRunWithReport", () => {
     await Promise.resolve();
     expect(toast.warning).toHaveBeenCalledWith(
       "Tidak ada editor ESLint untuk file ini",
-      { description: expect.stringContaining("Buka file") },
+      { description: expect.stringContaining("tab review (ai-diff)") },
+    );
+  });
+
+  it("says the editor is still loading when presence is loading", async () => {
+    setEslintEditorPresence(PATH, "loading");
+    requestEslintRunWithReport(PATH);
+    await Promise.resolve();
+    expect(toast.warning).toHaveBeenCalledWith("Editor masih memuat file", {
+      description: expect.stringContaining("masih dibaca dari disk"),
+    });
+  });
+
+  it("says the plugin is still attaching when the editor is ready but has no listener", async () => {
+    setEslintEditorPresence(PATH, "ready");
+    requestEslintRunWithReport(PATH);
+    await Promise.resolve();
+    expect(toast.warning).toHaveBeenCalledWith("Editor ESLint belum siap", {
+      description: expect.stringContaining("masih dipasang"),
+    });
+  });
+
+  it("says the file cannot be opened when presence is unavailable", async () => {
+    setEslintEditorPresence(PATH, "unavailable");
+    requestEslintRunWithReport(PATH);
+    await Promise.resolve();
+    expect(toast.warning).toHaveBeenCalledWith(
+      "File tidak bisa dibuka di editor",
+      { description: expect.stringContaining("Tutup dan buka lagi") },
     );
   });
 

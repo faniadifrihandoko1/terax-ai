@@ -1,7 +1,11 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { toast } from "sonner";
 import { eslintPathKey } from "./eslintPaths";
-import { hasEslintRunListener, requestEslintRun } from "./eslintRequests";
+import {
+  getEslintEditorPresence,
+  hasEslintRunListener,
+  requestEslintRun,
+} from "./eslintRequests";
 import { useEslintStore, type EslintRunStatus } from "./eslintStore";
 import {
   describeEslintRunStatus,
@@ -27,9 +31,38 @@ export function requestEslintRunWithReport(path: string): void {
     return;
   }
   if (!hasEslintRunListener(path)) {
+    // No listener means no plugin is attached for this path yet.
+    // The old message blamed the user for not opening the file, but
+    // the file can be open while the plugin is still missing: the
+    // document may still be loading, the plugin may still be
+    // attaching, the file may be unreadable, or the active tab may
+    // be a review/diff tab that never mounts an editor. Name the
+    // real cause instead of guessing.
+    const presence = getEslintEditorPresence(path);
+    if (presence === "loading") {
+      toast.warning("Editor masih memuat file", {
+        description:
+          "File masih dibaca dari disk, jadi plugin ESLint belum terpasang. Tunggu sebentar lalu coba lagi.",
+      });
+      return;
+    }
+    if (presence === "ready") {
+      toast.warning("Editor ESLint belum siap", {
+        description:
+          "Plugin ESLint untuk file ini masih dipasang. Tunggu sebentar lalu coba lagi.",
+      });
+      return;
+    }
+    if (presence === "unavailable") {
+      toast.warning("File tidak bisa dibuka di editor", {
+        description:
+          "File ini tidak bisa dibaca sebagai teks (gagal dibaca, biner, atau terlalu besar), jadi ESLint tidak bisa dijalankan. Tutup dan buka lagi tabnya.",
+      });
+      return;
+    }
     toast.warning("Tidak ada editor ESLint untuk file ini", {
       description:
-        "Buka file JavaScript/TypeScript di editor, lalu coba lagi.",
+        "Buka file di tab editor — tab review (ai-diff) dan tab diff tidak menjalankan ESLint — lalu coba lagi.",
     });
     return;
   }
