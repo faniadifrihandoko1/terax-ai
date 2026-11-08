@@ -280,9 +280,11 @@ export default function App() {
 
   // FR-10: persist open AI review proposals (status + line decisions) per
   // session, debounced so a burst of line decisions writes once. The
-  // reviewed contents are NOT stored, except the checkpoint of an applied
-  // proposal (Fase 5); the bridge re-derives proposal contents from the
-  // chat messages on restore, exactly like on first open.
+  // reviewed contents are NOT stored, except the checkpoint of a written
+  // or applied proposal (Fase 5, write-first since Fase 8); the bridge
+  // restores proposal contents from the persisted checkpoint when the
+  // agent already wrote, or re-derives them from the chat messages for
+  // legacy proposals, exactly like on first open.
   useEffect(() => {
     if (!activeSessionId) return;
     const timer = setTimeout(() => {

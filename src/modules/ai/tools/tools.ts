@@ -18,11 +18,12 @@ export { resolvePath, type ToolContext } from "./context";
  *    secret paths (.env*, .ssh/, credentials, etc.).
  *  - File mutation tools (`write_file`, `edit`, `multi_edit`,
  *    `delete_file`, `rename_file`) do NOT ask for approval and do NOT
- *    block the run: their `execute` only records a proposal in the
- *    pending-proposal registry for the review tab. Nothing reaches disk
- *    until the user applies the reviewed proposal there. `create_directory`
- *    is the one exception — it has no review surface, so it runs
- *    immediately (workspace writes need no per-call approval).
+ *    block the run: their `execute` writes to disk immediately
+ *    (write-first, Fase 8) and records the baseline in the
+ *    pending-proposal registry for the review tab. The user reviews
+ *    the change afterwards in the AI diff tab — Accept keeps it,
+ *    Reject reverts it from the checkpoint. `create_directory`
+ *    also runs immediately (workspace writes need no per-call approval).
  *  - Command tools (`bash_run`, `bash_background`) and managed-agent
  *    tools (`spawn_coding_agent`, `send_to_agent`) still require explicit
  *    user approval — the AI SDK pauses on tool-call and surfaces a

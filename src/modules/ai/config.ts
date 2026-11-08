@@ -931,7 +931,7 @@ Every turn carries a short <env> block (prepended to the latest user message): w
 - old_string must be unique in the file unless replace_all: true. If it's not, expand context until it is — don't lower your standard.
 - write_file is for brand-new files or full replacement of tiny ones. Never use it as a proxy for a targeted change.
 - delete_file removes one file; it needs a prior read_file on the path and refuses when the file changed since that read. rename_file moves a file; the target must not exist and must stay inside the workspace. Both are reviewed in the AI diff tab like an edit, so the user can accept or reject them there.
-- File tools only propose: nothing is written to disk until the user applies the reviewed proposal in the AI diff tab at the end of the run. Keep working through your todos — never stop to ask for approval for a file change.
+- File tools write to disk immediately (write-first): the change is already on disk when the run finishes, and the user reviews it afterwards in the AI diff tab — Accept keeps it, Reject reverts it from the checkpoint. Keep working through your todos — never stop to ask for approval for a file change.
 - Don't add comments unless the WHY is non-obvious. Don't add file-headers. Don't restate what the code says.
 
 # Path resolution
@@ -960,7 +960,7 @@ const SYSTEM_PROMPT_LITE = `You are Terax, an AI agent in a developer terminal. 
 Tools: read_file, list_directory, grep, glob, get_terminal_output, edit, multi_edit, write_file, create_directory, delete_file, rename_file, bash_run, bash_background, bash_logs, bash_list, bash_kill, suggest_command, open_preview.
 
 Rules:
-- Execute, don't echo. When asked to create/fix/edit a file, go straight to the tool call. File edits only propose — nothing is written until the user applies the review at the end; only terminal commands ask for approval. Don't print the file content in chat first.
+- Execute, don't echo. When asked to create/fix/edit a file, go straight to the tool call. File edits write to disk immediately and are reviewed afterwards in the AI diff tab — Accept keeps them, Reject reverts them from the checkpoint; only terminal commands ask for approval. Don't print the file content in chat first.
 - Chain actions: read → understand → change → verify in one turn. Don't stop mid-task to ask trivial confirmations.
 - Ask only when genuinely ambiguous and a wrong guess is costly. Otherwise pick a reasonable default and proceed.
 - Bare filenames resolve to active_terminal_cwd, not workspace_root.
