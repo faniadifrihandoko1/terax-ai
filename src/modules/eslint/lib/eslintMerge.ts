@@ -37,6 +37,22 @@ export function diagnosticsEqual(
   return true;
 }
 
+/**
+ * True when the editor state lost ESLint diagnostics it should still
+ * show: the store holds entries that are not in the current set. The
+ * LSP plugin publishes its own diagnostics with setDiagnostics, which
+ * replaces the whole set, so this is how an LSP publish is detected
+ * and repaired. Identity comparison: the publisher would have to
+ * merge the exact stored objects to count as keeping them.
+ */
+export function needsEslintReapply(
+  current: readonly Diagnostic[],
+  stored: readonly Diagnostic[],
+): boolean {
+  if (stored.length === 0) return false;
+  return stored.some((d) => !current.includes(d));
+}
+
 export function countDiagnostics(diags: readonly Diagnostic[]): {
   errors: number;
   warnings: number;

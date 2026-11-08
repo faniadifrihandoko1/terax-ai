@@ -180,6 +180,8 @@ export type Preferences = {
   editorFormatOnSave: boolean;
   /** Fase 4: inline AI edit review, following antigravity.enableInlineDiff. Off keeps review in the side-by-side ai-diff tab. */
   aiReviewInline: boolean;
+  /** Fase 10: ESLint diagnostics from the project's own install. Off disables the ESLint runner entirely. */
+  eslintEnabled: boolean;
   editorFormatter: EditorFormatter;
   /** languageResolver id -> formatter, overriding the global default. */
   editorFormatterByLang: Record<string, EditorFormatter>;
@@ -276,6 +278,7 @@ const KEY_SHORTCUTS = "shortcuts";
 const KEY_EDITOR_AUTO_SAVE = "editorAutoSave";
 const KEY_EDITOR_AUTO_SAVE_DELAY = "editorAutoSaveDelay";
 const KEY_AI_REVIEW_INLINE = "aiReviewInline";
+const KEY_ESLINT_ENABLED = "eslintEnabled";
 /** Fase 3 key, kept so loadPreferences can migrate an explicit choice. */
 const KEY_AI_REVIEW_PER_LINE_LEGACY = "aiReviewPerLine";
 const KEY_EDITOR_FORMAT_ON_SAVE = "editorFormatOnSave";
@@ -374,6 +377,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorAutoSave: false,
   editorAutoSaveDelay: 1000,
   aiReviewInline: true,
+  eslintEnabled: true,
   editorFormatOnSave: false,
   editorFormatter: "lsp",
   editorFormatterByLang: {},
@@ -567,6 +571,8 @@ export async function loadPreferences(): Promise<Preferences> {
       get<boolean>(KEY_AI_REVIEW_INLINE) ??
       get<boolean>(KEY_AI_REVIEW_PER_LINE_LEGACY) ??
       DEFAULT_PREFERENCES.aiReviewInline,
+    eslintEnabled:
+      get<boolean>(KEY_ESLINT_ENABLED) ?? DEFAULT_PREFERENCES.eslintEnabled,
     editorAutoSaveDelay: clampAutoSaveDelay(
       get<number>(KEY_EDITOR_AUTO_SAVE_DELAY) ??
         DEFAULT_PREFERENCES.editorAutoSaveDelay,
@@ -807,6 +813,10 @@ export async function setShowHidden(value: boolean): Promise<void> {
 
 export async function setAiReviewInline(value: boolean): Promise<void> {
   await writePref(KEY_AI_REVIEW_INLINE, value);
+}
+
+export async function setEslintEnabled(value: boolean): Promise<void> {
+  await writePref(KEY_ESLINT_ENABLED, value);
 }
 
 export async function setExplorerGitDecorations(value: boolean): Promise<void> {

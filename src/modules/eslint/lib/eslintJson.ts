@@ -1,4 +1,5 @@
 import type { Diagnostic } from "@codemirror/lint";
+import { canonicalPath } from "./eslintPaths";
 
 /** Source tag on every ESLint-derived CodeMirror diagnostic. */
 export const ESLINT_SOURCE = "eslint";
@@ -71,6 +72,14 @@ export function parseEslintJsonOutput(stdout: string): EslintFileResult[] {
       fatalErrorCount: asNumber(e.fatalErrorCount, 0),
     };
   });
+}
+
+export function findResultForFile(
+  results: readonly EslintFileResult[],
+  filePath: string,
+): EslintFileResult | undefined {
+  const want = canonicalPath(filePath);
+  return results.find((r) => canonicalPath(r.filePath) === want);
 }
 
 /** Minimal document surface needed for offset mapping. Satisfied by CodeMirror Text. */

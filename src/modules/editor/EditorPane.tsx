@@ -2,6 +2,7 @@ import { endpointIdFromCompatModel } from "@/modules/ai/config";
 import { getCustomEndpointKey, getKey } from "@/modules/ai/lib/keyring";
 import { reviewHistoryFor } from "@/modules/ai/lib/reviewHistory";
 import type { HunkDecision, HunkDecisions } from "@/modules/ai/lib/reviewApply";
+import { requestEslintRun, useEslintExtension } from "@/modules/eslint";
 import { lspFormatDocument, useLspExtension } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { onKeysChanged } from "@/modules/settings/store";
@@ -49,6 +50,7 @@ import { useDiagnosticsStore } from "./lib/diagnosticsStore";
 import {
   buildSharedExtensions,
   DEFAULT_INDENT,
+  eslintCompartment,
   indentCompartment,
   indentExtension,
   languageCompartment,
@@ -250,6 +252,8 @@ export const EditorPane = memo(
       const docAtSave = view?.state.doc;
       const saved = await saveRef.current();
       if (!saved) return;
+      // Fase 10: the buffer now matches disk, so ESLint can lint it.
+      requestEslintRun(pathRef.current);
       if (prefs.editorFormatOnSave && formatter !== "lsp") {
         const error = await runExternalFormatter(
           formatter,
@@ -364,6 +368,7 @@ export const EditorPane = memo(
         indentCompartment.of(DEFAULT_INDENT),
         languageCompartment.of([]),
         lspCompartment.of([]),
+        eslintCompartment.of([]),
         diagnosticsReporter(() => pathRef.current),
         // Fase 4: inline AI review decorations. Static: without review
         // data the field is null and the extension renders nothing.
@@ -569,6 +574,16 @@ export const EditorPane = memo(
         effects: lspCompartment.reconfigure(lspExt ?? []),
       });
     }, [lspExt]);
+
+    // Fase 10: ESLint diagnostics from the project's own install.
+    const eslintExt = useEslintExtension(path, doc.status === "ready");
+    useEffect(() => {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      view.dispatch({
+        effects: eslintCompartment.reconfigure(eslintExt ?? []),
+      });
+    }, [eslintExt]);
 
     useEffect(
       () => () => useDiagnosticsStore.getState().report(pathRef.current, null),

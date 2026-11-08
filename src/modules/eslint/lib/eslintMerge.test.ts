@@ -5,6 +5,7 @@ import {
   countDiagnostics,
   diagnosticsEqual,
   mergeDiagnostics,
+  needsEslintReapply,
 } from "./eslintMerge";
 import { useEslintStore } from "./eslintStore";
 
@@ -50,6 +51,31 @@ describe("diagnosticsEqual", () => {
       diagnosticsEqual([diag(0, 5, ESLINT_SOURCE)], [diag(0, 5)]),
     ).toBe(false);
     expect(diagnosticsEqual([], [])).toBe(true);
+  });
+});
+
+describe("needsEslintReapply", () => {
+  it("is false when there is nothing stored", () => {
+    expect(needsEslintReapply([diag(0, 5)], [])).toBe(false);
+    expect(needsEslintReapply([], [])).toBe(false);
+  });
+
+  it("is false when the current set still holds the stored entries", () => {
+    const stored = diag(10, 12, ESLINT_SOURCE);
+    expect(needsEslintReapply([diag(0, 5), stored], [stored])).toBe(false);
+  });
+
+  it("is true when a publisher replaced the set without the stored entries", () => {
+    const stored = diag(10, 12, ESLINT_SOURCE);
+    expect(needsEslintReapply([diag(0, 5)], [stored])).toBe(true);
+    expect(needsEslintReapply([], [stored])).toBe(true);
+  });
+
+  it("ignores a lookalike with different offsets", () => {
+    const stored = diag(10, 12, ESLINT_SOURCE);
+    expect(
+      needsEslintReapply([diag(10, 14, ESLINT_SOURCE)], [stored]),
+    ).toBe(true);
   });
 });
 
