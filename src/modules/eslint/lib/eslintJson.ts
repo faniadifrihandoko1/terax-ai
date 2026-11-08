@@ -1,5 +1,6 @@
 import type { Diagnostic } from "@codemirror/lint";
-import { canonicalPath } from "./eslintPaths";
+import { IS_WINDOWS } from "@/lib/platform";
+import { eslintPathKey } from "./eslintPaths";
 
 /** Source tag on every ESLint-derived CodeMirror diagnostic. */
 export const ESLINT_SOURCE = "eslint";
@@ -74,12 +75,21 @@ export function parseEslintJsonOutput(stdout: string): EslintFileResult[] {
   });
 }
 
+/**
+ * Finds the ESLint JSON result for a file. Comparison uses the same
+ * canonical key as the rest of the ESLint chain (`eslintPathKey`):
+ * forward slashes, lowercased on Windows, where the filesystem is
+ * case-insensitive but case-preserving — ESLint may echo the path back
+ * with different casing (drive letter, a segment) and that must still
+ * match, or a successful run silently shows zero diagnostics.
+ */
 export function findResultForFile(
   results: readonly EslintFileResult[],
   filePath: string,
+  windows: boolean = IS_WINDOWS,
 ): EslintFileResult | undefined {
-  const want = canonicalPath(filePath);
-  return results.find((r) => canonicalPath(r.filePath) === want);
+  const want = eslintPathKey(filePath, windows);
+  return results.find((r) => eslintPathKey(r.filePath, windows) === want);
 }
 
 /** Minimal document surface needed for offset mapping. Satisfied by CodeMirror Text. */

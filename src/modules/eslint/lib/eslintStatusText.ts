@@ -110,7 +110,7 @@ export function describeEslintRunStatus(
           : "(tidak ada hasil)";
       return {
         label: "ESLint: hasil tidak cocok",
-        detail: `ESLint berjalan tapi mengembalikan hasil untuk path lain (${returned}), bukan ${shortPath(status.filePath)}. Kemungkinan perbedaan huruf besar/kecil atau normalisasi path.`,
+        detail: `ESLint berjalan tapi mengembalikan hasil untuk path lain (${returned}), bukan ${shortPath(status.filePath)}. Kemungkinan perbedaan normalisasi path (mis. symlink atau nama pendek 8.3).`,
         tone: "error",
       };
     }
