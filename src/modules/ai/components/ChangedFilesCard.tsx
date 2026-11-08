@@ -21,6 +21,7 @@ import {
   type ToolPartLike,
 } from "../lib/fileMutations";
 import { getCheckpoint } from "../lib/reviewCheckpoint";
+import { getPendingProposal } from "../lib/pendingProposals";
 import { useChatStore } from "../store/chatStore";
 
 type AnyPart = UIMessagePart<Record<string, never>, Record<string, never>>;
@@ -282,9 +283,11 @@ function statusShortLabel(status: AiDiffStatus): string {
 }
 
 /**
- * Stats for one proposed change, derived with the same shared functions
- * AgentRunBridge uses to open the diff tab. Reads the on-disk original
- * once; while it loads the row shows an ellipsis.
+ * Stats for one changed file. Fase 8 (write-first): the disk already
+ * holds the new content, so the baseline comes from the written
+ * baseline — the registry while the run is live, the checkpoint after
+ * a restore or a confirm — and only legacy pre-Fase-8 proposals still
+ * derive from disk. While it loads the row shows an ellipsis.
  */
 function useChangedFileStats(entry: ChangedFileEntry) {
   const [stats, setStats] = useState<{
@@ -301,19 +304,41 @@ function useChangedFileStats(entry: ChangedFileEntry) {
     setFailed(false);
     void (async () => {
       const abs = resolveMutationPath(entry.path, live.getCwd());
+      // The registry is the live source of truth: the first write for
+      // the path set the baseline, later writes only advanced the
+      // written content.
+      const registry = getPendingProposal(abs);
+      if (registry) {
+        setStats({
+          ...computeLineStats(
+            registry.originalContent,
+            registry.proposedContent,
+          ),
+          isNewFile: registry.isNewFile,
+        });
+        return;
+      }
+      // Restored or confirmed: the checkpoint holds the reviewed
+      // baseline and the final content (null after-content = deleted).
+      if (entry.approvalId) {
+        const cp = getCheckpoint(entry.approvalId);
+        if (cp) {
+          setStats({
+            ...computeLineStats(cp.contentBefore, cp.contentAfter ?? ""),
+            // A checkpoint has no isNewFile flag; a baseline of "" means
+            // the agent created the file (an empty file edited to
+            // non-empty mislabels, rare enough to accept).
+            isNewFile: cp.kind === "edit" && cp.contentBefore === "",
+          });
+          return;
+        }
+      }
+      // Legacy (pre-Fase-8): the agent never wrote, so the on-disk
+      // content is still the original and the proposal derives from it.
       const original = await readOriginal(abs);
       if (cancelled) return;
       let content = original.content;
       let isNewFile = original.isNewFile;
-      // An applied delete leaves nothing on disk at the old path; the
-      // checkpoint still holds what was removed, so stats come from it.
-      if (entry.kind === "delete_file" && entry.approvalId) {
-        const cp = getCheckpoint(entry.approvalId);
-        if (cp && cp.kind === "delete") {
-          content = cp.contentBefore;
-          isNewFile = false;
-        }
-      }
       // An applied rename leaves nothing at the old path either; the
       // content now lives at the target.
       if (entry.kind === "rename_file" && entry.targetPath) {
