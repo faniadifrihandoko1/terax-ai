@@ -45,6 +45,7 @@ export type CommandPaletteActionContext = {
   activeFilePath: string | null;
   eslintEnabled: boolean;
   runEslintOnCurrentFile: () => void;
+  runEslintOnEntireProject: () => void;
   openNewTab: () => void;
   openNewBlock: () => void;
   openNewPrivate: () => void;
@@ -107,6 +108,16 @@ export function createCommandItems(
           : !isLintablePath(ctx.activeFilePath)
             ? "Not a JavaScript/TypeScript file"
             : undefined;
+  // The project-wide run needs a root to lint, not an open file. A
+  // missing binary is not a disabled reason here: it is only known
+  // after resolving it, and the run toasts the honest cause then
+  // (the stored rootStatus keys do not share one form with the
+  // explorer root, so a palette-time check would be guesswork).
+  const eslintProjectDisabledReason = !ctx.eslintEnabled
+    ? "ESLint diagnostics off"
+    : !ctx.explorerRoot && !ctx.home
+      ? "No project open"
+      : undefined;
 
   return [
     {
@@ -142,6 +153,15 @@ export function createCommandItems(
       icon: SourceCodeIcon,
       disabledReason: eslintDisabledReason,
       run: ctx.runEslintOnCurrentFile,
+    },
+    {
+      id: "eslint.run-project",
+      title: "Run ESLint on entire project",
+      group: "Editor",
+      keywords: ["eslint", "lint", "project", "problems", "entire"],
+      icon: SourceCodeIcon,
+      disabledReason: eslintProjectDisabledReason,
+      run: ctx.runEslintOnEntireProject,
     },
     {
       id: "spaces.overview",

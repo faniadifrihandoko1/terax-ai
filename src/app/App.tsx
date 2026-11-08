@@ -1439,6 +1439,7 @@ export default function App() {
             runEslintOnCurrentFile: () => {
               if (activeFilePath) requestEslintRunWithReport(activeFilePath);
             },
+            runEslintOnEntireProject: runEslintProjectLint,
             openNewTab,
             openNewBlock: openNewBlockTab,
             openNewPrivate: openNewPrivateTab,

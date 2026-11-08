@@ -31,6 +31,7 @@ function baseContext(
     activeFilePath: null,
     eslintEnabled: true,
     runEslintOnCurrentFile: noop,
+    runEslintOnEntireProject: noop,
     openNewTab: noop,
     openNewBlock: noop,
     openNewPrivate: noop,
@@ -166,6 +167,48 @@ describe("createCommandItems", () => {
     const item = items.find((i) => i.id === "eslint.run");
     expect(item).toBeDefined();
     expect(item?.group).toBe("Editor");
+    item?.run();
+    expect(ran).toBe(1);
+  });
+
+  it("enables Run ESLint on entire project when a root is open", () => {
+    expect(
+      reasonById({ explorerRoot: "/proj" }, "eslint.run-project"),
+    ).toBeUndefined();
+    expect(
+      reasonById(
+        { explorerRoot: null, home: "/home/me" },
+        "eslint.run-project",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("disables the project-wide ESLint run without a root or when off", () => {
+    expect(
+      reasonById(
+        { explorerRoot: null, home: null },
+        "eslint.run-project",
+      ),
+    ).toBe("No project open");
+    expect(
+      reasonById({ explorerRoot: "/proj", eslintEnabled: false }, "eslint.run-project"),
+    ).toBe("ESLint diagnostics off");
+  });
+
+  it("runs the project-wide ESLint command", () => {
+    let ran = 0;
+    const items = createCommandItems(
+      baseContext({
+        explorerRoot: "/proj",
+        runEslintOnEntireProject: () => {
+          ran += 1;
+        },
+      }),
+    );
+    const item = items.find((i) => i.id === "eslint.run-project");
+    expect(item).toBeDefined();
+    expect(item?.group).toBe("Editor");
+    expect(item?.title).toBe("Run ESLint on entire project");
     item?.run();
     expect(ran).toBe(1);
   });
