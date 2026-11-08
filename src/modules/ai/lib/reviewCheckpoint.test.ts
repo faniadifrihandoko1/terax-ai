@@ -9,6 +9,7 @@ import {
   isFileCheckpoint,
   listCheckpoints,
   MAX_CHECKPOINTS_PER_SESSION,
+  recordToolWriteCheckpoint,
   restoreCheckpoint,
   saveCheckpoint,
   updateCheckpointAfter,
@@ -187,6 +188,90 @@ describe("updateCheckpointAfter / ensureWriteCheckpoint (Fase 8)", () => {
     expect(advanced.hashAfter).toBe(djb2Hash("c\n"));
     // The accepted hunks of the earlier state survive the advance.
     expect(advanced.appliedHunks).toEqual([0, 2]);
+    clearAllCheckpoints();
+  });
+});
+
+describe("recordToolWriteCheckpoint (Fase 9, slice 2)", () => {
+  const first = () =>
+    buildEditCheckpoint({
+      approvalId: "tool-1",
+      path: "/x/f.ts",
+      originalContent: "a\n",
+      reconstructedContent: "b\n",
+      appliedHunks: [],
+    });
+  const second = () =>
+    buildEditCheckpoint({
+      approvalId: "tool-2",
+      path: "/x/f.ts",
+      originalContent: "b\n",
+      reconstructedContent: "c\n",
+      appliedHunks: [],
+    });
+
+  it("records a first write's checkpoint under its tool call id", () => {
+    clearAllCheckpoints();
+    recordToolWriteCheckpoint(undefined, first());
+    const cp = getCheckpoint("tool-1");
+    expect(cp?.contentBefore).toBe("a\n");
+    expect(cp?.contentAfter).toBe("b\n");
+    expect(listCheckpoints().size).toBe(1);
+    clearAllCheckpoints();
+  });
+
+  it("advances only the written state on a second write to the same path", () => {
+    clearAllCheckpoints();
+    recordToolWriteCheckpoint(undefined, first());
+    recordToolWriteCheckpoint("tool-1", second());
+    // No second checkpoint: the second write advanced the first one.
+    expect(listCheckpoints().size).toBe(1);
+    const cp = getCheckpoint("tool-1");
+    expect(cp?.contentBefore).toBe("a\n");
+    expect(cp?.contentAfter).toBe("c\n");
+    expect(cp?.hashAfter).toBe(djb2Hash("c\n"));
+    expect(getCheckpoint("tool-2")).toBeUndefined();
+    clearAllCheckpoints();
+  });
+
+  it("records a fresh checkpoint when the prior one is gone", () => {
+    clearAllCheckpoints();
+    recordToolWriteCheckpoint(undefined, first());
+    // The prior checkpoint was consumed (e.g. by a Restore).
+    clearAllCheckpoints();
+    recordToolWriteCheckpoint("tool-1", second());
+    expect(getCheckpoint("tool-1")).toBeUndefined();
+    const cp = getCheckpoint("tool-2");
+    expect(cp?.contentBefore).toBe("b\n");
+    expect(cp?.contentAfter).toBe("c\n");
+    clearAllCheckpoints();
+  });
+
+  it("leaves a delete checkpoint alone when the file is recreated", () => {
+    clearAllCheckpoints();
+    saveCheckpoint(
+      buildDeleteCheckpoint({
+        approvalId: "del-1",
+        path: "/x/g.ts",
+        content: "gone\n",
+      }),
+    );
+    // The file was deleted, then recreated in the same run: the
+    // delete checkpoint cannot advance to content, and no second
+    // checkpoint is created — the bridge owns this path.
+    recordToolWriteCheckpoint(
+      "del-1",
+      buildEditCheckpoint({
+        approvalId: "tool-9",
+        path: "/x/g.ts",
+        originalContent: "",
+        reconstructedContent: "back\n",
+        appliedHunks: [],
+      }),
+    );
+    expect(listCheckpoints().size).toBe(1);
+    expect(getCheckpoint("del-1")?.contentAfter).toBeNull();
+    expect(getCheckpoint("tool-9")).toBeUndefined();
     clearAllCheckpoints();
   });
 });

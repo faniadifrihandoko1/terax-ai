@@ -42,6 +42,14 @@ export type PendingProposal = {
   kind: PendingProposalKind;
   /** Rename destination. Only set when kind is "rename". */
   targetPath?: string;
+  /**
+   * Tool call id of the first write for this path (Fase 9, slice 2).
+   * The review tab's proposal id is that same id, so the tool-side
+   * checkpoint and the bridge checkpoint for the path share one key:
+   * the first write records the checkpoint under it, later writes
+   * only advance the written state of that same checkpoint.
+   */
+  approvalId?: string;
 };
 
 const pending = new Map<string, PendingProposal>();
@@ -54,9 +62,9 @@ export function getPendingProposal(
 
 /**
  * Records (or extends) the written baseline for a path. An existing
- * entry keeps its original content and its kind — the review is always
- * against the on-disk baseline the first write saw — and only the
- * written content moves forward.
+ * entry keeps its original content, its kind and its approval id — the
+ * review is always against the on-disk baseline the first write saw —
+ * and only the written content moves forward.
  */
 export function composePendingProposal(
   path: string,
@@ -65,6 +73,7 @@ export function composePendingProposal(
   isNewFile: boolean,
   kind: PendingProposalKind = "edit",
   targetPath?: string,
+  approvalId?: string,
 ): PendingProposal {
   const existing = pending.get(path);
   const next: PendingProposal = existing
@@ -75,6 +84,7 @@ export function composePendingProposal(
         isNewFile,
         kind,
         ...(targetPath !== undefined ? { targetPath } : {}),
+        ...(approvalId !== undefined ? { approvalId } : {}),
       };
   pending.set(path, next);
   return next;

@@ -202,6 +202,44 @@ export function clearCheckpoint(approvalId: string): void {
   checkpoints.delete(approvalId);
 }
 
+/**
+ * Records the checkpoint for a write-first tool write, at write time
+ * (Fase 9, slice 2). Before this the checkpoint was only taken by the
+ * bridge effect after the tool result streamed back, so a crash
+ * anywhere between the disk write and the persisted review state left
+ * the change un-restorable. The tool now records it the moment the
+ * native write succeeds, keyed by the tool call id — which is also
+ * the review tab's proposal id, so the bridge's later
+ * ensureWriteCheckpoint for the same id just advances the written
+ * state instead of creating a second checkpoint.
+ *
+ * - First write for a path (`priorApprovalId` undefined): the
+ *   checkpoint is saved as-is.
+ * - Later write to the same path: only the written state of the first
+ *   write's checkpoint advances — the baseline, the accepted hunks
+ *   and the timestamp never move, so Reject still reverts to the
+ *   original file, not to an intermediate write.
+ * - The prior checkpoint is gone (e.g. consumed by a Restore): a
+ *   fresh checkpoint is recorded under the new tool call id.
+ * - The prior checkpoint refuses the advance (a delete checkpoint
+ *   cannot advance to content — the file was deleted and then
+ *   recreated in the same run): nothing is recorded here; the bridge
+ *   owns the checkpoint for that path.
+ */
+export function recordToolWriteCheckpoint(
+  priorApprovalId: string | undefined,
+  cp: FileCheckpoint,
+): void {
+  if (priorApprovalId !== undefined) {
+    if (updateCheckpointAfter(priorApprovalId, cp.contentAfter)) return;
+    // The advance was refused. When the prior checkpoint still
+    // exists it is a delete checkpoint being advanced to content —
+    // leave it alone. When it is gone, record a fresh one instead.
+    if (getCheckpoint(priorApprovalId) !== undefined) return;
+  }
+  ensureWriteCheckpoint(cp);
+}
+
 /** Drops every checkpoint stamped with the deleted session id. */
 export function clearCheckpointsForSession(sessionId: string): void {
   for (const [id, cp] of checkpoints) {

@@ -92,3 +92,38 @@ describe("pendingProposals", () => {
     expect(getPendingProposal(FILE)).toBeUndefined();
   });
 });
+
+describe("pendingProposals approvalId (Fase 9, slice 2)", () => {
+  it("records the first write's tool call id", () => {
+    const p = composePendingProposal(
+      FILE,
+      "hello",
+      "hello world",
+      false,
+      "edit",
+      undefined,
+      "tool-call-1",
+    );
+    expect(p.approvalId).toBe("tool-call-1");
+  });
+
+  it("keeps the first approval id when a later write composes on top", () => {
+    composePendingProposal(FILE, "one", "one two", false, "edit", undefined, "tool-call-1");
+    const p = composePendingProposal(
+      FILE,
+      "one two",
+      "one two three",
+      false,
+      "edit",
+      undefined,
+      "tool-call-2",
+    );
+    expect(p.approvalId).toBe("tool-call-1");
+    expect(p.proposedContent).toBe("one two three");
+  });
+
+  it("leaves approvalId unset when the caller does not pass one", () => {
+    const p = composePendingProposal(FILE, "a", "b", false);
+    expect(p.approvalId).toBeUndefined();
+  });
+});
