@@ -721,6 +721,34 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   (the LSP has the same limit); a very dirty file can exceed the 256 KiB
   one-shot output cap and report a failure; a global eslint is used only
   through npx without install.
+  Fase 10.1 (diagnostic build): every run exit now records a per-path
+  run status (`runStatus` in `src/modules/eslint/lib/eslintStore.ts`,
+  text in `lib/eslintStatusText.ts`) shown as a pill in the status bar
+  next to the diagnostics badge, with a popover explaining the outcome
+  and a "Jalankan ulang" button. Command Palette → "Run ESLint on
+  current file" (Editor group) forces a run past the debounce and
+  toasts the outcome — counts on success, the exact reason on
+  failure. The exits that used to be silent now toast once per root
+  per session: disk read failed, and ESLint returning results for a
+  different path (the toast names both paths). A dirty buffer skip
+  and a doc-changed abort record status only, never a toast, because
+  both are normal while typing or saving. A binary-detection miss
+  carries a diagnosis — how many ancestor levels were walked,
+  whether the 12-level cap was hit, and whether `fs_stat` failed on
+  the file's own directory (control probe) — so "path too deep" can
+  be told apart from "fs_stat cannot see this project" and "no
+  eslint installed". Build identity: the short git commit is baked
+  in at build time (`__TERAX_COMMIT__` via vite `define`) and shown
+  in Settings → About ("Commit"); the app version stays 0.9.0 across
+  fork phases. Eager entry points (App, StatusBar) must import the
+  pill and the manual-run helper from their direct paths, never the
+  eslint barrel — the barrel also exports the CodeMirror-backed
+  plugin, and importing it pulls CodeMirror into the startup chunk
+  (caught by the dist-budget/eager-budget tests).
+  This phase was built because a user install showed
+  neither diagnostics nor any toast after the CRLF fix (ESLint 8.57.0
+  flags the file manually), and none of the silent exits could be
+  localized from the laptop alone.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
