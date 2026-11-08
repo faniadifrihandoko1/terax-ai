@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { BUILD_COMMIT } from "@/lib/buildInfo";
 import { useUpdater } from "@/modules/updater";
 import { GithubIcon, Globe02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -88,6 +89,9 @@ export function AboutSection() {
         <dd className="font-mono text-[11.5px]">
           {build ? `${build} · v${version}` : `v${version}`}
         </dd>
+
+        <dt className="text-muted-foreground">Commit</dt>
+        <dd className="font-mono text-[11.5px]">{BUILD_COMMIT}</dd>
 
         <dt className="text-muted-foreground">Bundle ID</dt>
         <dd className="font-mono text-[11.5px]">app.crynta.terax</dd>

@@ -1,6 +1,7 @@
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { defineConfig, type PluginOption, type UserConfig } from "vite";
@@ -8,6 +9,21 @@ import Inspect from "vite-plugin-inspect";
 
 const host = process.env.TAURI_DEV_HOST;
 const rootDir = import.meta.dirname;
+
+// Short commit hash baked into the build so Settings → About can show
+// exactly which commit is running (the app version stays 0.9.0 across
+// fork phases). Falls back to "dev" when git is unavailable, e.g. a
+// source tarball — the build must not fail for lack of git.
+let commit = "dev";
+try {
+  commit = execSync("git rev-parse --short HEAD", {
+    cwd: rootDir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+} catch {
+  // Keep "dev".
+}
 
 // The app-lab driver (`TERAX_BENCH=1`) may only be built for the lab's own identifier
 // (scripts/app-lab/run.py sets TERAX_BENCH_IDENTIFIER): a stray `TERAX_BENCH=1 pnpm build` or
@@ -207,6 +223,7 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => ({
   // including its dynamic imports, is removed, so no bench code or chunk is emitted.
   define: {
     __TERAX_BENCH__: JSON.stringify(process.env.TERAX_BENCH === "1"),
+    __TERAX_COMMIT__: JSON.stringify(commit),
   },
   clearScreen: false,
   server: {
