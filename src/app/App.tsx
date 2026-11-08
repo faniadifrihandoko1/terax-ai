@@ -285,11 +285,16 @@ export default function App() {
   // restores proposal contents from the persisted checkpoint when the
   // agent already wrote, or re-derives them from the chat messages for
   // legacy proposals, exactly like on first open.
+  // Fase 9 (slice 2): checkpoints without an open tab are persisted
+  // too (snapshotReviewState synthesizes pending checkpoint-only
+  // proposals for them), so closing the ai-diff tab before this save
+  // — or a crash before the next one — no longer loses the checkpoint
+  // and its Restore.
   useEffect(() => {
     if (!activeSessionId) return;
     const timer = setTimeout(() => {
       const aiDiffTabs = tabs.filter((t) => t.kind === "ai-diff");
-      if (aiDiffTabs.length === 0) return;
+      if (aiDiffTabs.length === 0 && listCheckpoints().size === 0) return;
       void saveReviewState(
         activeSessionId,
         snapshotReviewState(
