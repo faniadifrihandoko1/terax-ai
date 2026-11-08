@@ -89,13 +89,24 @@ export function createCommandItems(
       : undefined;
   const closeDisabled =
     onlyOneTab && activePaneCount < 2 ? "Last tab" : undefined;
+  // Fase 10.2: review (ai-diff) and diff tabs never mount an editor,
+  // so they never have an ESLint plugin — disable the command there
+  // with the real reason instead of letting it run and fail with a
+  // misleading "no editor" toast. The ai-diff case must come before
+  // the "No file open" check: activeFilePath is null for ai-diff tabs
+  // even though a file is open in the review tab.
   const eslintDisabledReason = !ctx.eslintEnabled
     ? "ESLint diagnostics off"
-    : !ctx.activeFilePath
-      ? "No file open"
-      : !isLintablePath(ctx.activeFilePath)
-        ? "Not a JavaScript/TypeScript file"
-        : undefined;
+    : activeTab?.kind === "ai-diff"
+      ? "Buka file di tab editor, bukan tab review"
+      : activeTab?.kind === "git-diff" ||
+          activeTab?.kind === "git-commit-file"
+        ? "Buka file di tab editor, bukan tab diff"
+        : !ctx.activeFilePath
+          ? "No file open"
+          : !isLintablePath(ctx.activeFilePath)
+            ? "Not a JavaScript/TypeScript file"
+            : undefined;
 
   return [
     {

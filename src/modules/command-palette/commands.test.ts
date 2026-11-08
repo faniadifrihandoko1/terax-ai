@@ -126,6 +126,33 @@ describe("createCommandItems", () => {
     ).toBe("Not a JavaScript/TypeScript file");
   });
 
+  it("disables Run ESLint on review and diff tabs, with the real reason", () => {
+    const aiDiffTab = { ...terminalTab(1), kind: "ai-diff" } as unknown as Tab;
+    expect(
+      reasonById({ tabs: [aiDiffTab], activeFilePath: null }, "eslint.run"),
+    ).toBe("Buka file di tab editor, bukan tab review");
+    const gitDiffTab = {
+      ...terminalTab(1),
+      kind: "git-diff",
+    } as unknown as Tab;
+    expect(
+      reasonById(
+        { tabs: [gitDiffTab], activeFilePath: "/proj/src/a.tsx" },
+        "eslint.run",
+      ),
+    ).toBe("Buka file di tab editor, bukan tab diff");
+    const gitCommitFileTab = {
+      ...terminalTab(1),
+      kind: "git-commit-file",
+    } as unknown as Tab;
+    expect(
+      reasonById(
+        { tabs: [gitCommitFileTab], activeFilePath: "/proj/src/a.tsx" },
+        "eslint.run",
+      ),
+    ).toBe("Buka file di tab editor, bukan tab diff");
+  });
+
   it("runs the manual ESLint command for the current file", () => {
     let ran = 0;
     const items = createCommandItems(
