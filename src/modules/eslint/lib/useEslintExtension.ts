@@ -26,6 +26,7 @@ import {
   resolveEslintBinary,
   runEslintFile,
 } from "./eslintRunner";
+import { describeEslintRunStatus } from "./eslintStatusText";
 import { useEslintStore } from "./eslintStore";
 
 const INITIAL_DELAY_MS = 350;
@@ -76,6 +77,7 @@ class EslintPlugin {
     if (this.timer !== null) clearTimeout(this.timer);
     this.unsubscribe?.();
     useEslintStore.getState().clearPath(this.path);
+    useEslintStore.getState().clearRunStatus(this.path);
   }
 
   private schedule(delayMs: number): void {
@@ -144,27 +146,55 @@ class EslintPlugin {
     if (!isLintablePath(this.path)) return;
     const view = this.view;
     const docAtStart = view.state.doc;
+    store.setRunStatus(this.path, { kind: "running" });
+    const aborted = (): boolean => {
+      if (
+        this.destroyed ||
+        generation !== this.generation ||
+        view.state.doc !== docAtStart
+      ) {
+        // Status only, never a toast: a doc change mid-run is normal
+        // (save/format round-trip) and the next trigger retries.
+        store.setRunStatus(this.path, { kind: "aborted-doc-changed" });
+        return true;
+      }
+      return false;
+    };
     const disk = await readDiskText(this.path);
-    if (
-      this.destroyed ||
-      generation !== this.generation ||
-      view.state.doc !== docAtStart
-    ) {
+    if (aborted()) return;
+    if (disk === null) {
+      const root = dirnameOf(this.path);
+      store.setRunStatus(this.path, { kind: "disk-read-failed" });
+      notifyEslintDiskReadFailed(root, this.path);
       return;
     }
-    if (disk === null) return;
-    if (!diskTextMatchesBuffer(disk, docAtStart.toString())) return;
-    const binary = await resolveEslintBinary(this.path);
-    if (
-      this.destroyed ||
-      generation !== this.generation ||
-      view.state.doc !== docAtStart
-    ) {
+    if (!diskTextMatchesBuffer(disk, docAtStart.toString())) {
+      // Status only, never a toast: a dirty buffer is the normal
+      // state while typing, and a run is retried after every save.
+      store.setRunStatus(this.path, { kind: "skipped-dirty" });
       return;
     }
+    const resolution = await resolveEslintBinary(this.path);
+    if (aborted()) return;
+    const binary = resolution.binary;
     if (!binary) {
       const root = dirnameOf(this.path);
+      const detection = resolution.detection;
       store.setRootStatus(root, { kind: "missing-binary", root });
+      // A null binary always comes with a "missing" detection; the
+      // fallbacks only satisfy the type checker.
+      store.setRunStatus(this.path, {
+        kind: "missing-binary",
+        root,
+        searchedLevels:
+          detection.status === "missing" ? detection.searchedLevels : 0,
+        truncatedByCap:
+          detection.status === "missing" ? detection.truncatedByCap : false,
+        controlStatFailed:
+          detection.status === "missing"
+            ? detection.controlStatFailed
+            : false,
+      });
       this.notifyMissing(root, "missing-binary");
       store.clearPath(this.path);
       this.applyStored();
@@ -176,13 +206,7 @@ class EslintPlugin {
       binary: binary.kind === "path" ? binary.binary : "npx",
     });
     const result = await runEslintFile({ binary, file: this.path });
-    if (
-      this.destroyed ||
-      generation !== this.generation ||
-      view.state.doc !== docAtStart
-    ) {
-      return;
-    }
+    if (aborted()) return;
     if (result.kind === "timeout" || result.kind === "failed") {
       const message =
         result.kind === "timeout" ? "ESLint timed out" : result.message;
@@ -191,11 +215,21 @@ class EslintPlugin {
         root: binary.root,
         message,
       });
+      store.setRunStatus(
+        this.path,
+        result.kind === "timeout"
+          ? { kind: "timeout", root: binary.root }
+          : { kind: "failed", root: binary.root, message },
+      );
       notifyEslintRunFailed(binary.root, message);
       return;
     }
     if (result.kind === "missing-config") {
       store.setRootStatus(binary.root, {
+        kind: "missing-config",
+        root: binary.root,
+      });
+      store.setRunStatus(this.path, {
         kind: "missing-config",
         root: binary.root,
       });
@@ -205,11 +239,24 @@ class EslintPlugin {
       return;
     }
     const fileResult = findResultForFile(result.results, this.path);
-    const diags = eslintMessagesToDiagnostics(
-      docAtStart,
-      fileResult?.messages ?? [],
-    );
+    if (!fileResult) {
+      const returnedPaths = result.results.map((r) => r.filePath);
+      const status = {
+        kind: "no-result-match" as const,
+        filePath: this.path,
+        returnedPaths,
+      };
+      store.setRunStatus(this.path, status);
+      notifyEslintNoResultMatch(binary.root, status);
+      store.clearPath(this.path);
+      this.applyStored();
+      return;
+    }
+    const diags = eslintMessagesToDiagnostics(docAtStart, fileResult.messages);
+    const errors = diags.filter((d) => d.severity === "error").length;
+    const warnings = diags.filter((d) => d.severity === "warning").length;
     store.setPathDiagnostics(this.path, diags);
+    store.setRunStatus(this.path, { kind: "ok", errors, warnings });
     this.applyStored();
   }
 }
@@ -219,22 +266,63 @@ export function eslintPluginExtension(path: string): Extension {
 }
 
 /**
- * Warns once per root per session that ESLint runs are failing for
- * that project (timeout, spawn failure, bad output). Shares the
- * once-per-root guard with the missing-binary/config toasts, so a
+ * Shared once-per-root guard for the ESLint-problem toasts below, so a
  * broken project does not spam a toast on every debounced trigger.
+ * Returns false when this root was already notified this session.
+ */
+function notifyOnce(root: string): boolean {
+  const store = useEslintStore.getState();
+  if (store.notifiedRoots[root]) return false;
+  store.markRootNotified(root);
+  return true;
+}
+
+/**
+ * Warns once per root per session that ESLint runs are failing for
+ * that project (timeout, spawn failure, bad output).
  * Previously a failed run only set rootStatus to "error" and the user
  * saw nothing at all.
  */
 export function notifyEslintRunFailed(root: string, message: string): void {
-  const store = useEslintStore.getState();
-  if (store.notifiedRoots[root]) return;
-  store.markRootNotified(root);
+  if (!notifyOnce(root)) return;
   toast.warning("ESLint gagal dijalankan", {
     description:
       message ||
       "Periksa instalasi ESLint di project ini, atau matikan diagnostik ESLint di Settings → General.",
   });
+}
+
+/**
+ * Warns once per root per session that the file could not be read from
+ * disk. Previously the run returned silently and no diagnostic ever
+ * appeared, with no clue why.
+ */
+export function notifyEslintDiskReadFailed(
+  root: string,
+  path: string,
+): void {
+  if (!notifyOnce(root)) return;
+  toast.warning("ESLint gagal membaca file", {
+    description: `Terax tidak bisa membaca ${path} dari disk. Periksa path project dan izin akses file.`,
+  });
+}
+
+/**
+ * Warns once per root per session that ESLint ran but returned results
+ * for a different path than the open file. Previously the run stored
+ * zero diagnostics and the user saw nothing.
+ */
+export function notifyEslintNoResultMatch(
+  root: string,
+  status: { filePath: string; returnedPaths: string[] },
+): void {
+  if (!notifyOnce(root)) return;
+  const { label, detail } = describeEslintRunStatus({
+    kind: "no-result-match",
+    filePath: status.filePath,
+    returnedPaths: status.returnedPaths,
+  });
+  toast.warning(label, { description: detail });
 }
 
 /**

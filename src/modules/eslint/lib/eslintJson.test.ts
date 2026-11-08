@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ESLINT_SOURCE,
   eslintMessagesToDiagnostics,
+  findResultForFile,
   parseEslintJsonOutput,
   type EslintMessage,
 } from "./eslintJson";
@@ -137,5 +138,35 @@ describe("eslintMessagesToDiagnostics", () => {
   it("keeps the raw message when ruleId is null", () => {
     const diags = eslintMessagesToDiagnostics(doc, [msg({ ruleId: null })]);
     expect(diags[0].message).toBe("Unexpected console statement.");
+  });
+});
+
+describe("findResultForFile", () => {
+  const results = [
+    {
+      filePath: "C:\\proj\\src\\a.ts",
+      messages: [],
+      errorCount: 0,
+      warningCount: 0,
+      fatalErrorCount: 0,
+    },
+  ];
+
+  it("matches across Windows separators", () => {
+    expect(findResultForFile(results, "C:/proj/src/a.ts")).toBe(
+      results[0],
+    );
+  });
+
+  it("returns undefined when ESLint reports a different path", () => {
+    expect(findResultForFile(results, "C:/proj/src/b.ts")).toBeUndefined();
+    expect(findResultForFile([], "C:/proj/src/a.ts")).toBeUndefined();
+  });
+
+  it("does not match across case differences", () => {
+    // ESLint echoes the path it was given; a case-different echo means
+    // the result is for a different spelling of the path, and the
+    // plugin must say so instead of silently showing zero diagnostics.
+    expect(findResultForFile(results, "c:/proj/src/a.ts")).toBeUndefined();
   });
 });

@@ -5,7 +5,11 @@ vi.mock("sonner", () => ({ toast: toasts }));
 
 import { toast } from "sonner";
 import { useEslintStore } from "./eslintStore";
-import { notifyEslintRunFailed } from "./useEslintExtension";
+import {
+  notifyEslintDiskReadFailed,
+  notifyEslintNoResultMatch,
+  notifyEslintRunFailed,
+} from "./useEslintExtension";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -39,5 +43,38 @@ describe("notifyEslintRunFailed", () => {
     expect(toast.warning).toHaveBeenCalledWith("ESLint gagal dijalankan", {
       description: expect.stringContaining("Settings"),
     });
+  });
+});
+
+describe("notifyEslintDiskReadFailed", () => {
+  it("names the unreadable file and warns once per root", () => {
+    notifyEslintDiskReadFailed("/proj", "/proj/src/a.ts");
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(toast.warning).toHaveBeenCalledWith(
+      "ESLint gagal membaca file",
+      { description: expect.stringContaining("/proj/src/a.ts") },
+    );
+    notifyEslintDiskReadFailed("/proj", "/proj/src/b.ts");
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("notifyEslintNoResultMatch", () => {
+  it("names the expected path and the path ESLint returned", () => {
+    notifyEslintNoResultMatch("/proj", {
+      filePath: "/proj/src/a.ts",
+      returnedPaths: ["/PROJ/src/a.ts"],
+    });
+    const calls = vi.mocked(toast.warning).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe("ESLint: hasil tidak cocok");
+    expect(calls[0][1]?.description).toContain("/proj/src/a.ts");
+    expect(calls[0][1]?.description).toContain("/PROJ/src/a.ts");
+    // Once per root: a second mismatch for the same root stays silent.
+    notifyEslintNoResultMatch("/proj", {
+      filePath: "/proj/src/b.ts",
+      returnedPaths: [],
+    });
+    expect(vi.mocked(toast.warning).mock.calls).toHaveLength(1);
   });
 });
