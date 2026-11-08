@@ -3,6 +3,7 @@ import { isPrimaryModifierPressed } from "@/lib/platform";
 import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { memo } from "react";
+import { DiagnosticsMark } from "./DiagnosticsMark";
 import { InlineInput } from "./InlineInput";
 import { explorerGitTextClass } from "./lib/gitStatusColor";
 import type { GitStatusCode } from "./lib/gitStatusUtils";
@@ -146,6 +147,7 @@ function EntryRowImpl(props: EntryRowProps) {
       >
         {name}
       </span>
+      <DiagnosticsMark path={path} isDir={isDir} />
     </button>
   );
 }
