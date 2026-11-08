@@ -1,23 +1,28 @@
 /**
- * Inline AI review in the editor (Fase 4, Antigravity-style).
+ * Inline AI review in the editor (Fase 4, Antigravity-style; write-first
+ * since Fase 8).
  *
- * The editor buffer keeps showing the on-disk (original) content; the
- * pending proposal is rendered on top of it with CodeMirror decorations:
+ * The editor buffer shows the agent-written (proposed) content — the
+ * change is already on disk — and the review renders the diff against
+ * the checkpoint baseline on top of it with CodeMirror decorations:
  *
- * - Removed lines: rose background + strikethrough while undecided,
- *   hidden once accepted, plain once rejected.
- * - Added lines: a block widget after the hunk anchor, green while
- *   undecided, plain once accepted, gone once rejected.
+ * - Added lines: real buffer lines, green while undecided, plain once
+ *   accepted, struck through once rejected.
+ * - Removed lines: a block widget showing the original text, struck
+ *   through while undecided, hidden once accepted, plain once rejected.
  * - Every hunk gets a header widget above it with Accept / Reject
  *   buttons and its current state, like Antigravity's per-change
  *   Accept/Reject above each change.
  *
- * The buffer is the original file on purpose: the proposal is not
- * written anywhere until the user applies it, so the review can never
- * silently change the file, and the existing disk-hash conflict guard
- * (FR-07) still applies at Apply time. While a review is active the
- * editor is read-only (the EditorPane owns that switch); editing
- * resumes once the proposal is applied or discarded.
+ * The editor stays editable during review (unlike the read-only
+ * ai-diff tab): the decorations map through edits via CodeMirror range
+ * mapping (approximately right), the ai-diff tab stays the
+ * authoritative review surface, and the FR-07 conflict guard still
+ * protects the confirm — a mid-review edit to the buffer blocks the
+ * confirm instead of being silently overwritten. The save path has its
+ * own mtime guard (useDocument): saving a buffer whose file changed
+ * on disk is withheld with a toast until the user explicitly
+ * overwrites.
  *
  * Pure parts (`planInlineReview`, `hunkAtLine`, `anchorPosition`) are
  * unit-tested without a view; the StateField just renders the plan.
@@ -46,13 +51,13 @@ export type InlineHunkPlan = {
   hunkIndex: number;
   state: HunkDecision;
   focused: boolean;
-  /** 0-based base line the hunk anchors at (first removed line, or the insertion point). */
+  /** 0-based proposed line the hunk anchors at (first added line, or the insertion point). */
   anchorLine: number;
-  /** 0-based base lines this hunk removes. */
-  removedLines: number[];
-  /** Added line texts, without terminators. */
-  addedLines: string[];
-  /** Display label, e.g. "lines 3-5" or "insert after line 2". */
+  /** 0-based proposed lines this hunk adds (real buffer lines). */
+  addedLines: number[];
+  /** Original line texts this hunk removes (shown as a widget). */
+  removedLines: string[];
+  /** Display label, e.g. "lines 3-5" or "remove lines 2-2". */
   label: string;
 };
 
@@ -67,6 +72,18 @@ export function labelForHunk(hunk: LineHunk): string {
     : `lines ${hunk.baseFrom + 1}-${hunk.baseTo}`;
 }
 
+/**
+ * Human label for a hunk against the proposed buffer (Fase 8): the
+ * user sees the written content, so the label counts proposed lines —
+ * except a pure deletion, which has no proposed lines and is labelled
+ * by the original lines it removes.
+ */
+export function labelForHunkProposed(hunk: LineHunk): string {
+  return hunk.proposedFrom === hunk.proposedTo
+    ? `remove lines ${hunk.baseFrom + 1}-${hunk.baseTo}`
+    : `lines ${hunk.proposedFrom + 1}-${hunk.proposedTo}`;
+}
+
 export function planInlineReview(
   changeSet: LineChangeSet,
   decisions: HunkDecisions,
@@ -78,40 +95,43 @@ export function planInlineReview(
       hunkIndex: hunk.index,
       state: decisions.get(hunk.index) ?? "undecided",
       focused: focusedHunk === hunk.index,
-      anchorLine: hunk.baseFrom,
+      anchorLine: hunk.proposedFrom,
+      addedLines: changes
+        .filter((c) => c.kind === "added")
+        .map((c) => c.proposedLine ?? 0),
       removedLines: changes
         .filter((c) => c.kind === "removed")
-        .map((c) => c.baseLine ?? 0),
-      addedLines: changes.filter((c) => c.kind === "added").map((c) => c.text),
-      label: labelForHunk(hunk),
+        .map((c) => c.text),
+      label: labelForHunkProposed(hunk),
     };
   });
 }
 
 /**
  * Character position a hunk's widgets anchor at: the start of the first
- * affected base line, or the end of the document for an insertion at the
- * very end.
+ * affected proposed line, or the end of the document for an insertion at
+ * the very end.
  */
 export function anchorPosition(doc: Text, hunk: LineHunk): number {
-  if (hunk.baseFrom >= doc.lines) return doc.length;
-  return doc.line(Math.max(1, hunk.baseFrom + 1)).from;
+  if (hunk.proposedFrom >= doc.lines) return doc.length;
+  return doc.line(Math.max(1, hunk.proposedFrom + 1)).from;
 }
 
-/** Hunk index whose base range contains 0-based `baseLine`, if any. */
+/** Hunk index whose proposed range contains 0-based `proposedLine`, if any. */
 export function hunkAtLine(
   changeSet: LineChangeSet,
-  baseLine: number,
+  proposedLine: number,
 ): number | null {
   for (const hunk of changeSet.hunks) {
-    if (hunk.baseFrom <= baseLine && baseLine < hunk.baseTo) {
+    if (hunk.proposedFrom <= proposedLine && proposedLine < hunk.proposedTo) {
       return hunk.index;
     }
-    // A pure insertion sits between lines: it belongs to the line
-    // before and the line after its anchor.
+    // A pure deletion sits between proposed lines: it belongs to the
+    // line before and the line after its anchor.
     if (
-      hunk.baseFrom === hunk.baseTo &&
-      (baseLine === hunk.baseFrom || baseLine === hunk.baseFrom - 1)
+      hunk.proposedFrom === hunk.proposedTo &&
+      (proposedLine === hunk.proposedFrom ||
+        proposedLine === hunk.proposedFrom - 1)
     ) {
       return hunk.index;
     }
@@ -132,13 +152,13 @@ export function firstUndecidedHunk(
   return null;
 }
 
-/** First hunk at or after 0-based `baseLine`, if any. */
+/** First hunk at or after 0-based `proposedLine`, if any. */
 export function nextHunkAtOrAfter(
   changeSet: LineChangeSet,
-  baseLine: number,
+  proposedLine: number,
 ): number | null {
   for (const hunk of changeSet.hunks) {
-    if (hunk.baseTo > baseLine || hunk.baseFrom >= baseLine) {
+    if (hunk.proposedTo > proposedLine || hunk.proposedFrom >= proposedLine) {
       return hunk.index;
     }
   }
@@ -258,34 +278,39 @@ class HunkBarWidget extends WidgetType {
   }
 }
 
-/** Block widget showing a hunk's added lines in place. */
-class AddedLinesWidget extends WidgetType {
+/**
+ * Block widget showing a hunk's removed lines in place. The removed
+ * lines are not in the buffer anymore (the buffer is the written
+ * content), so they render here: struck through while undecided, plain
+ * once rejected. Accepted deletions are not rendered at all.
+ */
+class RemovedLinesWidget extends WidgetType {
   constructor(private plan: InlineHunkPlan) {
     super();
   }
 
   toDOM(): HTMLElement {
     const box = document.createElement("div");
-    box.className = "cm-inlineAddedBox";
-    if (this.plan.state === "accepted") {
-      box.classList.add("cm-inlineAddedBox-accepted");
+    box.className = "cm-inlineRemovedBox";
+    if (this.plan.state === "rejected") {
+      box.classList.add("cm-inlineRemovedBox-rejected");
     }
-    if (this.plan.focused) box.classList.add("cm-inlineAddedBox-focused");
-    for (const text of this.plan.addedLines) {
+    if (this.plan.focused) box.classList.add("cm-inlineRemovedBox-focused");
+    for (const text of this.plan.removedLines) {
       const line = document.createElement("div");
-      line.className = "cm-inlineAddedLine";
-      line.textContent = `+ ${text}`;
+      line.className = "cm-inlineRemovedBoxLine";
+      line.textContent = `- ${text}`;
       box.appendChild(line);
     }
     return box;
   }
 
-  eq(other: AddedLinesWidget): boolean {
+  eq(other: RemovedLinesWidget): boolean {
     return (
       other.plan.hunkIndex === this.plan.hunkIndex &&
       other.plan.state === this.plan.state &&
       other.plan.focused === this.plan.focused &&
-      other.plan.addedLines.join("\n") === this.plan.addedLines.join("\n")
+      other.plan.removedLines.join("\n") === this.plan.removedLines.join("\n")
     );
   }
 
@@ -304,7 +329,7 @@ type DecoEntry = {
 /**
  * Builds the decoration set for the current review data. Entries are
  * sorted by position so the RangeSet builder accepts them; at one
- * position the hunk bar comes first, then the added lines, then line
+ * position the hunk bar comes first, then the removed lines, then line
  * decorations.
  */
 export function buildInlineDecorations(
@@ -330,54 +355,48 @@ export function buildInlineDecorations(
         side: -1,
       }),
     });
-    for (const lineNo of plan.removedLines) {
-      if (lineNo + 1 > doc.lines) continue;
-      const line = doc.line(lineNo + 1);
-      if (plan.state === "accepted") {
-        // Hide the line including its terminator, so an accepted
-        // deletion disappears from view exactly like the result.
-        let end = line.to;
-        if (end < doc.length) {
-          end +=
-            doc.sliceString(end, end + 2) === "\r\n"
-              ? 2
-              : doc.sliceString(end, end + 1) === "\n"
-                ? 1
-                : 0;
-        }
-        entries.push({
-          from: line.from,
-          to: end,
-          order: 2,
-          deco: Decoration.replace({}),
-        });
-      } else if (plan.state === "undecided") {
-        entries.push({
-          from: line.from,
-          to: line.from,
-          order: 2,
-          deco: Decoration.line({ class: "cm-inlineRemovedLine" }),
-        });
-        entries.push({
-          from: line.from,
-          to: line.to,
-          order: 3,
-          deco: Decoration.mark({ class: "cm-inlineRemovedText" }),
-        });
-      }
-      // Rejected: the line stays, undecorated, like the result.
-    }
-    if (plan.addedLines.length > 0 && plan.state !== "rejected") {
+    // Removed lines are not in the buffer anymore: show them as a
+    // widget. Undecided: struck through. Accepted: hidden (the
+    // deletion is already the result). Rejected: plain (they come back).
+    if (plan.removedLines.length > 0 && plan.state !== "accepted") {
       entries.push({
         from: anchor,
         to: anchor,
         order: 1,
         deco: Decoration.widget({
-          widget: new AddedLinesWidget(plan),
+          widget: new RemovedLinesWidget(plan),
           block: true,
           side: 0,
         }),
       });
+    }
+    // Added lines are real buffer lines: mark them. Undecided: green.
+    // Accepted: plain. Rejected: struck through (they will be removed).
+    for (const lineNo of plan.addedLines) {
+      if (lineNo + 1 > doc.lines) continue;
+      const line = doc.line(lineNo + 1);
+      if (plan.state === "undecided") {
+        entries.push({
+          from: line.from,
+          to: line.from,
+          order: 2,
+          deco: Decoration.line({ class: "cm-inlineAddedLine" }),
+        });
+      } else if (plan.state === "rejected") {
+        entries.push({
+          from: line.from,
+          to: line.from,
+          order: 2,
+          deco: Decoration.line({ class: "cm-inlineAddedRejectedLine" }),
+        });
+        entries.push({
+          from: line.from,
+          to: line.to,
+          order: 3,
+          deco: Decoration.mark({ class: "cm-inlineAddedRejectedText" }),
+        });
+      }
+      // Accepted: the line stays, undecorated, like the result.
     }
   }
   entries.sort((a, b) => a.from - b.from || a.to - b.to || a.order - b.order);
@@ -388,10 +407,13 @@ export function buildInlineDecorations(
 }
 
 const INLINE_REVIEW_THEME = EditorView.theme({
-  ".cm-inlineRemovedLine": {
+  ".cm-inlineAddedLine": {
+    backgroundColor: "color-mix(in srgb, #22c55e 10%, transparent)",
+  },
+  ".cm-inlineAddedRejectedLine": {
     backgroundColor: "color-mix(in srgb, #f43f5e 10%, transparent)",
   },
-  ".cm-inlineRemovedText": {
+  ".cm-inlineAddedRejectedText": {
     textDecoration: "line-through",
     textDecorationColor: "color-mix(in srgb, #f43f5e 70%, transparent)",
   },
@@ -434,23 +456,28 @@ const INLINE_REVIEW_THEME = EditorView.theme({
   ".cm-inlineHunkBar-reject": {
     color: "#e11d48",
   },
-  ".cm-inlineAddedBox": {
-    borderLeft: "2px solid color-mix(in srgb, #22c55e 60%, transparent)",
-    backgroundColor: "color-mix(in srgb, #22c55e 8%, transparent)",
+  ".cm-inlineRemovedBox": {
+    borderLeft: "2px solid color-mix(in srgb, #f43f5e 60%, transparent)",
+    backgroundColor: "color-mix(in srgb, #f43f5e 8%, transparent)",
     padding: "1px 0",
   },
-  ".cm-inlineAddedBox-accepted": {
+  ".cm-inlineRemovedBox-rejected": {
     borderLeftColor: "transparent",
     backgroundColor: "transparent",
   },
-  ".cm-inlineAddedBox-focused": {
-    boxShadow: "inset 0 0 0 1px color-mix(in srgb, #22c55e 40%, transparent)",
+  ".cm-inlineRemovedBox-rejected .cm-inlineRemovedBoxLine": {
+    textDecoration: "none",
   },
-  ".cm-inlineAddedLine": {
+  ".cm-inlineRemovedBox-focused": {
+    boxShadow: "inset 0 0 0 1px color-mix(in srgb, #f43f5e 40%, transparent)",
+  },
+  ".cm-inlineRemovedBoxLine": {
     fontFamily: "var(--font-mono)",
     fontSize: "12px",
     paddingLeft: "8px",
     whiteSpace: "pre",
+    textDecoration: "line-through",
+    textDecorationColor: "color-mix(in srgb, #f43f5e 70%, transparent)",
   },
 });
 

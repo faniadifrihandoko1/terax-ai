@@ -26,7 +26,7 @@ function changeSet() {
   return computeLineChanges(original, proposed);
 }
 
-describe("planInlineReview (Fase 4)", () => {
+describe("planInlineReview (Fase 4, write-first since Fase 8)", () => {
   it("plans one entry per hunk with labels, anchors, and states", () => {
     const cs = changeSet();
     expect(cs.hunks).toHaveLength(2);
@@ -37,8 +37,8 @@ describe("planInlineReview (Fase 4)", () => {
         state: "undecided",
         focused: false,
         anchorLine: 1,
-        removedLines: [1],
-        addedLines: ["B"],
+        addedLines: [1],
+        removedLines: ["b"],
         label: "lines 2-2",
       },
       {
@@ -46,8 +46,8 @@ describe("planInlineReview (Fase 4)", () => {
         state: "undecided",
         focused: false,
         anchorLine: 3,
-        removedLines: [3],
-        addedLines: ["D"],
+        addedLines: [3],
+        removedLines: ["d"],
         label: "lines 4-4",
       },
     ]);
@@ -62,18 +62,28 @@ describe("planInlineReview (Fase 4)", () => {
     expect(plans[1].focused).toBe(true);
   });
 
-  it("labels a pure insertion by its anchor line", () => {
+  it("labels a pure insertion by its proposed lines", () => {
     const cs = computeLineChanges("a\nb\n", "a\nb\nc\n");
     const plans = planInlineReview(cs, new Map(), null);
     expect(plans).toHaveLength(1);
-    expect(plans[0].label).toBe("insert after line 2");
+    expect(plans[0].label).toBe("lines 3-3");
     expect(plans[0].removedLines).toEqual([]);
-    expect(plans[0].addedLines).toEqual(["c"]);
+    expect(plans[0].addedLines).toEqual([2]);
+  });
+
+  it("labels a pure deletion by the original lines it removes", () => {
+    const cs = computeLineChanges("a\nb\nc\n", "a\nc\n");
+    const plans = planInlineReview(cs, new Map(), null);
+    expect(plans).toHaveLength(1);
+    expect(plans[0].label).toBe("remove lines 2-2");
+    expect(plans[0].anchorLine).toBe(1);
+    expect(plans[0].removedLines).toEqual(["b"]);
+    expect(plans[0].addedLines).toEqual([]);
   });
 });
 
 describe("hunkAtLine / firstUndecidedHunk / nextHunkAtOrAfter", () => {
-  it("finds the hunk a base line belongs to", () => {
+  it("finds the hunk a proposed line belongs to", () => {
     const cs = changeSet();
     expect(hunkAtLine(cs, 0)).toBeNull();
     expect(hunkAtLine(cs, 1)).toBe(0);
@@ -82,11 +92,11 @@ describe("hunkAtLine / firstUndecidedHunk / nextHunkAtOrAfter", () => {
     expect(hunkAtLine(cs, 4)).toBeNull();
   });
 
-  it("treats an insertion anchor as belonging to its neighboring lines", () => {
-    const cs = computeLineChanges("a\nb\n", "a\nb\nc\n");
-    expect(hunkAtLine(cs, 2)).toBe(0);
+  it("treats a deletion anchor as belonging to its neighboring lines", () => {
+    const cs = computeLineChanges("a\nb\nc\n", "a\nc\n");
     expect(hunkAtLine(cs, 1)).toBe(0);
-    expect(hunkAtLine(cs, 0)).toBeNull();
+    expect(hunkAtLine(cs, 0)).toBe(0);
+    expect(hunkAtLine(cs, 2)).toBeNull();
   });
 
   it("finds the first undecided hunk and the next hunk at or after a line", () => {
@@ -109,13 +119,15 @@ describe("hunkAtLine / firstUndecidedHunk / nextHunkAtOrAfter", () => {
 });
 
 describe("anchorPosition", () => {
-  it("anchors at the first affected line, or the doc end for an end insertion", () => {
+  it("anchors at the first affected proposed line, or the doc end for an end insertion", () => {
     const cs = changeSet();
-    const state = EditorState.create({ doc: original });
+    // Fase 8: the buffer is the proposed (written) content.
+    const state = EditorState.create({ doc: proposed });
     expect(anchorPosition(state.doc, cs.hunks[0])).toBe(2);
     expect(anchorPosition(state.doc, cs.hunks[1])).toBe(6);
     const endCs = computeLineChanges("a\nb\n", "a\nb\nc\n");
-    expect(anchorPosition(state.doc, endCs.hunks[0])).toBe(4);
+    const endState = EditorState.create({ doc: "a\nb\nc\n" });
+    expect(anchorPosition(endState.doc, endCs.hunks[0])).toBe(4);
   });
 });
 
@@ -127,8 +139,9 @@ function decorationSummary(
   cls: string | undefined;
   widget: boolean;
 }> {
+  // Fase 8: the buffer is the proposed (written) content.
   const state = EditorState.create({
-    doc: original,
+    doc: proposed,
     extensions: [inlineReviewExtension()],
   });
   const next = state.update({ effects: setInlineReviewEffect.of(data) }).state;
@@ -156,7 +169,7 @@ function decorationSummary(
   return out;
 }
 
-describe("buildInlineDecorations via EditorState (Fase 4)", () => {
+describe("buildInlineDecorations via EditorState (Fase 4, write-first)", () => {
   const data = (
     decisions: InlineReviewData["decisions"],
   ): InlineReviewData => ({
@@ -166,43 +179,47 @@ describe("buildInlineDecorations via EditorState (Fase 4)", () => {
     callbacks: noopCallbacks,
   });
 
-  it("renders header + added widgets and removed-line marks while undecided", () => {
+  it("renders header + removed widgets and added-line marks while undecided", () => {
     const summary = decorationSummary(data(new Map()));
+    // Per hunk: header widget + removed-lines widget + added-line mark.
     expect(summary.filter((d) => d.widget)).toHaveLength(4);
     expect(
-      summary.filter((d) => d.cls === "cm-inlineRemovedLine"),
+      summary.filter((d) => d.cls === "cm-inlineAddedLine"),
     ).toHaveLength(2);
-    expect(
-      summary.filter((d) => d.cls === "cm-inlineRemovedText"),
-    ).toHaveLength(2);
-    expect(summary).toHaveLength(8);
+    expect(summary).toHaveLength(6);
   });
 
-  it("hides an accepted deletion and keeps its added lines", () => {
+  it("hides an accepted deletion and leaves its added line plain", () => {
     const summary = decorationSummary(
       data(new Map([[0, "accepted" as const]])),
     );
-    expect(summary).toHaveLength(7);
-    expect(summary.filter((d) => d.widget)).toHaveLength(4);
+    // Hunk 0: header only. Hunk 1: header + removed widget + added mark.
+    expect(summary).toHaveLength(4);
+    expect(summary.filter((d) => d.widget)).toHaveLength(3);
     expect(
-      summary.filter((d) => d.cls === "cm-inlineRemovedLine"),
-    ).toHaveLength(1);
-    expect(
-      summary.filter((d) => d.cls === "cm-inlineRemovedText"),
+      summary.filter((d) => d.cls === "cm-inlineAddedLine"),
     ).toHaveLength(1);
   });
 
-  it("drops a rejected hunk's added lines, keeping only its header", () => {
+  it("strikes a rejected hunk's added line and keeps its removed lines", () => {
     const summary = decorationSummary(
       data(new Map([[1, "rejected" as const]])),
     );
-    expect(summary).toHaveLength(5);
-    expect(summary.filter((d) => d.widget)).toHaveLength(3);
+    // Hunk 0: header + removed widget + added mark. Hunk 1: header +
+    // removed widget + struck added line + struck added text.
+    expect(summary).toHaveLength(7);
+    expect(summary.filter((d) => d.widget)).toHaveLength(4);
+    expect(
+      summary.filter((d) => d.cls === "cm-inlineAddedRejectedLine"),
+    ).toHaveLength(1);
+    expect(
+      summary.filter((d) => d.cls === "cm-inlineAddedRejectedText"),
+    ).toHaveLength(1);
   });
 
   it("renders nothing without review data", () => {
     const state = EditorState.create({
-      doc: original,
+      doc: proposed,
       extensions: [inlineReviewExtension()],
     });
     const total = state

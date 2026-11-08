@@ -452,16 +452,18 @@ export const EditorPane = memo(
       });
     }, [doc]);
 
-    // --- Fase 4: inline AI review ------------------------------------------
-    // The editor buffer keeps showing the on-disk content; the pending
-    // proposal is overlaid as decorations. The change set is memoized on
-    // the contents, not the tab object, so deciding a hunk does not
+    // --- Fase 4: inline AI review (write-first since Fase 8) -----------
+    // The editor buffer shows the agent-written content (already on
+    // disk); the review overlays the diff against the checkpoint
+    // baseline as decorations. The change set is memoized on the
+    // contents, not the tab object, so deciding a hunk does not
     // recompute the diff. Reviewable statuses only: once the proposal is
-    // applied or rejected the overlay clears. Deliberately no guard
+    // confirmed or rejected the overlay clears. Deliberately no guard
     // against mid-review edits to the buffer: the decorations map through
     // edits via CodeMirror range mapping (approximately right), and the
     // ai-diff tab stays the authoritative review surface; the FR-07
-    // conflict guard still protects the actual write at Apply time.
+    // conflict guard still protects the actual confirm, and the save
+    // path has its own mtime guard (useDocument).
     const reviewOriginal = reviewTab?.originalContent;
     const reviewProposed = reviewTab?.proposedContent;
     const reviewChangeSet = useMemo(
