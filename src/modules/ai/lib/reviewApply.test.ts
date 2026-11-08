@@ -5,7 +5,11 @@ import {
   applyReviewedDelete,
   applyReviewedEdit,
   applyReviewedRename,
+  checkDiskAgainst,
   checkDiskConflict,
+  confirmReviewedDelete,
+  confirmReviewedEdit,
+  confirmReviewedRename,
   discardReviewedProposal,
   djb2Hash,
   type HunkDecisions,
@@ -24,6 +28,8 @@ function makeIo(
     deleteFails?: boolean;
     renameFails?: boolean;
     workspaceRoot?: string | null;
+    /** Makes every read throw this instead of reading the disk. */
+    readError?: string;
   } = {},
 ): {
   io: ReviewApplyIo;
@@ -45,6 +51,7 @@ function makeIo(
     },
     readFile: async (path) => {
       calls.push(`read:${path}`);
+      if (opts.readError !== undefined) throw new Error(opts.readError);
       if (opts.missing || !disk.has(path)) throw new Error("not found");
       if (opts.binary) return { kind: "binary", size: 1 };
       const content = disk.get(path) ?? "";
@@ -391,6 +398,251 @@ describe("applyReviewedRename (Fase 5)", () => {
     const result = await applyReviewedRename(input, io);
     expect(result.outcome).toBe("conflict");
     expect(renamed).toHaveLength(0);
+  });
+});
+
+describe("checkDiskAgainst (Fase 8)", () => {
+  it("is ok when disk matches the written content", async () => {
+    const { io } = makeIo({ disk: { "/x/a.ts": "a\nB\n" } });
+    await expect(
+      checkDiskAgainst({ path: "/x/a.ts", expectedContent: "a\nB\n" }, io),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
+  it("conflicts when disk changed since the agent wrote", async () => {
+    const { io } = makeIo({ disk: { "/x/a.ts": "a\nCHANGED\n" } });
+    const result = await checkDiskAgainst(
+      { path: "/x/a.ts", expectedContent: "a\nB\n" },
+      io,
+    );
+    expect(result.status).toBe("conflict");
+  });
+
+  it("conflicts when the file is gone — no new-file exception here", async () => {
+    const { io } = makeIo({ missing: true });
+    const result = await checkDiskAgainst(
+      { path: "/x/a.ts", expectedContent: "a\nB\n" },
+      io,
+    );
+    expect(result.status).toBe("conflict");
+  });
+
+  it("conflicts when the file is binary now", async () => {
+    const { io } = makeIo({ disk: { "/x/a.ts": "x" }, binary: true });
+    const result = await checkDiskAgainst(
+      { path: "/x/a.ts", expectedContent: "a\nB\n" },
+      io,
+    );
+    expect(result.status).toBe("conflict");
+  });
+});
+
+describe("confirmReviewedEdit (Fase 8, write-first)", () => {
+  // Baseline "a\nb\n", agent wrote "a\nB\n" (disk), review confirms.
+  const input = {
+    approvalId: "ap1",
+    path: "/x/a.ts",
+    isNewFile: false,
+    originalContent: "a\nb\n",
+    proposedContent: "a\nB\n",
+    reconstructedContent: "a\nB\n",
+  };
+
+  it("accept-all writes nothing: Accept is bookkeeping only", async () => {
+    const { io, calls, written, checkpoints } = makeIo({
+      disk: { "/x/a.ts": "a\nB\n" },
+    });
+    const result = await confirmReviewedEdit(
+      { ...input, sessionId: "s-1", appliedHunks: [0] },
+      io,
+    );
+    expect(result).toEqual({ outcome: "applied", path: "/x/a.ts" });
+    expect(written.size).toBe(0);
+    expect(calls).toContain("clear-pending:/x/a.ts");
+    // The checkpoint is refreshed with the accepted hunks so the
+    // post-confirm state stays restorable.
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]).toMatchObject({
+      approvalId: "ap1",
+      kind: "edit",
+      contentBefore: "a\nb\n",
+      contentAfter: "a\nB\n",
+      appliedHunks: [0],
+    });
+  });
+
+  it("reject writes the reconstruction back (revert from checkpoint)", async () => {
+    const { io, written, checkpoints } = makeIo({
+      disk: { "/x/a.ts": "a\nB\n" },
+    });
+    const result = await confirmReviewedEdit(
+      { ...input, reconstructedContent: "a\nb\n", appliedHunks: [] },
+      io,
+    );
+    expect(result).toEqual({ outcome: "discarded", path: "/x/a.ts" });
+    expect(written.get("/x/a.ts")).toBe("a\nb\n");
+    expect(checkpoints[0]).toMatchObject({
+      contentBefore: "a\nb\n",
+      contentAfter: "a\nb\n",
+    });
+  });
+
+  it("partial reject writes the mixed reconstruction", async () => {
+    const { io, written, checkpoints } = makeIo({
+      disk: { "/x/a.ts": "a\nB\nc\nD\n" },
+    });
+    const result = await confirmReviewedEdit(
+      {
+        ...input,
+        originalContent: "a\nb\nc\nd\n",
+        proposedContent: "a\nB\nc\nD\n",
+        reconstructedContent: "a\nB\nc\nd\n",
+        appliedHunks: [0],
+      },
+      io,
+    );
+    expect(result.outcome).toBe("applied");
+    expect(written.get("/x/a.ts")).toBe("a\nB\nc\nd\n");
+    expect(checkpoints[0]).toMatchObject({
+      contentBefore: "a\nb\nc\nd\n",
+      contentAfter: "a\nB\nc\nd\n",
+      appliedHunks: [0],
+    });
+  });
+
+  it("blocks the revert on conflict and keeps the proposal pending", async () => {
+    const { io, calls, written, checkpoints } = makeIo({
+      disk: { "/x/a.ts": "a\nCHANGED\n" },
+    });
+    const result = await confirmReviewedEdit(
+      { ...input, reconstructedContent: "a\nb\n" },
+      io,
+    );
+    expect(result.outcome).toBe("conflict");
+    expect(written.size).toBe(0);
+    expect(checkpoints).toHaveLength(0);
+    expect(calls).not.toContain("clear-pending:/x/a.ts");
+  });
+
+  it("blocks even an accept-all confirm when disk no longer matches", async () => {
+    const { io, calls } = makeIo({
+      disk: { "/x/a.ts": "a\nCHANGED\n" },
+    });
+    const result = await confirmReviewedEdit(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(calls).not.toContain("clear-pending:/x/a.ts");
+  });
+
+  it("conflicts when the file was deleted after the agent wrote it", async () => {
+    const { io, written } = makeIo({ missing: true });
+    const result = await confirmReviewedEdit(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(written.size).toBe(0);
+  });
+
+  it("reports write-failed, keeps the proposal pending, leaves the checkpoint alone", async () => {
+    const { io, calls, checkpoints } = makeIo({
+      disk: { "/x/a.ts": "a\nB\n" },
+      writeFails: true,
+    });
+    const result = await confirmReviewedEdit(
+      { ...input, reconstructedContent: "a\nb\n" },
+      io,
+    );
+    expect(result.outcome).toBe("write-failed");
+    expect(calls).not.toContain("clear-pending:/x/a.ts");
+    expect(checkpoints).toHaveLength(0);
+  });
+
+  it("reports not-writable only when a revert write is needed", async () => {
+    const { io, calls } = makeIo({
+      disk: { "/x/a.ts": "a\nB\n" },
+      writable: false,
+    });
+    // A revert write is needed, so the read-only file blocks it.
+    const revert = await confirmReviewedEdit(
+      { ...input, reconstructedContent: "a\nb\n" },
+      io,
+    );
+    expect(revert.outcome).toBe("not-writable");
+    expect(calls).not.toContain("clear-pending:/x/a.ts");
+    // Accept-all needs no write, so it confirms despite the read-only file.
+    const accept = await confirmReviewedEdit(input, io);
+    expect(accept.outcome).toBe("applied");
+  });
+});
+
+describe("confirmReviewedDelete (Fase 8)", () => {
+  const input = {
+    approvalId: "del1",
+    path: "/x/a.ts",
+    originalContent: "gone soon\n",
+  };
+
+  it("confirms without touching disk when the file is still gone", async () => {
+    const { io, calls, deleted, checkpoints } = makeIo({ missing: true });
+    const result = await confirmReviewedDelete(input, io);
+    expect(result).toEqual({ outcome: "applied", path: "/x/a.ts" });
+    expect(deleted).toHaveLength(0);
+    expect(checkpoints).toHaveLength(0);
+    expect(calls).toContain("clear-pending:/x/a.ts");
+  });
+
+  it("refuses when the file was recreated since the delete", async () => {
+    const { io, calls } = makeIo({ disk: { "/x/a.ts": "back again\n" } });
+    const result = await confirmReviewedDelete(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(calls).not.toContain("clear-pending:/x/a.ts");
+  });
+
+  it("refuses with the read reason when the check itself fails", async () => {
+    const { io } = makeIo({ readError: "permission denied" });
+    const result = await confirmReviewedDelete(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(result.reason).toContain("permission denied");
+  });
+});
+
+describe("confirmReviewedRename (Fase 8)", () => {
+  const input = {
+    approvalId: "ren1",
+    path: "/ws/old.ts",
+    targetPath: "/ws/new.ts",
+    originalContent: "same\n",
+  };
+
+  it("confirms without touching disk when the rename still holds", async () => {
+    const { io, calls, renamed } = makeIo({
+      disk: { "/ws/new.ts": "same\n" },
+    });
+    const result = await confirmReviewedRename(input, io);
+    expect(result).toEqual({ outcome: "applied", path: "/ws/old.ts" });
+    expect(renamed).toHaveLength(0);
+    expect(calls).toContain("clear-pending:/ws/old.ts");
+  });
+
+  it("refuses when the renamed file changed since the rename", async () => {
+    const { io, calls } = makeIo({
+      disk: { "/ws/new.ts": "edited\n" },
+    });
+    const result = await confirmReviewedRename(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(calls).not.toContain("clear-pending:/ws/old.ts");
+  });
+
+  it("refuses when the renamed file is gone", async () => {
+    const { io } = makeIo({ disk: {} });
+    const result = await confirmReviewedRename(input, io);
+    expect(result.outcome).toBe("conflict");
+  });
+
+  it("refuses when a file is back at the old path", async () => {
+    const { io, calls } = makeIo({
+      disk: { "/ws/old.ts": "new file\n", "/ws/new.ts": "same\n" },
+    });
+    const result = await confirmReviewedRename(input, io);
+    expect(result.outcome).toBe("conflict");
+    expect(calls).not.toContain("clear-pending:/ws/old.ts");
   });
 });
 
