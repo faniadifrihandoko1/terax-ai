@@ -515,6 +515,9 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   limit: clicking while the agent is still working opens the file in the
   editor, but the review decorations only appear once the ai-diff tab
   has been created; click the row again after the agent finishes.
+  (Since Fase 7 the card itself is hidden mid-run, so this limit is
+  rarely reachable any more — the fallback stays for the race where the
+  tab does not exist yet right as the run ends.)
   Fase 6 (Antigravity approval model): there is no approval card for file
   edits any more. `edit`, `multi_edit`, `write_file`, `delete_file` and
   `rename_file` are proposal-only tools (`src/modules/ai/tools/edit.ts`,
@@ -544,6 +547,30 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   guard); on session restore the registry is empty, so multiple parts for
   one file open separate tabs (pre-existing behaviour) while the card
   still shows one row per file.
+  Fase 7 (Changed Files card only after the run ends): the card is gated
+  on the run that produced the message (`shouldShowChangesCard` in
+  `src/modules/ai/lib/changesCardVisibility.ts`, used in
+  `RenderedMessage` in `AiChat.tsx`). While the message is still
+  streaming, or while it holds a part waiting on a terminal-command
+  approval (`state === "approval-requested"` — the approval wait needs
+  its own check because the stream has ended by then, so the chat status
+  is "ready" while the run is still waiting on the user), the card is
+  not rendered at all: no file list, no "Perlu review" badge. It appears
+  once the run is over — finished, errored, stopped, or cut off by the
+  step cap — and for reviews restored from a previous session, which
+  were over long ago. The gate is per-message, so an older turn's card
+  stays visible while the agent works on a new task. What is gated is
+  only the card: `AgentRunBridge` still opens the ai-diff tabs in the
+  background as proposals arrive (activate: false when inline review is
+  on), because the inline decorations sync from the first ai-diff tab
+  per path — delaying the tabs would break inline review when the card
+  finally appears, and background tabs never steal focus. The click
+  behaviour from the click fix is unchanged. Known corner, kept on
+  purpose: if the user stops the run while a bash approval is still
+  outstanding, the `approval-requested` part stays in the message, so
+  the card stays hidden until the approval is answered (Approve/Deny
+  lets the run conclude and the card appears); the proposals are not
+  lost — the ai-diff tabs exist and the approval card stays visible.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`

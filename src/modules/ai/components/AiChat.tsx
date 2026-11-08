@@ -50,6 +50,7 @@ import { memo, useCallback, useMemo } from "react";
 import type { AiDiffStatus } from "@/modules/tabs";
 import { AiToolApproval } from "./AiToolApproval";
 import { ChangedFilesCard } from "./ChangedFilesCard";
+import { shouldShowChangesCard } from "../lib/changesCardVisibility";
 import { isFileMutationPart } from "../lib/fileMutations";
 import { estimateMessageHeight } from "./messageHeightEstimate";
 
@@ -424,6 +425,13 @@ const RenderedMessage = memo(function RenderedMessage({
         <div className="flex flex-col gap-3">
           {groups.map((g) => {
             if (g.kind === "changes") {
+              // Fase 7: no review invitation while the run that produced
+              // this message is still active. The card appears once the
+              // run is over (finished, errored, stopped, step-capped) —
+              // or, for restored reviews, it was over long ago.
+              if (!shouldShowChangesCard(message.parts, streaming)) {
+                return null;
+              }
               return (
                 <PartAppear key={`${message.id}-${g.key}`}>
                   <ChangedFilesCard
