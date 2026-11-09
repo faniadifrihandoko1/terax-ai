@@ -157,6 +157,22 @@ async function acquireForPreset(
       allowHTMLContent: false,
       synchronizationMethod: mod.SynchronizationMethod.Incremental,
     }) as Extension,
+    // Pull-diagnostics servers (the ESLint server) never push
+    // publishDiagnostics, so the document also mounts the pull
+    // plugin, which requests textDocument/diagnostic and publishes
+    // the merged set. Dynamic import, like the client above, keeps
+    // the eslint lib out of the static LSP graph.
+    ...(preset.pullDiagnostics
+      ? [
+          await import("@/modules/eslint/lib/eslintLspPull").then((m) =>
+            m.eslintLspPullExtension({
+              client: managed.client,
+              documentUri: uri,
+              path,
+            }),
+          ),
+        ]
+      : []),
   ];
 
   addRef(managed, uri);

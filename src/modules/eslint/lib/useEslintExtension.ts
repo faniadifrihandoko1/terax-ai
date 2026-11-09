@@ -31,7 +31,7 @@ import {
   runEslintFile,
 } from "./eslintRunner";
 import { describeEslintRunStatus } from "./eslintStatusText";
-import { useEslintStore } from "./eslintStore";
+import { isLspEslintActiveForPath, useEslintStore } from "./eslintStore";
 
 const INITIAL_DELAY_MS = 350;
 const CHANGE_DELAY_MS = 600;
@@ -150,6 +150,12 @@ class EslintPlugin {
     const store = useEslintStore.getState();
     if (!usePreferencesStore.getState().eslintEnabled) return;
     if (!isLintablePath(this.path)) return;
+    // Fase 12: the ESLint language server already publishes
+    // diagnostics for this file; a CLI run would publish a second,
+    // saved-file-only copy of the same diagnostics. The server is
+    // the source for the file while it is live, and the CLI stays
+    // the fallback the moment the server goes away.
+    if (isLspEslintActiveForPath(this.path)) return;
     const view = this.view;
     const docAtStart = view.state.doc;
     store.setRunStatus(this.path, { kind: "running" });

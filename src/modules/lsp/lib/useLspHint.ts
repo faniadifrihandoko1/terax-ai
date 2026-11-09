@@ -42,6 +42,7 @@ export function useLspHint(filePath: string | null): LspHint | null {
 
   // Detect binaries for candidates nobody touched yet.
   // biome-ignore lint/correctness/useExhaustiveDependencies(candidateIds): candidates are derived from the ids
+  // biome-ignore lint/correctness/useExhaustiveDependencies(candidates): same list, re-detect only when the ids change
   useEffect(() => {
     if (envKind !== "local") return;
     for (const p of candidates) {

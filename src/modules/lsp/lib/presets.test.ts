@@ -6,6 +6,7 @@ import {
   serverById,
   serverForLanguage,
   serversForLanguage,
+  serversForLanguageEnabled,
 } from "./presets";
 
 const customPy: LspCustomServer = {
@@ -81,5 +82,70 @@ describe("allServers", () => {
       ...LSP_PRESETS.map((p) => p.id),
       "my-py",
     ]);
+  });
+});
+
+describe("eslint preset (Fase 12)", () => {
+  it("is registered with the VS Code server binary and stdio args", () => {
+    const preset = serverById("eslint", []);
+    expect(preset?.command).toBe("vscode-eslint-language-server");
+    expect(preset?.args).toEqual(["--stdio"]);
+    expect(preset?.install?.command).toBe(
+      "npm install -g vscode-langservers-extracted",
+    );
+  });
+
+  it("claims the same languages as TypeScript, so both can serve one file", () => {
+    expect(serversForLanguage("tsx", []).map((p) => p.id)).toEqual([
+      "typescript",
+      "eslint",
+    ]);
+    expect(serversForLanguage("js", []).map((p) => p.id)).toEqual([
+      "typescript",
+      "eslint",
+    ]);
+  });
+
+  it("carries a shaped workspace/configuration answer and pulls diagnostics", () => {
+    const preset = serverById("eslint", []);
+    expect(preset?.pullDiagnostics).toBe(true);
+    const config = preset?.workspaceConfiguration as
+      | Record<string, unknown>
+      | undefined;
+    // The server crashes on a null or empty answer; the shaped
+    // defaults (validate probe, nodePath null) are load-bearing.
+    expect(config?.validate).toBe("probe");
+    expect(config?.nodePath).toBeNull();
+    expect(config?.problems).toEqual({ shortenToSingleLine: false });
+  });
+
+  it("recognises legacy and flat config markers plus package.json", () => {
+    const preset = serverById("eslint", []);
+    expect(preset?.rootMarkers).toContain(".eslintrc.json");
+    expect(preset?.rootMarkers).toContain("eslint.config.js");
+    expect(preset?.rootMarkers).toContain("package.json");
+  });
+});
+
+describe("serversForLanguageEnabled", () => {
+  it("returns TS + ESLint for tsx when both are enabled", () => {
+    expect(
+      serversForLanguageEnabled("tsx", [], {
+        typescript: "enabled",
+        eslint: "enabled",
+      }).map((p) => p.id),
+    ).toEqual(["typescript", "eslint"]);
+  });
+
+  it("returns only the enabled ones", () => {
+    expect(
+      serversForLanguageEnabled("tsx", [], { typescript: "enabled" }).map(
+        (p) => p.id,
+      ),
+    ).toEqual(["typescript"]);
+  });
+
+  it("returns nothing without an activation map", () => {
+    expect(serversForLanguageEnabled("tsx", [])).toEqual([]);
   });
 });

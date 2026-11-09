@@ -68,6 +68,17 @@ type State = {
     status: EslintProjectLintStatus;
     files: EslintProjectLintFile[];
   };
+  /**
+   * Paths with a live ESLint language-server plugin, as a refcount
+   * keyed by `eslintPathKey` (one entry per mounted pull plugin;
+   * normally 1, 0 means absent). While this is non-zero the CLI
+   * plugin must not run for the path: the server already publishes
+   * diagnostics for it, and a CLI run would publish a second,
+   * saved-file-only copy of the same diagnostics. The CLI plugin
+   * stays the fallback for every path without a live server.
+   */
+  lspActivePaths: Record<string, number>;
+  setLspActive: (path: string, active: boolean) => void;
   setPathDiagnostics: (path: string, diags: Diagnostic[]) => void;
   clearPath: (path: string) => void;
   setRootStatus: (root: string, status: EslintRootStatus) => void;
@@ -88,6 +99,16 @@ export const useEslintStore = create<State>((set) => ({
   runStatus: {},
   notifiedRoots: {},
   projectLint: { status: { kind: "idle" }, files: [] },
+  lspActivePaths: {},
+  setLspActive: (path, active) =>
+    set((s) => {
+      const key = eslintPathKey(path);
+      const next = (s.lspActivePaths[key] ?? 0) + (active ? 1 : -1);
+      const lspActivePaths = { ...s.lspActivePaths };
+      if (next <= 0) delete lspActivePaths[key];
+      else lspActivePaths[key] = next;
+      return { lspActivePaths };
+    }),
   setPathDiagnostics: (path, diags) =>
     set((s) => ({
       byPath: { ...s.byPath, [eslintPathKey(path)]: diags },
@@ -123,3 +144,10 @@ export const useEslintStore = create<State>((set) => ({
   clearProjectLint: () =>
     set(() => ({ projectLint: { status: { kind: "idle" }, files: [] } })),
 }));
+
+/** True when the ESLint language-server plugin is live for a path. */
+export function isLspEslintActiveForPath(path: string): boolean {
+  return (
+    (useEslintStore.getState().lspActivePaths[eslintPathKey(path)] ?? 0) > 0
+  );
+}

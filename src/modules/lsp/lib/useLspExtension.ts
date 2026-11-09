@@ -56,7 +56,7 @@ export function useLspExtensions(
       for (const h of handles) h.release();
       setExts([]);
     };
-  }, [path, langId, ready, presetIds, generations]);
+  }, [path, langId, ready, presetIds, generations, presets.length]);
 
   return exts;
 }

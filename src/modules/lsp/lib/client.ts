@@ -411,6 +411,10 @@ export class TeraxLspClient extends LanguageServerClient {
       ...params.capabilities.textDocument,
       publishDiagnostics: { relatedInformation: true },
       references: { dynamicRegistration: false },
+      // The ESLint server only reports diagnostics when the client
+      // pulls them (textDocument/diagnostic); advertising the
+      // capability is what lets it offer its diagnosticProvider.
+      diagnostic: {},
     };
     return params;
   }
@@ -422,6 +426,25 @@ export class TeraxLspClient extends LanguageServerClient {
   }): Promise<LspLocation[] | null> {
     return this.raw.request("textDocument/references", params, 10_000) as
       Promise<LspLocation[] | null>;
+  }
+
+  /**
+   * Pulls diagnostics for a document (`textDocument/diagnostic`).
+   * Only servers with a diagnosticProvider answer (the ESLint
+   * server); the result is `{ kind: "full", items }` or
+   * `{ kind: "unchanged", resultId }`. The generic LSP plugin never
+   * sends this request, so pull-diagnostics servers need a dedicated
+   * plugin (see `eslintLspPull`).
+   */
+  textDocumentDiagnostic(
+    params: {
+      textDocument: { uri: string };
+      identifier?: string;
+      previousResultId?: string;
+    },
+    timeoutMs = 10_000,
+  ): Promise<unknown> {
+    return this.raw.request("textDocument/diagnostic", params, timeoutMs);
   }
 
   textDocumentDidClose(uri: string): void {

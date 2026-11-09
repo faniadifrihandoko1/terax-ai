@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { useEslintStore } from "./eslintStore";
+import {
+  isLspEslintActiveForPath,
+  useEslintStore,
+} from "./eslintStore";
 
 beforeEach(() => {
   useEslintStore.setState({
@@ -7,6 +10,7 @@ beforeEach(() => {
     rootStatus: {},
     runStatus: {},
     projectLint: { status: { kind: "idle" }, files: [] },
+    lspActivePaths: {},
   });
 });
 
@@ -79,5 +83,27 @@ describe("projectLint", () => {
       status: { kind: "idle" },
       files: [],
     });
+  });
+});
+
+describe("lspActivePaths (Fase 12)", () => {
+  it("is a refcount: two activations need two deactivations", () => {
+    const store = useEslintStore.getState();
+    expect(isLspEslintActiveForPath("/proj/a.ts")).toBe(false);
+    store.setLspActive("/proj/a.ts", true);
+    expect(isLspEslintActiveForPath("/proj/a.ts")).toBe(true);
+    store.setLspActive("/proj/a.ts", true);
+    store.setLspActive("/proj/a.ts", false);
+    expect(isLspEslintActiveForPath("/proj/a.ts")).toBe(true);
+    store.setLspActive("/proj/a.ts", false);
+    expect(isLspEslintActiveForPath("/proj/a.ts")).toBe(false);
+  });
+
+  it("never goes negative and is per path", () => {
+    const store = useEslintStore.getState();
+    store.setLspActive("/proj/a.ts", false);
+    expect(isLspEslintActiveForPath("/proj/a.ts")).toBe(false);
+    store.setLspActive("/proj/a.ts", true);
+    expect(isLspEslintActiveForPath("/proj/b.ts")).toBe(false);
   });
 });
