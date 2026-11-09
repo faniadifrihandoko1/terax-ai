@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import type { TeraxLspClient } from "./client";
 import { detectBinary } from "./detect";
 import { getLspNavigator } from "./navigator";
-import { type LspPreset, serverForLanguage } from "./presets";
+import { type LspPreset, serversForLanguageEnabled } from "./presets";
 import { useLspRuntimeStore } from "./runtimeStore";
 import type { TauriLspTransport } from "./transport";
 import { fileUriToPath, pathToFileUri } from "./uri";
@@ -60,19 +60,35 @@ function recordCrash(key: string): void {
   crashTimes.set(key, times);
 }
 
-export async function acquireDocExtension(
+export async function acquireDocExtensions(
   path: string,
   langId: string,
-): Promise<LspDocHandle | null> {
-  if (currentWorkspaceEnv().kind !== "local") return null;
+): Promise<LspDocHandle[]> {
+  if (currentWorkspaceEnv().kind !== "local") return [];
   const prefs = usePreferencesStore.getState();
-  const preset = serverForLanguage(
+  const presets = serversForLanguageEnabled(
     langId,
     prefs.lspCustomServers,
     prefs.lspActivation,
   );
-  if (!preset) return null;
-  if (prefs.lspActivation[preset.id] !== "enabled") return null;
+  const handles: LspDocHandle[] = [];
+  for (const preset of presets) {
+    const handle = await acquireForPreset(path, langId, preset).catch(
+      () => null,
+    );
+    if (handle) handles.push(handle);
+  }
+  return handles;
+}
+
+async function acquireForPreset(
+  path: string,
+  langId: string,
+  preset: LspPreset,
+): Promise<LspDocHandle | null> {
+  if (currentWorkspaceEnv().kind !== "local") return null;
+  if (usePreferencesStore.getState().lspActivation[preset.id] !== "enabled")
+    return null;
   if (!(await detectBinary(preset.command))) return null;
 
   // No project root means no session: a per-directory fallback multiplied

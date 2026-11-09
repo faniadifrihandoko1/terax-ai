@@ -1,51 +1,62 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { Extension } from "@codemirror/state";
 import { useEffect, useState } from "react";
-import { serverForLanguage } from "./presets";
+import { serversForLanguageEnabled } from "./presets";
 import { useLspRuntimeStore } from "./runtimeStore";
-import { acquireDocExtension, type LspDocHandle } from "./sessionManager";
+import { acquireDocExtensions, type LspDocHandle } from "./sessionManager";
 
-export function useLspExtension(
+/**
+ * Acquires an LSP extension for every enabled server that claims the
+ * document's language, since Fase 12 a document can have several
+ * servers at once (TypeScript for types, ESLint for lint), so this
+ * returns a list, not a single extension. A language with one enabled
+ * server behaves exactly as before.
+ */
+export function useLspExtensions(
   path: string,
   langId: string | null,
   ready: boolean,
-): Extension | null {
-  const [ext, setExt] = useState<Extension | null>(null);
+): Extension[] {
+  const [exts, setExts] = useState<Extension[]>([]);
   const customServers = usePreferencesStore((s) => s.lspCustomServers);
   const lspActivation = usePreferencesStore((s) => s.lspActivation);
-  const preset = serverForLanguage(langId, customServers, lspActivation);
-  const activation = preset ? lspActivation[preset.id] : undefined;
-  const generation = useLspRuntimeStore((s) =>
-    preset ? (s.generations[preset.id] ?? 0) : 0,
+  const presets = serversForLanguageEnabled(
+    langId,
+    customServers,
+    lspActivation,
+  );
+  const presetIds = presets.map((p) => p.id).join(",");
+  // Re-acquire after a crash tears a session down; keyed per enabled
+  // preset so an unrelated server's bump does not tear these down.
+  const generations = useLspRuntimeStore((s) =>
+    presets.map((p) => s.generations[p.id] ?? 0).join(","),
   );
 
-  const presetId = preset?.id;
-  // biome-ignore lint/correctness/useExhaustiveDependencies(generation): re-acquire after a server crash tears the session down
-  // biome-ignore lint/correctness/useExhaustiveDependencies(presetId): swapping the enabled server for a language must rebind the doc
+  // biome-ignore lint/correctness/useExhaustiveDependencies(generations): re-acquire after a server crash tears the session down
+  // biome-ignore lint/correctness/useExhaustiveDependencies(presetIds): swapping the enabled servers for a language must rebind the doc
   useEffect(() => {
-    if (!ready || !langId || activation !== "enabled") {
-      setExt(null);
+    if (!ready || !langId || presets.length === 0) {
+      setExts([]);
       return;
     }
     let cancelled = false;
-    let handle: LspDocHandle | null = null;
-    acquireDocExtension(path, langId)
-      .then((h) => {
-        if (!h) return;
+    const handles: LspDocHandle[] = [];
+    acquireDocExtensions(path, langId)
+      .then((hs) => {
         if (cancelled) {
-          h.release();
+          for (const h of hs) h.release();
           return;
         }
-        handle = h;
-        setExt(h.extension);
+        handles.push(...hs);
+        setExts(hs.map((h) => h.extension));
       })
       .catch((e) => console.error("[lsp] acquire failed", e));
     return () => {
       cancelled = true;
-      handle?.release();
-      setExt(null);
+      for (const h of handles) h.release();
+      setExts([]);
     };
-  }, [path, langId, ready, activation, generation, presetId]);
+  }, [path, langId, ready, presetIds, generations]);
 
-  return ext;
+  return exts;
 }

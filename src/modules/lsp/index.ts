@@ -7,4 +7,4 @@ export {
   lspFormatDocument,
   notifyDocumentSaved,
 } from "./lib/sessionManager";
-export { useLspExtension } from "./lib/useLspExtension";
+export { useLspExtensions } from "./lib/useLspExtension";

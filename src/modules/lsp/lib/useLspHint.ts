@@ -3,7 +3,7 @@ import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useWorkspaceEnvStore } from "@/modules/workspace";
 import { useEffect, useState } from "react";
 import { detectBinary } from "./detect";
-import { type LspPreset, serverForLanguage } from "./presets";
+import { type LspPreset, serversForLanguage } from "./presets";
 import { type LspSessionStatus, useLspRuntimeStore } from "./runtimeStore";
 
 export type LspHint =
@@ -34,33 +34,45 @@ export function useLspHint(filePath: string | null): LspHint | null {
 
   const customServers = usePreferencesStore((s) => s.lspCustomServers);
   const lspActivation = usePreferencesStore((s) => s.lspActivation);
-  const preset = serverForLanguage(langId, customServers, lspActivation);
-  const activation = preset ? lspActivation[preset.id] : undefined;
-  const detected = useLspRuntimeStore((s) =>
-    preset ? s.detected[preset.command] : undefined,
-  );
-  const session = useLspRuntimeStore((s) =>
-    preset
-      ? Object.values(s.sessions).find((x) => x.presetId === preset.id)
-      : undefined,
-  );
-  const failure = useLspRuntimeStore((s) =>
-    preset ? s.failed[preset.id] : undefined,
-  );
+  const candidates = serversForLanguage(langId, customServers);
+  const candidateIds = candidates.map((p) => p.id).join(",");
+  const detected = useLspRuntimeStore((s) => s.detected);
+  const sessions = useLspRuntimeStore((s) => s.sessions);
+  const failed = useLspRuntimeStore((s) => s.failed);
 
+  // Detect binaries for candidates nobody touched yet.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(candidateIds): candidates are derived from the ids
   useEffect(() => {
-    if (preset && envKind === "local" && activation === undefined) {
-      void detectBinary(preset.command);
+    if (envKind !== "local") return;
+    for (const p of candidates) {
+      if (lspActivation[p.id] === undefined) void detectBinary(p.command);
     }
-  }, [preset, envKind, activation]);
+  }, [candidateIds, envKind, lspActivation]);
 
-  if (!preset || envKind !== "local") return null;
-  if (activation === "dismissed") return null;
-  if (activation === "enabled") {
-    if (session) return { kind: "active", preset, status: session.status };
-    if (failure) return { kind: "error", preset, reason: failure };
-    return null;
+  if (envKind !== "local" || candidates.length === 0) return null;
+
+  // A language can have several servers (TypeScript + ESLint). The
+  // pill reports the first candidate that needs attention, so an
+  // enabled ESLint is never hidden behind an install hint for
+  // TypeScript, or the other way round. Priority: an enabled
+  // server's live state first, then a fresh candidate to enable or
+  // install. A candidate with nothing to report is skipped, not
+  // returned as null, so a later candidate can still surface.
+  for (const preset of candidates) {
+    const activation = lspActivation[preset.id];
+    if (activation === "dismissed") continue;
+    if (activation === "enabled") {
+      const session = Object.values(sessions).find(
+        (x) => x.presetId === preset.id,
+      );
+      if (session) return { kind: "active", preset, status: session.status };
+      const failure = failed[preset.id];
+      if (failure) return { kind: "error", preset, reason: failure };
+      continue;
+    }
+    const isDetected = detected[preset.command];
+    if (isDetected === undefined) continue;
+    return isDetected ? { kind: "enable", preset } : { kind: "install", preset };
   }
-  if (detected === undefined) return null;
-  return detected ? { kind: "enable", preset } : { kind: "install", preset };
+  return null;
 }

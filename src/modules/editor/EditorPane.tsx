@@ -4,7 +4,7 @@ import { reviewHistoryFor } from "@/modules/ai/lib/reviewHistory";
 import type { HunkDecision, HunkDecisions } from "@/modules/ai/lib/reviewApply";
 import { requestEslintRun, useEslintExtension } from "@/modules/eslint";
 import { getProjectLintCounts } from "@/modules/eslint/lib/eslintProjectLint";
-import { lspFormatDocument, useLspExtension } from "@/modules/lsp";
+import { lspFormatDocument, useLspExtensions } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { onKeysChanged } from "@/modules/settings/store";
 import type { AiDiffTab } from "@/modules/tabs";
@@ -566,15 +566,15 @@ export const EditorPane = memo(
       doc.status,
     ]);
 
-    const lspExt = useLspExtension(path, langId, doc.status === "ready");
+    const lspExts = useLspExtensions(path, langId, doc.status === "ready");
     useEffect(() => {
-      lspActiveRef.current = lspExt !== null;
+      lspActiveRef.current = lspExts.length > 0;
       const view = cmRef.current?.view;
       if (!view) return;
       view.dispatch({
-        effects: lspCompartment.reconfigure(lspExt ?? []),
+        effects: lspCompartment.reconfigure(lspExts),
       });
-    }, [lspExt]);
+    }, [lspExts]);
 
     // Fase 10: ESLint diagnostics from the project's own install.
     const eslintExt = useEslintExtension(path, doc.status);
