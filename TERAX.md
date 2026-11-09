@@ -814,6 +814,105 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   not a palette-time disabled reason (the stored rootStatus keys do
   not share one form with the explorer root) and the run toasts the
   honest cause instead, reusing the Fase 10.1 missing-binary text.
+  Fase 12 (ESLint as a language server, the VS Code way) — PLAN,
+  verified live against the real server before any code was written
+  (harness in /tmp, not in the repo): the CLI-spawn integration of
+  Fase 10–11 is tied to the editor document lifecycle — the plugin
+  only exists while `docStatus === "ready"` — so a file whose document
+  never finishes loading (the user's OneDrive CJK path) never gets
+  diagnostics and the manual command fails. VS Code/Antigravity run
+  ESLint as a background language server independent of the editor.
+  Three open questions, answered empirically against
+  `vscode-langservers-extracted@4.10.0` + ESLint 8.57.0 +
+  `.eslintrc.json` (legacy) + `@typescript-eslint/no-unused-vars`,
+  driven by a JSON-RPC harness that mimics Terax's client:
+  (1) initializationOptions / workspace/configuration — the server
+  ignores `initializationOptions` entirely, but calls
+  `workspace/configuration` (`{scopeUri, section: ''}`) on every
+  settings resolution. Terax's transport answers that with `[null]`
+  per item (`answerServerRequest` in `lib/transport.ts`), and the
+  live test proves that crashes the server: `null` fails the pull
+  with `-32603 Cannot read properties of null (reading
+  'workingDirectory')`; `{}` fails at `path.isAbsolute(undefined)`
+  (`nodePath`) and at `settings.problems` being undefined. A
+  VS-Code-defaults-shaped answer works: `validate: 'probe'`,
+  `packageManager: 'npm'`, `nodePath: null` (must be null, not
+  undefined — the server's `!== null` check), `useFlatConfig: null`,
+  `experimental: {}`, `options: {}`, `run: 'onType'`,
+  `problems: { shortenToSingleLine: false }`,
+  `rulesCustomizations: []`. The server then loads the project's own
+  ESLint and validates. The answer lives in the transport (it already
+  intercepts server-to-client requests there), keyed per server via
+  the preset's `workspaceConfiguration`, so other servers keep the
+  current null answers. `workspace/diagnostic/refresh` is answered
+  with null (currently -32601); the pull layer re-pulls on doc change
+  and save, so the refresh is only a hint and needs no handler in v1.
+  (2) diagnostics merge — the server is PULL-only: it never calls
+  `sendDiagnostics`; diagnostics arrive only via
+  `textDocument/diagnostic` requests, which `codemirror-languageserver`
+  never sends (it only handles push `publishDiagnostics`). A preset
+  alone would therefore deliver zero diagnostics; Terax must implement
+  the pull itself. Merge rule, verified from the lib
+  (`LanguageServerPlugin.processDiagnostics` maps server diagnostics
+  with no `source` tag and dispatches `setDiagnostics(state, ...)` —
+  a full replace): the eslint store's `byPath` (keyed by
+  `eslintPathKey`) is the single source of truth for ESLint
+  diagnostics, and the pull plugin publishes merged sets — current
+  non-ESLint diagnostics plus stored ESLint ones — reusing
+  `mergeDiagnostics` / `needsEslintReapply` / `diagnosticsEqual`
+  from `lib/eslintMerge.ts`, and watches `setDiagnosticsEffect` to
+  re-apply the merged set in a microtask whenever a foreign publish
+  (the TypeScript plugin) wipes it. Last publisher wins for its own
+  source; the merge layer restores the union within a microtask, so
+  the visible end state is always TS ∪ ESLint. Diagnostics from
+  different sources at the same range are BOTH kept (different
+  messages/sources; CodeMirror shows the most severe in the gutter
+  and all of them in the tooltip); no cross-source dedupe, and
+  `diagnosticsEqual` prevents redundant dispatches so the reapply
+  cannot ping-pong. (3) flat vs legacy — verified live: ESLint
+  8.57.0 + `.eslintrc.json` works; the server probes the config type
+  (`eslintrc`), loads the project library, and returns the exact
+  diagnostic for the user's case (`'cvReport' is assigned a value
+  but never used`, line 7, chars 8–16, severity Error,
+  `@typescript-eslint/no-unused-vars`), on first pull and on pull
+  after didChange. With `useFlatConfig: null` the server follows
+  ESLint's own rollout (8.57 defaults to eslintrc); flat config
+  (ESLint 9) goes through the same probe path and is untested live
+  here, but the user's project is legacy and verified. Architecture:
+  preset `eslint` (`vscode-eslint-language-server --stdio`, languages
+  ts/tsx/js/jsx → the same languageIds as the TypeScript preset,
+  root markers are the ESLint config files + `package.json`, install
+  `npm install -g vscode-langservers-extracted`); multi-preset
+  acquire — `serversForLanguageEnabled` returns every enabled preset
+  for a language, `useLspExtension` acquires all of them (the session
+  manager already keys sessions by `(preset.id, root)` with a cap of
+  4 per preset, refcounts, idle-kill and crash backoff, so a second
+  server cannot clash with the TypeScript session); the statusbar
+  hint iterates all candidates and surfaces the first one needing
+  attention (install/enable/error), else the first active one.
+  The CLI plugin is disabled while LSP-ESLint is active for a path
+  (`lspActivePaths` in the eslint store, set by the pull plugin on
+  mount): the hook returns no CLI extension, `run()` records
+  `lsp-active` instead of spawning, and destroy skips clearing the
+  store entries the pull plugin owns. When the server is absent or
+  disabled, the CLI plugin stays the fallback and Fase 10–11
+  behaviour is unchanged; the project-wide Problems panel stays
+  CLI-based. Honest limit (verified): the LSP extension hook also
+  gates on document `ready`, so Fase 12 does NOT remove the
+  "not ready" squiggle for a file whose document is stuck loading —
+  what it removes is the linting's dependence on the editor: the
+  server runs on disk, results are ready when the document attaches,
+  the manual command no longer fails for lack of a listener, and the
+  Problems panel can show results without opening files. Quick-fix:
+  verified server-side feasible — with
+  `codeActionLiteralSupport` advertised the server offers
+  `codeActionProvider` (`quickfix`, `source.fixAll.eslint`) and
+  `textDocument/codeAction` returns real fix commands (verified live
+  with a `quotes` violation: "Fix this quotes problem",
+  `eslint.applySingleFix`). But Terax's client advertises no
+  codeAction capability and the lib has no codeAction /
+  executeCommand / applyEdit support, so quick-fix UI is a
+  follow-up, NOT this phase.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
