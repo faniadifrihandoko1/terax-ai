@@ -2,7 +2,7 @@
  * The answer for the ESLint language server's `workspace/configuration`
  * requests. The server asks for `{ scopeUri, section: '' }` on every
  * settings resolution, and it expects the full VS Code `eslint.*`
- * settings object — with the extension's defaults applied — not an
+ * settings object, with the extension's defaults applied, not an
  * empty object and not null.
  *
  * Verified live against vscode-langservers-extracted@4.10.0 +
@@ -17,7 +17,7 @@
  *   server's `nodePath !== null` check passes for `undefined`) and
  *   at `settings.problems` being undefined;
  * - answering this object loads the project's own ESLint, probes the
- *   config type (`eslintrc`), and returns diagnostics — including
+ *   config type (`eslintrc`), and returns diagnostics, including
  *   the exact `'cvReport' is assigned a value but never used`
  *   diagnostic for a `.tsx` file.
  *

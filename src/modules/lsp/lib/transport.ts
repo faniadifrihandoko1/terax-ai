@@ -100,8 +100,8 @@ export class TauriLspTransport implements Transport {
         // previous null answers. The ESLint server crashes on null
         // (it reads configuration.workingDirectory unconditionally)
         // and on {} (nodePath/problems are read unconditionally too),
-        // so the shaped object is load-bearing — see
-        // lib/eslintServerConfig.ts.
+        // so the shaped object is load-bearing (see
+        // lib/eslintServerConfig.ts).
         const value = this.workspaceConfiguration;
         reply({ result: items.map(() => value) });
         return;

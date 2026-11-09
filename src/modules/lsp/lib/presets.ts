@@ -79,7 +79,7 @@ export const LSP_PRESETS: LspPreset[] = [
     ],
     // The server ignores initializationOptions but requires a
     // VS-Code-defaults answer to workspace/configuration (see
-    // lib/eslintServerConfig.ts — null/{} crash it). It is also
+    // lib/eslintServerConfig.ts; null/{} crash it). It is also
     // pull-diagnostics-only: it never pushes publishDiagnostics.
     workspaceConfiguration: ESLINT_WORKSPACE_CONFIGURATION,
     pullDiagnostics: true,
