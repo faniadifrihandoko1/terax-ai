@@ -200,6 +200,7 @@ async function createSession(
       root,
       env: preset.env,
       maxMemoryMb: preset.maxMemoryMb,
+      workspaceConfiguration: preset.workspaceConfiguration,
     });
   } catch (e) {
     recordCrash(key);

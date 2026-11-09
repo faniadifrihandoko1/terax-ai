@@ -1,4 +1,5 @@
 import type { LspCustomServer } from "@/modules/settings/store";
+import { ESLINT_WORKSPACE_CONFIGURATION } from "./eslintServerConfig";
 
 export type LspPreset = {
   id: string;
@@ -11,6 +12,21 @@ export type LspPreset = {
   initializationOptions?: unknown;
   env?: Record<string, string>;
   maxMemoryMb?: number;
+  /**
+   * Answer for this server's `workspace/configuration` requests.
+   * Most servers never ask; the ESLint server asks on every settings
+   * resolution and crashes on a null answer, so it carries its
+   * VS-Code-defaults object here. Absent means "answer null", the
+   * previous behaviour for every other server.
+   */
+  workspaceConfiguration?: Record<string, unknown>;
+  /**
+   * True when this server reports diagnostics only when the client
+   * pulls them (`textDocument/diagnostic`) instead of pushing
+   * `textDocument/publishDiagnostics`. The session then also mounts
+   * the pull-diagnostics plugin for the document.
+   */
+  pullDiagnostics?: boolean;
   /** Absent for user-defined servers. */
   install?: { command: string; docsUrl: string };
 };
@@ -33,6 +49,43 @@ export const LSP_PRESETS: LspPreset[] = [
       command: "npm install -g typescript-language-server typescript",
       docsUrl:
         "https://github.com/typescript-language-server/typescript-language-server",
+    },
+  },
+  {
+    id: "eslint",
+    name: "ESLint",
+    command: "vscode-eslint-language-server",
+    args: ["--stdio"],
+    // Same languageIds as the TypeScript preset: the two servers are
+    // meant to run side by side for one document (types from
+    // TypeScript, lint from ESLint), which is why acquiring a language
+    // must return every enabled preset, not just the first one.
+    languages: {
+      ts: "typescript",
+      tsx: "typescriptreact",
+      js: "javascript",
+      jsx: "javascriptreact",
+    },
+    rootMarkers: [
+      "eslint.config.js",
+      "eslint.config.mjs",
+      "eslint.config.cjs",
+      ".eslintrc.json",
+      ".eslintrc.js",
+      ".eslintrc.cjs",
+      ".eslintrc.yaml",
+      ".eslintrc.yml",
+      "package.json",
+    ],
+    // The server ignores initializationOptions but requires a
+    // VS-Code-defaults answer to workspace/configuration (see
+    // lib/eslintServerConfig.ts — null/{} crash it). It is also
+    // pull-diagnostics-only: it never pushes publishDiagnostics.
+    workspaceConfiguration: ESLINT_WORKSPACE_CONFIGURATION,
+    pullDiagnostics: true,
+    install: {
+      command: "npm install -g vscode-langservers-extracted",
+      docsUrl: "https://github.com/hrsh7th/vscode-langservers-extracted",
     },
   },
   {
@@ -306,6 +359,24 @@ export function serverForLanguage(
     if (fresh) return fresh;
   }
   return candidates[0];
+}
+
+/**
+ * Every preset for a language the user enabled. Unlike
+ * `serverForLanguage` this is a list on purpose: since Fase 12 a
+ * document can have several servers at once (TypeScript for types,
+ * ESLint for lint), and the acquire path must start all of them.
+ * Presets the user never touched or dismissed are not included.
+ */
+export function serversForLanguageEnabled(
+  langId: string | null,
+  custom: LspCustomServer[],
+  activation?: Record<string, string | undefined>,
+): LspPreset[] {
+  if (!activation) return [];
+  return serversForLanguage(langId, custom).filter(
+    (p) => activation[p.id] === "enabled",
+  );
 }
 
 export function serverById(

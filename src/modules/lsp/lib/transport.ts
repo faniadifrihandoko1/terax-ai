@@ -8,6 +8,12 @@ export type LspSpawnConfig = {
   root: string;
   env?: Record<string, string>;
   maxMemoryMb?: number;
+  /**
+   * Answer for this server's `workspace/configuration` requests.
+   * Only servers that need a shaped answer carry one (the ESLint
+   * server crashes on null); the rest keep the previous null answers.
+   */
+  workspaceConfiguration?: Record<string, unknown>;
 };
 
 export type LspExitInfo = {
@@ -40,9 +46,11 @@ export class TauriLspTransport implements Transport {
   private onCloseCb: (() => void) | null = null;
   private onErrorCb: ((error: Error) => void) | null = null;
   private backlog: string[] = [];
+  private workspaceConfiguration: Record<string, unknown> | null = null;
   exitInfo: LspExitInfo | null = null;
 
   async start(config: LspSpawnConfig): Promise<void> {
+    this.workspaceConfiguration = config.workspaceConfiguration ?? null;
     const decoder = new TextDecoder();
     const onMessage = new Channel<ArrayBuffer>();
     onMessage.onmessage = (buf) => {
@@ -87,9 +95,18 @@ export class TauriLspTransport implements Transport {
       case "workspace/configuration": {
         const items =
           (msg.params as { items?: unknown[] } | undefined)?.items ?? [];
-        reply({ result: items.map(() => null) });
+        // A server that carries shaped configuration (the ESLint
+        // server) gets it once per requested item; the rest keep the
+        // previous null answers. The ESLint server crashes on null
+        // (it reads configuration.workingDirectory unconditionally)
+        // and on {} (nodePath/problems are read unconditionally too),
+        // so the shaped object is load-bearing — see
+        // lib/eslintServerConfig.ts.
+        const value = this.workspaceConfiguration;
+        reply({ result: items.map(() => value) });
         return;
       }
+      case "workspace/diagnostic/refresh":
       case "window/workDoneProgress/create":
       case "client/registerCapability":
       case "client/unregisterCapability":
