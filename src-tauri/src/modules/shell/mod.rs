@@ -288,6 +288,27 @@ pub fn shell_bg_list(state: tauri::State<ShellState>) -> Result<Vec<BackgroundPr
     Ok(out)
 }
 
+/// PowerShell parses a command line that starts with a quoted string as an
+/// expression, not a program to run, so `'C:\...\eslint.cmd' --format json
+/// ...` dies in the parser with "The '--' operator works only on
+/// variables or on properties" before the program ever runs. Prefixing
+/// the call operator (`& '...' args`) makes it an invocation.
+///
+/// Only for PowerShell: in cmd.exe `&` is a command separator and a
+/// leading `&` is a syntax error, so cmd callers must not use this.
+/// Commands that do not start with a quote (bare words like `npx`) and
+/// commands that already start with `&` are returned unchanged.
+fn powershell_call_command(command: &str) -> String {
+    let trimmed = command.trim_start();
+    if trimmed.starts_with('&') {
+        return command.to_string();
+    }
+    if trimmed.starts_with('\'') || trimmed.starts_with('"') {
+        return format!("& {trimmed}");
+    }
+    command.to_string()
+}
+
 pub(crate) fn build_oneshot_command(
     command: &str,
     #[cfg_attr(not(windows), allow(unused_variables))] workspace: &WorkspaceEnv,
@@ -332,7 +353,9 @@ pub(crate) fn build_oneshot_command(
         if is_cmd {
             cmd.arg("/C").arg(command);
         } else {
-            cmd.arg("-NoProfile").arg("-Command").arg(command);
+            cmd.arg("-NoProfile")
+                .arg("-Command")
+                .arg(powershell_call_command(command));
         }
         Ok(cmd)
     }
