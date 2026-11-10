@@ -414,3 +414,65 @@ mod tests {
         assert_eq!(args, vec!["-c", "echo hi"]);
     }
 }
+
+/// The `&` prefix rule is pure string logic with no platform dependency,
+/// so these tests run on every platform, including the Windows branch
+/// itself, which no Linux run can execute.
+#[cfg(test)]
+mod powershell_call_command_tests {
+    use super::powershell_call_command;
+
+    #[test]
+    fn prefixes_quoted_eslint_per_file_command() {
+        let cmd = "'C:\\Users\\fania\\OneDrive\\\u{6587}\u{6863}\\fix-recruitment\\recruitment_FE\\node_modules\\.bin\\eslint.cmd' --format json --no-warn-ignored -- 'C:\\Users\\fania\\OneDrive\\\u{6587}\u{6863}\\fix-recruitment\\recruitment_FE\\src\\combined-candidate-report-modal.tsx'";
+        assert_eq!(powershell_call_command(cmd), format!("& {cmd}"));
+    }
+
+    #[test]
+    fn prefixes_quoted_eslint_project_command() {
+        let cmd =
+            "'C:\\proj\\node_modules\\.bin\\eslint.cmd' --format json --no-warn-ignored -- '.'";
+        assert_eq!(powershell_call_command(cmd), format!("& {cmd}"));
+    }
+
+    #[test]
+    fn prefixes_double_quoted_path() {
+        let cmd = "\"C:\\Program Files\\node\\eslint.cmd\" --format json";
+        assert_eq!(powershell_call_command(cmd), format!("& {cmd}"));
+    }
+
+    #[test]
+    fn leaves_bare_word_commands_unchanged() {
+        assert_eq!(
+            powershell_call_command("npx --no-install eslint --version"),
+            "npx --no-install eslint --version"
+        );
+        assert_eq!(
+            powershell_call_command("ruff format 'C:\\proj\\a.py'"),
+            "ruff format 'C:\\proj\\a.py'"
+        );
+    }
+
+    #[test]
+    fn leaves_already_prefixed_commands_unchanged() {
+        let cmd = "& 'C:\\proj\\eslint.cmd' --format json";
+        assert_eq!(powershell_call_command(cmd), cmd);
+    }
+
+    #[test]
+    fn prefixes_after_leading_whitespace() {
+        assert_eq!(
+            powershell_call_command("  'C:\\proj\\eslint.cmd' --format json"),
+            "& 'C:\\proj\\eslint.cmd' --format json"
+        );
+    }
+
+    #[test]
+    fn leaves_empty_and_plain_strings_unchanged() {
+        assert_eq!(powershell_call_command(""), "");
+        assert_eq!(
+            powershell_call_command("'C:\\proj\\eslint.cmd'"),
+            "& 'C:\\proj\\eslint.cmd'"
+        );
+    }
+}
