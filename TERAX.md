@@ -944,6 +944,53 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   codeAction capability and the lib has no codeAction /
   executeCommand / applyEdit support, so quick-fix UI is a
   follow-up, NOT this phase.
+  Fase 13 (PowerShell-safe shell commands for the ESLint CLI), DONE:
+  root cause, every CLI ESLint run died in the PowerShell parser
+  before ESLint ran. `buildEslintCommand` builds
+  `'...\eslint.cmd' --format json --no-warn-ignored -- <file>`
+  (single-quoted binary via `quoteShellArg`), and
+  `shell_run_command` runs that string through PowerShell
+  (`-NoProfile -Command`, picked by `windows_shell_path`: pwsh,
+  then PowerShell 5.1, then cmd). PowerShell reads a leading quoted
+  string as an expression, not a program, and rejects `--` with
+  "The '--' operator works only on variables or on properties"
+  (ParserError, UnexpectedToken), exactly the toast in the user's
+  screenshot of the project-wide lint. That is also why no CLI
+  diagnostic ever appeared in any phase: the per-file runs use the
+  same quoted form, the tests mock the runner, and the Linux VM's
+  `sh -c` tolerates it. Fix layer: Rust, in
+  `build_oneshot_command` (`src-tauri/src/modules/shell/mod.rs`),
+  because only the backend knows which shell will run the command:
+  PowerShell needs `& '...'` for a quoted leading path, cmd.exe
+  treats a leading `&` as a syntax error, so the frontend cannot
+  emit one form correct for both. Pure helper
+  `powershell_call_command` prefixes `& ` when the trimmed command
+  starts with a single or double quote (and not already with `&`);
+  bare-word commands (`npx ...`, `ruff format ...`) pass through
+  unchanged. The call site is the Windows non-cmd branch only;
+  Unix (`/bin/sh -c`), WSL (`sh -lc`), and cmd (`/C`) paths are
+  untouched. One choke point fixes every caller: ESLint per-file
+  and project-wide, custom-template formatters, the AI
+  `runCommand`, and background processes (all go through
+  `build_oneshot_command`). The npx probe was already safe (bare
+  `npx` start) and is unchanged. Tests: 7 Rust unit tests for the
+  helper (exact per-file and project-wide ESLint shapes with the
+  user's CJK path, double-quoted path, bare words,
+  already-prefixed, leading whitespace, empty) in a plain
+  `#[cfg(test)]` module so they run on every platform.
+  Verification: `pnpm check-types` 0 errors, `pnpm lint` 0 errors
+  (88 warnings, 1 info, same baseline), full `pnpm test` 2497/2497
+  green twice (258 files, unchanged count: no frontend change).
+  Rust: helper + tests verified standalone with `rustc --test`
+  (7/7) on the verbatim code, and `rustfmt --check` clean for the
+  whole file; full-crate `cargo test --lib` cannot run on this
+  Linux VM (missing gdk-3.0 dev headers; the runtime lib exists
+  but not the -dev package), so the in-crate test run is
+  unverified here and the Windows CI build (`pnpm tauri build`)
+  is what compiles the changed crate. Honest limit: the `&`
+  prefix is only applied in the Windows branch, which no Linux
+  run can execute; the rule logic itself is covered by the unit
+  tests.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
