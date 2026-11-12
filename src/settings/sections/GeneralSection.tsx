@@ -22,6 +22,7 @@ import {
   setAutostart,
   setConfirmCloseRunningTerminal,
   setDefaultWorkspaceEnv,
+  setEslintAutoProjectLint,
   setEslintEnabled,
   setExplorerGitDecorations,
   setRestoreWindowState,
@@ -121,6 +122,9 @@ export function GeneralSection() {
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
   const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
   const eslintEnabled = usePreferencesStore((s) => s.eslintEnabled);
+  const eslintAutoProjectLint = usePreferencesStore(
+    (s) => s.eslintAutoProjectLint,
+  );
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
   const agentNotificationSound = usePreferencesStore(
     (s) => s.agentNotificationSound,
@@ -271,6 +275,15 @@ export function GeneralSection() {
           <Switch
             checked={eslintEnabled}
             onCheckedChange={(v) => void setEslintEnabled(v)}
+          />
+        </SettingRow>
+        <SettingRow
+          title="Lint project otomatis"
+          description="Saat project dibuka dan setelah file disimpan atau ditulis agent, Terax menjalankan lint seluruh project sendiri dan mengisi panel Problems — seperti Antigravity. Perintah manual di Command Palette tetap tersedia. Mati berarti lint project hanya jalan saat kamu memintanya."
+        >
+          <Switch
+            checked={eslintAutoProjectLint}
+            onCheckedChange={(v) => void setEslintAutoProjectLint(v)}
           />
         </SettingRow>
       </div>

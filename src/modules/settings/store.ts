@@ -182,6 +182,13 @@ export type Preferences = {
   aiReviewInline: boolean;
   /** Fase 10: ESLint diagnostics from the project's own install. Off disables the ESLint runner entirely. */
   eslintEnabled: boolean;
+  /**
+   * Fase 15: lint the whole project automatically — once when the
+   * project opens and again after saves and agent writes — and fill
+   * the Problems panel without a manual command. Default on; the
+   * manual palette commands keep working either way.
+   */
+  eslintAutoProjectLint: boolean;
   editorFormatter: EditorFormatter;
   /** languageResolver id -> formatter, overriding the global default. */
   editorFormatterByLang: Record<string, EditorFormatter>;
@@ -279,6 +286,7 @@ const KEY_EDITOR_AUTO_SAVE = "editorAutoSave";
 const KEY_EDITOR_AUTO_SAVE_DELAY = "editorAutoSaveDelay";
 const KEY_AI_REVIEW_INLINE = "aiReviewInline";
 const KEY_ESLINT_ENABLED = "eslintEnabled";
+const KEY_ESLINT_AUTO_PROJECT_LINT = "eslintAutoProjectLint";
 /** Fase 3 key, kept so loadPreferences can migrate an explicit choice. */
 const KEY_AI_REVIEW_PER_LINE_LEGACY = "aiReviewPerLine";
 const KEY_EDITOR_FORMAT_ON_SAVE = "editorFormatOnSave";
@@ -378,6 +386,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorAutoSaveDelay: 1000,
   aiReviewInline: true,
   eslintEnabled: true,
+  eslintAutoProjectLint: true,
   editorFormatOnSave: false,
   editorFormatter: "lsp",
   editorFormatterByLang: {},
@@ -573,6 +582,9 @@ export async function loadPreferences(): Promise<Preferences> {
       DEFAULT_PREFERENCES.aiReviewInline,
     eslintEnabled:
       get<boolean>(KEY_ESLINT_ENABLED) ?? DEFAULT_PREFERENCES.eslintEnabled,
+    eslintAutoProjectLint:
+      get<boolean>(KEY_ESLINT_AUTO_PROJECT_LINT) ??
+      DEFAULT_PREFERENCES.eslintAutoProjectLint,
     editorAutoSaveDelay: clampAutoSaveDelay(
       get<number>(KEY_EDITOR_AUTO_SAVE_DELAY) ??
         DEFAULT_PREFERENCES.editorAutoSaveDelay,
@@ -817,6 +829,12 @@ export async function setAiReviewInline(value: boolean): Promise<void> {
 
 export async function setEslintEnabled(value: boolean): Promise<void> {
   await writePref(KEY_ESLINT_ENABLED, value);
+}
+
+export async function setEslintAutoProjectLint(
+  value: boolean,
+): Promise<void> {
+  await writePref(KEY_ESLINT_AUTO_PROJECT_LINT, value);
 }
 
 export async function setExplorerGitDecorations(value: boolean): Promise<void> {
