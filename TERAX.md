@@ -1065,6 +1065,32 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   re-arm, but a run that outlasts 20 re-arms drops the pending
   request until the next save; per-file CLI/LSP behaviour is
   unchanged.
+  ErrorBoundary di App root (black screen saat ESLint LSP
+  dinyalakan), DONE: aplikasi tidak punya ErrorBoundary sama
+  sekali — `src/main.tsx` me-render `<App/>` tanpa pelindung —
+  jadi satu exception saat render meng-unmount seluruh pohon
+  React dan jendela blank hitam (laporan user 2026-11-12: Terax
+  langsung black screen begitu ESLint LSP dinyalakan; baris
+  persis yang melempar tidak ketahuan dari membaca kode — jalur
+  enable-nya sendiri terjaga). `ErrorBoundary`
+  (`src/app/ErrorBoundary.tsx`, class component, dipasang di
+  main.tsx membungkus `<App/>`) menampilkan fallback berbahasa
+  Indonesia, bukan layar hitam: nama + pesan error, stack trace
+  dalam `<details>`, tombol "Salin error" (nama + pesan + stack
+  + component stack ke clipboard, dengan fallback textarea bila
+  Clipboard API tidak ada), "Muat ulang" (reset boundary dan
+  remount App lewat key baru di fragment), dan "Matikan ESLint
+  LSP" (dynamic import `setLspActivation("eslint", "dismissed")`
+  dari settings store — dinamis supaya modul settings tidak
+  terseret ke eager graph main.tsx — lalu reset). `componentDidCatch`
+  mencatat nama, pesan, stack, dan componentStack via
+  `console.error`. Batas jujur (batas React, bukan batas
+  implementasi): yang ditangkap hanya error saat render /
+  lifecycle / constructor di bawah boundary, termasuk saat mount
+  awal; error di event handler, error async, dan error di dalam
+  boundary sendiri TIDAK tertangkap. Fallback sengaja mandiri
+  (tidak membaca store/hook apa pun). Error pastinya masih
+  menunggu laporan user lewat tombol "Salin error".
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
