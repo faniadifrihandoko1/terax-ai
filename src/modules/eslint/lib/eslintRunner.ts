@@ -423,13 +423,15 @@ export async function runEslintProjectChunked(args: {
     }
     const result = interpretEslintOutput(out, { tolerateNoMatch: true });
     if (result.kind !== "ok") return result;
-    const kept =
+    const dirPrefix =
       chunk.dir === null
+        ? null
+        : `${canonicalPath(joinPosix(args.binary.root, chunk.dir)).replace(/\/+$/, "")}/`;
+    const kept =
+      dirPrefix === null
         ? result.results
         : result.results.filter((r) =>
-            canonicalPath(r.filePath).startsWith(
-              `${canonicalPath(joinPosix(args.binary.root, chunk.dir)).replace(/\/+$/, "")}/`,
-            ),
+            canonicalPath(r.filePath).startsWith(dirPrefix),
           );
     allResults.push(...kept);
     return { kind: "ok" };
