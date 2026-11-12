@@ -43,6 +43,7 @@ import { EslintProblemsPanel } from "@/modules/eslint/components/ProblemsPanel";
 import { useEslintStore } from "@/modules/eslint/lib/eslintStore";
 import { requestEslintRunWithReport } from "@/modules/eslint/lib/runEslintManual";
 import { requestEslintProjectLint } from "@/modules/eslint/lib/runEslintProject";
+import { scheduleEslintProjectLint } from "@/modules/eslint/lib/eslintAutoProjectLint";
 import { useControlBridge } from "@/modules/control";
 import {
   type EditorPaneHandle,
@@ -548,6 +549,14 @@ export default function App() {
   );
 
   useWindowTitle(activeTab, explorerRoot);
+
+  // Fase 15: automatic project lint — the Problems panel fills
+  // itself when a project opens (or the root changes). Debounced
+  // inside the scheduler, so hopping between terminal tabs with
+  // different cwds does not start a lint storm.
+  useEffect(() => {
+    scheduleEslintProjectLint(explorerRoot);
+  }, [explorerRoot]);
 
   useEffect(() => {
     setActiveSearchAddon(

@@ -3,6 +3,7 @@ import { getCustomEndpointKey, getKey } from "@/modules/ai/lib/keyring";
 import { reviewHistoryFor } from "@/modules/ai/lib/reviewHistory";
 import type { HunkDecision, HunkDecisions } from "@/modules/ai/lib/reviewApply";
 import { requestEslintRun, useEslintExtension } from "@/modules/eslint";
+import { scheduleEslintProjectLintForFile } from "@/modules/eslint/lib/eslintAutoProjectLint";
 import { getProjectLintCounts } from "@/modules/eslint/lib/eslintProjectLint";
 import { lspFormatDocument, useLspExtensions } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
@@ -255,6 +256,8 @@ export const EditorPane = memo(
       if (!saved) return;
       // Fase 10: the buffer now matches disk, so ESLint can lint it.
       requestEslintRun(pathRef.current);
+      // Fase 15: the saved file may change the project snapshot.
+      void scheduleEslintProjectLintForFile(pathRef.current);
       if (prefs.editorFormatOnSave && formatter !== "lsp") {
         const error = await runExternalFormatter(
           formatter,

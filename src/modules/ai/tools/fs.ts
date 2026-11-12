@@ -1,5 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { scheduleEslintProjectLintForFile } from "@/modules/eslint/lib/eslintAutoProjectLint";
 import { native } from "../lib/native";
 import { djb2Hash } from "../lib/hash";
 import {
@@ -206,6 +207,8 @@ export function buildFsTools(ctx: ToolContext) {
             path: abs,
           };
         }
+        // Fase 15: an agent write may change the project lint snapshot.
+        void scheduleEslintProjectLintForFile(abs);
         composePendingProposal(
           abs,
           original,

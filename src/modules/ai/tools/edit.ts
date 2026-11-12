@@ -1,5 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { scheduleEslintProjectLintForFile } from "@/modules/eslint/lib/eslintAutoProjectLint";
 import { djb2Hash } from "../lib/hash";
 import { native } from "../lib/native";
 import {
@@ -184,6 +185,10 @@ async function proposeEdits(
       path: abs,
     };
   }
+  // Fase 15: an agent write may change the project lint snapshot.
+  // Queued plan-review edits never reach this line (no disk write),
+  // so nothing is scheduled for them.
+  void scheduleEslintProjectLintForFile(abs);
   composePendingProposal(
     abs,
     computed.original,
