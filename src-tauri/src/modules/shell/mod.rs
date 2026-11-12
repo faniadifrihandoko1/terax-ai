@@ -424,14 +424,13 @@ mod powershell_call_command_tests {
 
     #[test]
     fn prefixes_quoted_eslint_per_file_command() {
-        let cmd = "'C:\\Users\\fania\\OneDrive\\\u{6587}\u{6863}\\fix-recruitment\\recruitment_FE\\node_modules\\.bin\\eslint.cmd' --format json --no-warn-ignored -- 'C:\\Users\\fania\\OneDrive\\\u{6587}\u{6863}\\fix-recruitment\\recruitment_FE\\src\\combined-candidate-report-modal.tsx'";
+        let cmd = "'C:\\Users\\fania\\OneDrive\\\u{6587}\u{6863}\\fix-recruitment\\recruitment_FE\\node_modules\\.bin\\eslint.cmd' --format json -- 'C:\\Users\\fania\\OneDrive\\\u{6587}\u{6863}\\fix-recruitment\\recruitment_FE\\src\\combined-candidate-report-modal.tsx'";
         assert_eq!(powershell_call_command(cmd), format!("& {cmd}"));
     }
 
     #[test]
     fn prefixes_quoted_eslint_project_command() {
-        let cmd =
-            "'C:\\proj\\node_modules\\.bin\\eslint.cmd' --format json --no-warn-ignored -- '.'";
+        let cmd = "'C:\\proj\\node_modules\\.bin\\eslint.cmd' --format json -- '.'";
         assert_eq!(powershell_call_command(cmd), format!("& {cmd}"));
     }
 
