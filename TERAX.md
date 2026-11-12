@@ -688,8 +688,8 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   bundled copy (`src/modules/eslint/`). Detection walks up from the file to
   `node_modules/.bin/eslint` (or `eslint.cmd` on Windows), falling back to
   `npx --no-install eslint`; nothing is installed into the project. Runs go
-  through the existing one-shot `shell_run_command` (`--format json
-  --no-warn-ignored`, 30 s timeout; exit 1 means violations found, exit 2
+  through the existing one-shot `shell_run_command` (`--format json`,
+  30 s timeout; exit 1 means violations found, exit 2
   with a config error means the project has no usable config). Results are
   mapped to CodeMirror diagnostics (`eslintMessagesToDiagnostics` in
   `lib/eslintJson.ts`: 1-based positions clamped to the document, severity
@@ -947,7 +947,7 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   Fase 13 (PowerShell-safe shell commands for the ESLint CLI), DONE:
   root cause, every CLI ESLint run died in the PowerShell parser
   before ESLint ran. `buildEslintCommand` builds
-  `'...\eslint.cmd' --format json --no-warn-ignored -- <file>`
+  `'...\eslint.cmd' --format json -- <file>`
   (single-quoted binary via `quoteShellArg`), and
   `shell_run_command` runs that string through PowerShell
   (`-NoProfile -Command`, picked by `windows_shell_path`: pwsh,
@@ -991,6 +991,27 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   prefix is only applied in the Windows branch, which no Linux
   run can execute; the rule logic itself is covered by the unit
   tests.
+  Fase 14 (drop the `--no-warn-ignored` flag from the ESLint CLI
+  command), DONE: Fase 13 got the run past PowerShell, and the next
+  error layer surfaced — ESLint itself rejected the flag:
+  "Invalid option '--warn-ignored' - perhaps you meant
+  '--ignore'?" on the user's project-wide lint. Root cause:
+  `--no-warn-ignored` is a Flat Config Mode Only option (ESLint
+  docs; also reported for ESLint 8.56.0 in eslint/eslint
+  discussion #18019), and the user's project is ESLint 8.57.0
+  with a legacy `.eslintrc.json`. `buildEslintCommand` (Fase 10)
+  passed the flag unconditionally, so per-file and project-wide
+  runs both failed on any legacy-config project. Fix: drop the
+  flag from `buildEslintCommand` (one line); in ESLint 9 it is the
+  default behaviour anyway, so nothing changes there. The two
+  exact command strings in the Fase 13 Rust tests were updated to
+  match, and a frontend test now asserts the built command
+  contains neither `--no-warn-ignored` nor `--warn-ignored` for
+  both the path and npx binaries (per-file and project-wide).
+  Honest side effect: in ESLint 9, an ignored file that is
+  linted explicitly may now surface as a harmless "file ignored"
+  warning diagnostic instead of being silenced — the flag that
+  suppressed that warning is gone.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
