@@ -63,6 +63,24 @@ describe("buildEslintCommand", () => {
     );
     expect(cmd.startsWith("npx --no-install eslint ")).toBe(true);
   });
+
+  it("does not pass --no-warn-ignored (flat-config-only flag)", () => {
+    // --no-warn-ignored is only valid in flat-config mode (ESLint 9 /
+    // eslint.config.js); ESLint 8 + .eslintrc.json rejects it with
+    // "Invalid option '--warn-ignored'". In ESLint 9 the flag is the
+    // default behaviour anyway, so dropping it changes nothing there.
+    for (const binary of [
+      { kind: "path", root: "/proj", binary: "/proj/eslint" },
+      { kind: "npx", root: "/proj" },
+    ] as const) {
+      const cmd = buildEslintCommand(binary, "/proj/a.ts");
+      expect(cmd).not.toContain("--no-warn-ignored");
+      expect(cmd).not.toContain("--warn-ignored");
+      expect(cmd).toContain("--format json");
+      expect(cmd).toContain(" -- ");
+      expect(cmd).toContain("'/proj/a.ts'");
+    }
+  });
 });
 
 describe("runEslintFile", () => {
@@ -154,7 +172,11 @@ describe("runEslintProject", () => {
     expect(seen.cwd).toBe("/proj");
     expect(seen.timeoutSecs).toBe(PROJECT_LINT_TIMEOUT_SECS);
     expect(seen.command).toContain("--format json");
+    expect(seen.command).not.toContain("--no-warn-ignored");
     expect(buildEslintProjectCommand(binary)).toContain("'.'");
+    expect(buildEslintProjectCommand(binary)).not.toContain(
+      "--no-warn-ignored",
+    );
   });
 
   it("returns truncated as its own outcome, not a failure", async () => {
