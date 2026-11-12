@@ -11,7 +11,8 @@ import { getEslintEditorPresence } from "./eslintRequests";
 import {
   PROJECT_LINT_TIMEOUT_SECS,
   resolveEslintBinary,
-  runEslintProject,
+  runEslintProjectChunked,
+  type ListDirFn,
   type RunCommand,
 } from "./eslintRunner";
 import type { StatFn } from "./eslintDetect";
@@ -25,31 +26,70 @@ import { describeEslintRunStatus } from "./eslintStatusText";
  * starting a parallel lint. The run itself is async and never
  * blocks the editor; the panel shows the "running" state meanwhile.
  * A stale completion (a newer run started since) is dropped.
+ * The engine is the chunked runner (per-folder chunks merged into
+ * one snapshot), for manual and automatic runs alike.
+ *
+ * `source` decides the toast policy. "manual" (default, Command
+ * Palette) reports every outcome with a toast, like before. "auto"
+ * (the Fase 15 scheduler) stays quiet on success — the panel and
+ * the badges speak — and reports a failure only once per root per
+ * session, reusing the `notifiedRoots` discipline of the per-file
+ * runs, because an auto-run can fire after every save and must not
+ * spam the user about a project that is broken in a stable way.
  */
 export async function requestEslintProjectLint(
   root: string | null,
-  deps: { stat?: StatFn; runCommand?: RunCommand; windows?: boolean } = {},
+  deps: {
+    stat?: StatFn;
+    runCommand?: RunCommand;
+    windows?: boolean;
+    source?: "auto" | "manual";
+    listDir?: ListDirFn;
+  } = {},
 ): Promise<void> {
+  const source = deps.source ?? "manual";
+  const silent = source === "auto";
   const store = useEslintStore.getState();
+  /** Failure feedback: every time for manual runs, once per root per session for auto runs. */
+  const warn = (label: string, description: string) => {
+    if (!silent) {
+      toast.warning(label, { description });
+      return;
+    }
+    if (root === null) return;
+    // Re-read: the store may have changed while the run was in flight.
+    const current = useEslintStore.getState();
+    if (current.notifiedRoots[root]) return;
+    current.markRootNotified(root);
+    toast.warning(label, { description });
+  };
   if (!usePreferencesStore.getState().eslintEnabled) {
-    toast.warning("ESLint diagnostics mati", {
-      description:
-        'Nyalakan di Settings → General → "ESLint diagnostics" untuk menjalankan ESLint.',
-    });
+    if (!silent) {
+      toast.warning("ESLint diagnostics mati", {
+        description:
+          'Nyalakan di Settings → General → "ESLint diagnostics" untuk menjalankan ESLint.',
+      });
+    }
     return;
   }
   if (!root) {
-    toast.warning("Tidak ada project terbuka", {
-      description:
-        "Buka sebuah project dulu, lalu jalankan lint seluruh project.",
-    });
+    if (!silent) {
+      toast.warning("Tidak ada project terbuka", {
+        description:
+          "Buka sebuah project dulu, lalu jalankan lint seluruh project.",
+      });
+    }
     return;
   }
   const current = store.projectLint.status;
   if (current.kind === "running") {
-    toast.warning("Lint project masih berjalan", {
-      description: "Tunggu run yang sedang berjalan selesai dulu.",
-    });
+    // A manual run says so; an auto-run is silently skipped — the
+    // Fase 15 scheduler re-arms and retries after the run ends.
+    if (!silent) {
+      toast.warning("Lint project masih berjalan", {
+        description: "Tunggu run yang sedang berjalan selesai dulu.",
+      });
+    }
     return;
   }
   const startedAt = Date.now();
@@ -92,13 +132,14 @@ export async function requestEslintProjectLint(
       root,
       ...diagnosis,
     });
-    toast.warning(label, { description: detail });
+    warn(label, detail);
     return;
   }
 
-  const result = await runEslintProject({
+  const result = await runEslintProjectChunked({
     binary: resolution.binary,
     runCommand: deps.runCommand,
+    listDir: deps.listDir,
   });
   if (!isCurrentRun()) return;
   const at = Date.now();
@@ -112,6 +153,7 @@ export async function requestEslintProjectLint(
         files,
       );
       applyProjectLintCounts(prevFiles, files);
+      if (silent) return;
       if (totals.errors === 0 && totals.warnings === 0) {
         toast.success("ESLint project bersih", {
           description: "Tidak ada masalah ESLint di project ini.",
@@ -125,25 +167,26 @@ export async function requestEslintProjectLint(
     }
     case "missing-config": {
       store.setProjectLintStatus({ kind: "missing-config", root, at });
-      toast.warning("ESLint tidak punya config di project ini", {
-        description:
-          "Tambahkan eslint.config.js (atau .eslintrc) di project, atau matikan diagnostik ESLint di Settings → General.",
-      });
+      warn(
+        "ESLint tidak punya config di project ini",
+        "Tambahkan eslint.config.js (atau .eslintrc) di project, atau matikan diagnostik ESLint di Settings → General.",
+      );
       return;
     }
     case "timeout": {
       store.setProjectLintStatus({ kind: "timeout", root, at });
-      toast.warning("Lint project kehabisan waktu", {
-        description: `ESLint tidak selesai dalam ${PROJECT_LINT_TIMEOUT_SECS} detik. Coba lint per folder atau per file.`,
-      });
+      warn(
+        "Lint project kehabisan waktu",
+        `ESLint tidak selesai dalam ${PROJECT_LINT_TIMEOUT_SECS} detik. Coba lint per folder atau per file.`,
+      );
       return;
     }
     case "truncated": {
       store.setProjectLintStatus({ kind: "truncated", root, at });
-      toast.warning("Hasil lint project tidak lengkap", {
-        description:
-          "Output ESLint melebihi batas 256 KiB sehingga laporannya terpotong dan tidak bisa dibaca. Lint per folder atau per file untuk hasil lengkap.",
-      });
+      warn(
+        "Hasil lint project tidak lengkap",
+        "Output ESLint melebihi batas 256 KiB sehingga laporannya terpotong dan tidak bisa dibaca. Lint per folder atau per file untuk hasil lengkap.",
+      );
       return;
     }
     case "failed": {
@@ -153,7 +196,7 @@ export async function requestEslintProjectLint(
         message: result.message,
         at,
       });
-      toast.warning("Lint project gagal", { description: result.message });
+      warn("Lint project gagal", result.message);
       return;
     }
   }

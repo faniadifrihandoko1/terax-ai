@@ -74,6 +74,7 @@ beforeEach(() => {
   clearEslintBinaryCache();
   useEslintStore.setState({
     projectLint: { status: { kind: "idle" }, files: [] },
+    notifiedRoots: {},
   });
   useDiagnosticsStore.setState({ byPath: {} });
   usePreferencesStore.setState({ eslintEnabled: true });
@@ -260,5 +261,107 @@ describe("requestEslintProjectLint", () => {
     release();
     await first;
     expect(useEslintStore.getState().projectLint.status.kind).toBe("ok");
+  });
+});
+
+describe("requestEslintProjectLint with source auto (Fase 15)", () => {
+  it("fills the panel silently on success", async () => {
+    await requestEslintProjectLint(ROOT, {
+      ...foundBinary,
+      runCommand: fakeLint({ stdout: projectJson, exit_code: 1 }),
+      source: "auto",
+    });
+    expect(useEslintStore.getState().projectLint.status.kind).toBe("ok");
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it("reports a failure only once per root per session", async () => {
+    const deps = {
+      ...foundBinary,
+      runCommand: fakeLint({ stderr: "boom", exit_code: 2 }),
+      source: "auto" as const,
+    };
+    await requestEslintProjectLint(ROOT, deps);
+    await requestEslintProjectLint(ROOT, deps);
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(toast.warning).toHaveBeenCalledWith(
+      "Lint project gagal",
+      expect.anything(),
+    );
+  });
+
+  it("returns silently when a run is already active", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runCommand: RunCommand = async () => {
+      await gate;
+      return { stdout: projectJson, stderr: "", exit_code: 1, timed_out: false };
+    };
+    const first = requestEslintProjectLint(ROOT, {
+      ...foundBinary,
+      runCommand,
+      source: "auto",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await requestEslintProjectLint(ROOT, {
+      ...foundBinary,
+      runCommand: fakeLint({ stdout: projectJson, exit_code: 1 }),
+      source: "auto",
+    });
+    expect(toast.warning).not.toHaveBeenCalled();
+    release();
+    await first;
+    expect(useEslintStore.getState().projectLint.status.kind).toBe("ok");
+  });
+
+  it("is silent when ESLint diagnostics are off", async () => {
+    usePreferencesStore.setState({ eslintEnabled: false });
+    await requestEslintProjectLint(ROOT, {
+      ...foundBinary,
+      source: "auto",
+    });
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(useEslintStore.getState().projectLint.status.kind).toBe("idle");
+  });
+
+  it("manual run uses the chunked engine and merges the chunks", async () => {
+    const seen: string[] = [];
+    const runCommand: RunCommand = async (cmd) => {
+      seen.push(cmd);
+      if (cmd.includes("'src'")) {
+        return {
+          stdout: projectJson,
+          stderr: "",
+          exit_code: 1,
+          timed_out: false,
+        };
+      }
+      return {
+        stdout: JSON.stringify([]),
+        stderr: "",
+        exit_code: 0,
+        timed_out: false,
+      };
+    };
+    await requestEslintProjectLint(ROOT, {
+      ...foundBinary,
+      runCommand,
+      listDir: async () => [
+        { name: "src", kind: "dir" },
+        { name: "lib", kind: "dir" },
+      ],
+    });
+    // Chunks run in sorted order (buildProjectLintChunks sorts by name).
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toContain("'lib'");
+    expect(seen[1]).toContain("'src'");
+    expect(useEslintStore.getState().projectLint.files).toHaveLength(1);
+    expect(toast.success).toHaveBeenCalledWith(
+      "Lint project selesai",
+      expect.anything(),
+    );
   });
 });
