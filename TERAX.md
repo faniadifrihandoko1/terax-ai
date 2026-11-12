@@ -1012,6 +1012,59 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   linted explicitly may now surface as a harmless "file ignored"
   warning diagnostic instead of being silenced — the flag that
   suppressed that warning is gone.
+  Fase 15 (automatic project lint, Antigravity-style), DONE: the
+  user asked for the Problems panel to fill itself — default
+  automatic, manual still possible. Before this phase the
+  project-wide lint was manual-only (Command Palette) and its
+  single `eslint .` run overflowed the 256 KiB one-shot output
+  cap on the user's project, so the report came back truncated
+  and unreadable ("hasil tidak lengkap"). Three changes. (1)
+  Chunked engine (`runEslintProjectChunked` in
+  `eslintRunner.ts`, used by manual and auto runs alike): the
+  project is linted as one sequential run per top-level folder
+  (plus one chunk with the lintable files sitting directly under
+  the root), cwd stays the project root, and the results merge
+  into one snapshot whose file set is the same as `eslint .`
+  (verified live on a probe project, ESLint 8.57 legacy and 9.39
+  flat). `node_modules` and symlinks are never chunk targets;
+  hidden entries are excluded by the listing. A chunk whose
+  target has nothing lintable (empty folder, or fully ignored)
+  exits 2 with "No files matching the pattern" / "all of the
+  files matching the glob pattern … are ignored" in both modes
+  (verified live), and counts as an empty ok, not a failure. A
+  chunk whose JSON still exceeds the cap is split one level
+  deeper — its subdirectories, then its file list halved — up to
+  MAX_CHUNK_DEPTH = 2; beyond that the run reports `truncated`
+  (the Fase 11 outcome, previous snapshot kept). The whole run
+  shares one 120 s budget. When the directory listing fails, or
+  there is nothing to chunk, the run falls back to a single
+  `eslint .`. The 256 KiB shell output cap itself is unchanged.
+  (2) Scheduler (`eslintAutoProjectLint.ts`): one 3 s debounce
+  for every trigger — project open / root change (App effect on
+  `explorerRoot`), editor save (EditorPane `performSave`), agent
+  writes (`proposeEdits` for edit/multi_edit and `write_file`
+  after a successful `native.writeFile`; plan-review-queued edits
+  never touch disk, so they schedule nothing). Never per
+  keystroke: typing diagnostics still come from the Fase 12
+  language server. A fire that finds a run active re-arms the
+  timer (max 20 re-arms, ~60 s) instead of stacking runs, then
+  drops honestly; the next trigger tries again. (3) Setting
+  `eslintAutoProjectLint`, default ON, toggle in Settings →
+  General → ESLint next to "ESLint diagnostics"; off means
+  no auto-run at all, and `eslintEnabled` off disables it too.
+  Toast policy in `requestEslintProjectLint` (`source` auto vs
+  manual): manual reports every outcome as before; auto is
+  silent on success (panel + badges speak) and reports a failure
+  once per root per session (`notifiedRoots`, the per-file
+  discipline), so an auto-run that fires after every save cannot
+  spam a stably broken project. The Problems panel stays a
+  snapshot per project root with its last-run timestamp.
+  Honest limits: delete/rename do not re-trigger a run, so a
+  deleted file's badge can linger until the next trigger; a
+  save that lands while a run is active is covered by the
+  re-arm, but a run that outlasts 20 re-arms drops the pending
+  request until the next save; per-file CLI/LSP behaviour is
+  unchanged.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
