@@ -62,7 +62,7 @@ export function buildEslintCommand(binary: EslintBinary, file: string): string {
     binary.kind === "path"
       ? quoteShellArg(binary.binary)
       : "npx --no-install eslint";
-  return `${bin} --format json --no-warn-ignored -- ${quoteShellArg(file)}`;
+  return `${bin} --format json -- ${quoteShellArg(file)}`;
 }
 
 export type EslintRunResult =
