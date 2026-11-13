@@ -8,6 +8,7 @@ import type { TeraxLspClient } from "./client";
 import { detectBinary } from "./detect";
 import { getLspNavigator } from "./navigator";
 import { type LspPreset, serversForLanguageEnabled } from "./presets";
+import { stripLspAutocompletion } from "./lspAutocompletion";
 import { useLspRuntimeStore } from "./runtimeStore";
 import type { TauriLspTransport } from "./transport";
 import { fileUriToPath, pathToFileUri } from "./uri";
@@ -72,11 +73,24 @@ export async function acquireDocExtensions(
     prefs.lspActivation,
   );
   const handles: LspDocHandle[] = [];
+  // Only the first preset that actually acquires owns the document's LSP
+  // completion (Fase 16): every preset's extension set carries its own
+  // autocompletion({override}), and two of them crash the editor with
+  // "Config merge conflict for field override". Ownership follows the
+  // first SUCCESSFUL acquire, not list position — if the first preset
+  // fails (no binary, no root, crashed out), the next one takes over,
+  // so completion is never silently lost. Preset order is definition
+  // order (typescript before eslint), so for ts/tsx the TypeScript
+  // server keeps completion; the ESLint server provides none anyway.
+  let completionTaken = false;
   for (const preset of presets) {
-    const handle = await acquireForPreset(path, langId, preset).catch(
-      () => null,
-    );
-    if (handle) handles.push(handle);
+    const handle = await acquireForPreset(path, langId, preset, {
+      includeCompletion: !completionTaken,
+    }).catch(() => null);
+    if (handle) {
+      handles.push(handle);
+      completionTaken = true;
+    }
   }
   return handles;
 }
@@ -85,6 +99,7 @@ async function acquireForPreset(
   path: string,
   langId: string,
   preset: LspPreset,
+  opts: { includeCompletion?: boolean } = {},
 ): Promise<LspDocHandle | null> {
   if (currentWorkspaceEnv().kind !== "local") return null;
   if (usePreferencesStore.getState().lspActivation[preset.id] !== "enabled")
@@ -135,6 +150,22 @@ async function acquireForPreset(
   const uri = pathToFileUri(path);
   const languageId = preset.languages[langId] ?? langId;
   const mod = await import("./client");
+  // languageServerWithTransport() bundles autocompletion({override: [...]})
+  // into every preset's set; only the completion owner keeps it (see
+  // acquireDocExtensions) — the rest get it stripped, or the editor
+  // crashes on the completionConfig facet (Fase 16).
+  const lspExt = mod.languageServerWithTransport({
+    client: managed.client,
+    transport: managed.transport,
+    rootUri: pathToFileUri(managed.root),
+    workspaceFolders: [
+      { uri: pathToFileUri(managed.root), name: basename(managed.root) },
+    ],
+    documentUri: uri,
+    languageId,
+    allowHTMLContent: false,
+    synchronizationMethod: mod.SynchronizationMethod.Incremental,
+  }) as Extension;
   const extension: Extension = [
     mod.lspInteractions({
       client: managed.client,
@@ -145,18 +176,7 @@ async function acquireForPreset(
         if (target) getLspNavigator()?.openFile(target, line);
       },
     }),
-    mod.languageServerWithTransport({
-      client: managed.client,
-      transport: managed.transport,
-      rootUri: pathToFileUri(managed.root),
-      workspaceFolders: [
-        { uri: pathToFileUri(managed.root), name: basename(managed.root) },
-      ],
-      documentUri: uri,
-      languageId,
-      allowHTMLContent: false,
-      synchronizationMethod: mod.SynchronizationMethod.Incremental,
-    }) as Extension,
+    opts.includeCompletion === false ? stripLspAutocompletion(lspExt) : lspExt,
     // Pull-diagnostics servers (the ESLint server) never push
     // publishDiagnostics, so the document also mounts the pull
     // plugin, which requests textDocument/diagnostic and publishes
