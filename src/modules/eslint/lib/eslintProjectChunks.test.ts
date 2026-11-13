@@ -172,6 +172,64 @@ describe("runEslintProjectChunked", () => {
     }
   });
 
+  it("treats a no-match chunk as an empty ok whatever exit code the shell reports", async () => {
+    // Fase 15.1: on Windows the command runs through
+    // `powershell -NoProfile -Command` (no `exit $LASTEXITCODE`), so
+    // the exit code ESLint reports (2) is not what Terax observes.
+    // The ok-empty classification must come from the output text,
+    // not the exit code — otherwise every auto project lint fails
+    // while a folder with nothing lintable (e.g. `messages`, JSON
+    // translations only) exists.
+    const out = await runEslintProjectChunked({
+      binary: BINARY,
+      runCommand: scriptedLint({
+        src: { stdout: asJson([result("/proj/src/a.ts", true)]) },
+        messages: {
+          stderr:
+            'Oops! Something went wrong! :(\n\nESLint: 8.57.0\n\nNo files matching the pattern "messages" were found. Please check for typing mistakes in the pattern.',
+          exit_code: 0,
+        },
+        empty: {
+          stderr:
+            'Oops! Something went wrong! :(\n\nESLint: 8.57.0\n\nNo files matching the pattern "empty" were found.',
+          exit_code: 1,
+        },
+        ignored: {
+          stderr:
+            'You are linting "ignored", but all of the files matching the glob pattern "ignored" are ignored.',
+          exit_code: 1,
+        },
+      }),
+      listDir: listDirFrom({
+        "/proj": [
+          { name: "src", kind: "dir" },
+          { name: "messages", kind: "dir" },
+          { name: "empty", kind: "dir" },
+          { name: "ignored", kind: "dir" },
+        ],
+      }),
+    });
+    expect(out.kind).toBe("ok");
+    if (out.kind === "ok") {
+      expect(out.results.map((r) => r.filePath)).toEqual(["/proj/src/a.ts"]);
+    }
+  });
+
+  it("reports missing config even when the shell does not report exit code 2", async () => {
+    // Fase 15.1: same exit-code problem as the no-match case — the
+    // config-missing classification is by output text, not exit code.
+    const out = await runEslintProjectChunked({
+      binary: BINARY,
+      runCommand: scriptedLint({
+        src: { stderr: "Could not find config file", exit_code: 1 },
+      }),
+      listDir: listDirFrom({
+        "/proj": [{ name: "src", kind: "dir" }],
+      }),
+    });
+    expect(out.kind).toBe("missing-config");
+  });
+
   it("splits a truncated folder one level deeper and merges the pieces", async () => {
     const seen: string[] = [];
     const out = await runEslintProjectChunked({
