@@ -1089,8 +1089,79 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   lifecycle / constructor di bawah boundary, termasuk saat mount
   awal; error di event handler, error async, dan error di dalam
   boundary sendiri TIDAK tertangkap. Fallback sengaja mandiri
-  (tidak membaca store/hook apa pun). Error pastinya masih
-  menunggu laporan user lewat tombol "Salin error".
+  (tidak membaca store/hook apa pun). Bukti end-to-end: crash
+  terulang di laptop user 2026-11-13, boundary menangkapnya, dan
+  laporan "Salin error" yang ditempel ke chat mengungkap root
+  cause-nya — lihat Fase 16.
+  Fase 16 (satu autocompletion per dokumen — black screen saat
+  ESLint LSP dinyalakan), DONE: laporan "Salin error" 2026-11-13
+  berbunyi `Config merge conflict for field override`, dan
+  penyebabnya ketemu dari kode, bukan tebakan. `languageServerWithTransport()`
+  dari codemirror-languageserver 1.22.1 selalu menyisipkan
+  `autocompletion({override: [source]})` di array extension tiap
+  preset; facet `completionConfig` di @codemirror/autocomplete
+  menggabungkan config lewat `combineConfig`, yang melempar
+  begitu dua nilai `override` berbeda ada dalam satu editor
+  (tidak ada combine function untuk field `override`). Sejak Fase
+  12 satu bahasa bisa punya dua preset (TS + ESLint untuk
+  ts/tsx), jadi begitu ESLint dinyalakan sebagai preset kedua,
+  reconfigure langsung crash — itulah black screen yang dilaporkan
+  2026-11-12. Nama chunk cm-lang-css/cm-lang-go di stack adalah
+  red herring (penempatan kode CodeMirror oleh Vite), bukan file
+  CSS/Go. Perbaikan: hanya preset PERTAMA per dokumen yang
+  menyimpan autocompletion dari library; preset berikutnya
+  di-strip (`stripLspAutocompletion` di `lspAutocompletion.ts`,
+  membuang elemen index 2 dari array hasil library — layout
+  [plugin, hoverTooltip, autocompletion, documentHighlight,
+  renameExtension, keymap, mouseHandler] ter-pin ke 1.22.1 dan
+  dijaga test layout-pin). Kepemilikan mengikuti preset pertama
+  yang BERHASIL di-acquire, bukan posisi di list (`completionTaken`
+  di `acquireDocExtensions`): kalau preset pertama gagal (tidak
+  ada binary, tidak ada root, crash budget habis), preset
+  berikutnya mengambil alih, jadi completion tidak pernah hilang
+  diam-diam. Urutan preset adalah urutan definisi (typescript
+  sebelum eslint), jadi untuk ts/tsx server TypeScript yang
+  menyimpan completion; server ESLint memang tidak menyediakan
+  completion. Kenapa completion tetap sampai ke server yang benar
+  (diverifikasi dari source package terinstall, bukan asumsi):
+  facet `viewPlugin` di @codemirror/view 6.43.13 mendedup
+  provision berdasarkan identitas plugin dan menyimpan kemunculan
+  PERTAMA; `EditorView.plugin()` memakai `.find()` (instance
+  pertama); `PluginInstance` dibuat dengan arg provision pertama
+  (client preset pertama); dan completion source library memanggil
+  `view.plugin(languageServerPlugin)` saat dipanggil — jadi
+  autocompletion yang tersisa berbicara ke client TypeScript.
+  Facet lain di set per-preset tidak bisa melempar: duplicate
+  StateField (renamePanelState, highlightField) last-wins tanpa
+  throw, hover/keymap/domEventHandlers bergabung sebagai array —
+  completionConfig adalah satu-satunya facet yang melempar.
+  Regression test (`lspAutocompletion.test.ts`, 6 test): dua set
+  penuh melempar error persis seperti laporan; satu penuh + satu
+  di-strip (atau dua di-strip) tidak melempar; test layout-pin
+  membuang tiap index bergiliran dan hanya index 2 yang
+  menghilangkan konflik; kontrak helper (tepat satu elemen
+  hilang, sisanya sama persis, non-array lolos utuh). Test
+  membuktikan konflik melempar sudah di `EditorState.create`,
+  sama seperti di jalur reconfigure pada laporan. Batas jujur:
+  dengan dua preset, hanya instance `languageServerPlugin` milik
+  preset PERTAMA yang ada (dedup) — semua yang library resolve
+  lewat `view.plugin()` (completion, hover, document highlight,
+  rename, go-to-definition) berbicara ke server preset pertama.
+  Untuk TS+ESLint itu tidak masalah (ESLint tidak menyediakan
+  satu pun fitur itu). Tapi server preset kedua tidak pernah
+  menerima `didOpen`/`didChange` lewat plugin — instancenya
+  tidak pernah dibuat — sehingga asumsi desain Fase 12 ("server
+  me-lint buffer yang sudah dikirim editor via didOpen/didChange")
+  tidak berlaku untuk preset kedua; pull tetap mengembalikan
+  diagnostik (terverifikasi live di Fase 12), jadi server
+  evidently membaca file dari disk (atau membuka lazily saat
+  pull), tapi klaim "me-lint buffer / jalan di buffer kotor"
+  untuk preset ESLint belum terbukti dan butuh cek live dengan
+  buffer kotor di laptop. Fase 16 tidak mengubah ini (di luar
+  scope). Kalau suatu hari preset kedua menyediakan
+  completion/hover, ia akan diam-diam tidak mendapat apa-apa —
+  aturan satu pemilik perlu ditinjau ulang (autocompletion
+  gabungan di level dokumen yang fan-out ke semua sesi).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
