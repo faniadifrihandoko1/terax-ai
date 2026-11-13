@@ -1162,6 +1162,33 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   completion/hover, ia akan diam-diam tidak mendapat apa-apa —
   aturan satu pemilik perlu ditinjau ulang (autocompletion
   gabungan di level dokumen yang fan-out ke semua sesi).
+  Fase 15.1 (klasifikasi no-match / missing-config berdasarkan
+  teks, bukan exit code), DONE: laporan user 2026-11-13 — auto
+  project lint gagal terus dengan "ESLint: lint project gagal —
+  No files matching the pattern "messages" were found" (ESLint
+  8.57.0). Root cause: chunk `messages` (folder terjemahan
+  next-intl, isinya hanya .json, tidak ada file yang bisa di-lint)
+  memang kasus ok-empty yang Fase 15 desain — tapi
+  `interpretEslintOutput` (`eslintRunner.ts`) hanya mengembalikan
+  ok-empty bila `tolerateNoMatch` DAN exit code 2, dan di laptop
+  Windows perintah jalan lewat `powershell -NoProfile -Command`
+  tanpa `exit $LASTEXITCODE`, sehingga exit code yang teramati
+  bukan 2; cabang empty-stdout mengembalikan `failed` dan seluruh
+  lint project dilaporkan gagal. Perbaikan: klasifikasi berdasarkan
+  teks output, bukan exit code — `NO_FILES_MATCHING` (bila
+  `tolerateNoMatch` dan stdout kosong/whitespace, supaya JSON
+  hasil lint sungguhan tidak pernah dibuang) dan `CONFIG_MISSING`
+  (kelas masalah yang sama, ikut diperbaiki dengan bentuk yang
+  sama) tidak lagi mensyaratkan exit code 2. Perilaku failure
+  sungguhan tidak berubah. Regression test
+  (`eslintProjectChunks.test.ts`, 2 test baru, keduanya FAIL di
+  kode lama): chunk no-match dengan exit 0, 1, dan 2 semuanya
+  ok-empty; chunk missing-config dengan exit 1 tetap
+  `missing-config`. Batas jujur: angka exit code persis yang
+  PowerShell laporkan di Windows tidak pernah terverifikasi dari
+  VM Linux — perbaikan sengaja tidak bergantung padanya;
+  propagasi exit code di Rust (`exit $LASTEXITCODE`) tetap
+  investigasi terpisah, di luar scope ini.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
