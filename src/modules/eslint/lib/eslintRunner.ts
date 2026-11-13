@@ -108,20 +108,28 @@ const CONFIG_MISSING =
  * because of a matching ignore pattern"). Verified live on ESLint
  * 8.57.0 and 9.39.5, legacy and flat — both exit 2 with this text
  * and no JSON. A chunk that hits it simply contributes nothing.
+ * The classification is by this text, not by the exit code: on
+ * Windows the command runs through `powershell -NoProfile -Command`
+ * (no `exit $LASTEXITCODE`), so the exit code ESLint reports is not
+ * necessarily the one Terax observes (Fase 15.1: a `messages` folder
+ * with JSON only failed every auto project lint because the observed
+ * code was not 2).
  */
 const NO_FILES_MATCHING =
   /no files matching the pattern|all of the files matching the glob pattern .* are ignored|file ignored because of a matching ignore pattern/i;
 
 /**
  * Shared reading of one `shell_run_command` result: exit 1 means
- * "violations found", not failure; exit 2 with a config error means
- * the project has no usable ESLint config. Callers check
- * `out.truncated` and `out.timed_out` first and map those themselves,
- * because a truncated single-file run is a failure while a truncated
- * project-wide run is its own outcome (partial JSON cannot be parsed).
- * With `tolerateNoMatch`, an exit-2 "nothing lintable here" is an
- * empty ok instead of a failure — only the chunked project runner
- * uses that, where an empty or fully ignored folder is normal.
+ * "violations found", not failure. Fatal ESLint errors are classified
+ * by their output text, not by the exit code — the shell may not
+ * report ESLint's exit code faithfully (see NO_FILES_MATCHING).
+ * Callers check `out.truncated` and `out.timed_out` first and map
+ * those themselves, because a truncated single-file run is a failure
+ * while a truncated project-wide run is its own outcome (partial JSON
+ * cannot be parsed). With `tolerateNoMatch`, a "nothing lintable
+ * here" result is an empty ok instead of a failure — only the chunked
+ * project runner uses that, where an empty or fully ignored folder is
+ * normal.
  */
 function interpretEslintOutput(
   out: CommandOutput,
@@ -129,12 +137,12 @@ function interpretEslintOutput(
 ): EslintRunResult {
   if (out.timed_out) return { kind: "timeout" };
   const combined = `${out.stdout}\n${out.stderr}`;
-  if (out.exit_code === 2 && CONFIG_MISSING.test(combined)) {
+  if (CONFIG_MISSING.test(combined)) {
     return { kind: "missing-config" };
   }
   if (
     opts.tolerateNoMatch &&
-    out.exit_code === 2 &&
+    !out.stdout.trim() &&
     NO_FILES_MATCHING.test(combined)
   ) {
     return { kind: "ok", results: [] };
@@ -163,8 +171,9 @@ function interpretEslintOutput(
 
 /**
  * Runs the project's ESLint on one file and parses the JSON report.
- * Exit code 1 means "violations found", not failure. Exit code 2 with a
- * config error means the project has no usable ESLint config.
+ * Exit code 1 means "violations found", not failure. A config error
+ * in the output means the project has no usable ESLint config
+ * (classified by text, not exit code — see interpretEslintOutput).
  */
 export async function runEslintFile(args: {
   binary: EslintBinary;
