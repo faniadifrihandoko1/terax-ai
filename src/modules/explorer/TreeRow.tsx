@@ -5,6 +5,10 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { memo } from "react";
 import { DiagnosticsMark } from "./DiagnosticsMark";
 import { InlineInput } from "./InlineInput";
+import {
+  diagnosticsSeverityClass,
+  useDiagnosticsSeverity,
+} from "./lib/diagnosticsSeverity";
 import { explorerGitTextClass } from "./lib/gitStatusColor";
 import type { GitStatusCode } from "./lib/gitStatusUtils";
 import { FileIcon, FolderIcon } from "./FileIcon";
@@ -58,6 +62,10 @@ function EntryRowImpl(props: EntryRowProps) {
   } = props;
 
   const paddingLeft = 6 + depth * 12;
+  // Fase 19: worst diagnostics severity for this entry (exact file,
+  // worst child for a folder) — shared with the count badge, so the
+  // label color and the number can never disagree.
+  const severity = useDiagnosticsSeverity(path, isDir);
 
   if (isRenaming) {
     return (
@@ -139,8 +147,16 @@ function EntryRowImpl(props: EntryRowProps) {
       <span
         className={cn(
           "min-w-0 flex-1 truncate",
+          // Fase 19: diagnostics color wins over the git status color
+          // (error > warning), so an errored file is red even when it
+          // is also modified. Gitignored rows keep their muted color.
+          // The color also applies on the selected row: the span's own
+          // class overrides the button's inherited text-foreground,
+          // and red/amber stay readable on the accent background.
+          !gitignored && diagnosticsSeverityClass(severity),
           !isSelected &&
             !gitignored &&
+            !severity &&
             gitStatusCode &&
             explorerGitTextClass(gitStatusCode),
         )}
