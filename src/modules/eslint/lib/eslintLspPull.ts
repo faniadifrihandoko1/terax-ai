@@ -16,7 +16,7 @@ import {
 } from "./eslintMerge";
 import { eslintPathKey } from "./eslintPaths";
 import { onEslintRunRequested } from "./eslintRequests";
-import { useEslintStore } from "./eslintStore";
+import { useEslintStore, type EslintRawDiagnostic } from "./eslintStore";
 
 /** Delay before the first pull, so the document-sync plugin's
  * `didOpen` for the document has reached the server first. */
@@ -32,13 +32,8 @@ const PULL_TIMEOUT_MS = 10_000;
 type LspPosition = { line: number; character: number };
 type LspRange = { start: LspPosition; end: LspPosition };
 
-type LspDiagnosticItem = {
-  range: LspRange;
-  severity?: 1 | 2 | 3 | 4;
-  code?: string | number | { value: string | number; target?: string };
-  message: string;
-  source?: string;
-};
+/** Raw pull items are the store's exact server diagnostics. */
+type LspDiagnosticItem = EslintRawDiagnostic;
 
 type DiagnosticPullResult =
   | { kind: "full"; items: LspDiagnosticItem[]; resultId?: string }
@@ -272,6 +267,10 @@ class EslintLspPullPlugin {
     const { errors, warnings } = countDiagnostics(diags);
     const store = useEslintStore.getState();
     store.setPathDiagnostics(this.path, diags);
+    // Fase 18: keep the exact server items too - code actions match
+    // context diagnostics by range + code + message hash, which the
+    // combined `message (ruleId)` CodeMirror text would not match.
+    store.setPathRawDiagnostics(this.path, parsed.items);
     store.setRunStatus(this.path, { kind: "ok", errors, warnings });
     this.applyStored();
   }

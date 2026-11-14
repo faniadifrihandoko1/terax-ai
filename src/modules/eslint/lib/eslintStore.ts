@@ -39,6 +39,27 @@ export type EslintRunStatus =
   | { kind: "aborted-doc-changed" }
   | { kind: "no-result-match"; filePath: string; returnedPaths: string[] };
 
+/**
+ * One ESLint diagnostic exactly as the language server reported it
+ * (LSP shape: original message, ruleId as `code`, exact range).
+ * Fase 18: code actions need the exact diagnostic the server
+ * computed — the server matches `textDocument/codeAction` context
+ * diagnostics by range + code + sha256(message), and the stored
+ * CodeMirror diagnostics carry the combined `message (ruleId)`
+ * text with possibly clamped ranges, which would not match. Kept
+ * in lockstep with `byPath` by the pull plugin.
+ */
+export type EslintRawDiagnostic = {
+  range: {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+  };
+  severity?: 1 | 2 | 3 | 4;
+  code?: string | number | { value: string | number; target?: string };
+  message: string;
+  source?: string;
+};
+
 type State = {
   /**
    * Latest ESLint diagnostics per file path, keyed by
@@ -47,6 +68,13 @@ type State = {
    * Readers must look up with `eslintPathKey` too.
    */
   byPath: Record<string, Diagnostic[]>;
+  /**
+   * Raw server diagnostics per file path, keyed like `byPath` above
+   * (see `EslintRawDiagnostic`): the exact items the last pull
+   * returned, for code actions. Empty when the file has no live
+   * ESLint server.
+   */
+  rawByPath: Record<string, EslintRawDiagnostic[]>;
   /** Detection / run status per project root. */
   rootStatus: Record<string, EslintRootStatus>;
   /**
@@ -80,6 +108,10 @@ type State = {
   lspActivePaths: Record<string, number>;
   setLspActive: (path: string, active: boolean) => void;
   setPathDiagnostics: (path: string, diags: Diagnostic[]) => void;
+  setPathRawDiagnostics: (
+    path: string,
+    diags: EslintRawDiagnostic[],
+  ) => void;
   clearPath: (path: string) => void;
   setRootStatus: (root: string, status: EslintRootStatus) => void;
   setRunStatus: (path: string, status: EslintRunStatus) => void;
@@ -95,6 +127,7 @@ type State = {
 
 export const useEslintStore = create<State>((set) => ({
   byPath: {},
+  rawByPath: {},
   rootStatus: {},
   runStatus: {},
   notifiedRoots: {},
@@ -113,13 +146,19 @@ export const useEslintStore = create<State>((set) => ({
     set((s) => ({
       byPath: { ...s.byPath, [eslintPathKey(path)]: diags },
     })),
+  setPathRawDiagnostics: (path, diags) =>
+    set((s) => ({
+      rawByPath: { ...s.rawByPath, [eslintPathKey(path)]: diags },
+    })),
   clearPath: (path) =>
     set((s) => {
       const key = eslintPathKey(path);
-      if (!(key in s.byPath)) return s;
+      if (!(key in s.byPath) && !(key in s.rawByPath)) return s;
       const byPath = { ...s.byPath };
+      const rawByPath = { ...s.rawByPath };
       delete byPath[key];
-      return { byPath };
+      delete rawByPath[key];
+      return { byPath, rawByPath };
     }),
   setRootStatus: (root, status) =>
     set((s) => ({ rootStatus: { ...s.rootStatus, [root]: status } })),
