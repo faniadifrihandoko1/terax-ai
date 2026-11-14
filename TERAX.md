@@ -1272,6 +1272,115 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   double-didOpen dengan nomor versi yang saling silang, dan tab
   yang ditutup sebelum initialize selesai akan menerima didClose
   untuk dokumen yang tidak pernah di-open (server mengabaikannya).
+  Fase 18 (quick fix ESLint ala VS Code: perbaiki di kursor, fix-all,
+  fix on save), DONE: tujuan fase ini adalah quick fix seperti
+  extension ESLint di VS Code/Antigravity, di atas server ESLint yang
+  sudah di-sync Fase 17. Investigasi dulu (baca source server +
+  library, bukan asumsi): server vscode-langservers-extracted 4.10.0
+  mengiklankan `codeActionProvider: {codeActionKinds: [QuickFix,
+  "source.fixAll.eslint"]}` HANYA bila client mengiklankan
+  `textDocument.codeAction.codeActionLiteralSupport.codeActionKind.valueSet`;
+  perintahnya `eslint.applySingleFix` (argumen `{uri, version,
+  ruleId}`), `applySuggestion`, `applyDisableLine/File`,
+  `applyAllFixes`, `openRuleDoc`. Balasan `textDocument/codeAction`
+  untuk quickfix berisi `CodeAction` dengan `command`
+  `eslint.applySingleFix` (TANPA inline edit - edit disimpan
+  server-side di map `changes` kunci `applySingleFix:<ruleId>`,
+  jadi client HARUS menangani server-initiated
+  `workspace/applyEdit`); untuk `source.fixAll.eslint` berisi SATU
+  action dengan inline `edit` (`documentChanges` berisi
+  `TextEdit[]`). Server mencocokkan diagnostik konteks lewat
+  `Diagnostics.computeKey` = range + code + sha256(message asli),
+  jadi client harus mengirim diagnostik mentah persis seperti
+  diterima server - teks gabungan `message (ruleId)` dari
+  CodeMirror tidak akan cocok. Pemblokir: library
+  codemirror-languageserver 1.22.1 membalas `null` untuk SEMUA
+  request server-ke-client, tapi `TauriLspTransport.answerServerRequest`
+  sudah mencegat request server sebelum library - itulah seam-nya.
+  Implementasi: (1) store `rawByPath` (`EslintRawDiagnostic` di
+  `eslintStore.ts`, diisi pull plugin bersama `setPathDiagnostics`,
+  dibersihkan `clearPath`); (2) `eslintCodeAction.ts` - fungsi murni
+  `workspaceEditToChanges` (documentChanges TextDocumentEdit saja
+  + map `changes`, satu uri saja, edit diurutkan + dilarang tumpang
+  tindih, range di-clamp seperti mapper diagnostik, nol-width tetap
+  insertion, offset UTF-16), `findRawDiagnosticsAt/InRange`
+  (batas inklusif), `pickQuickFixAction` (command applySingleFix
+  atau inline edit, `isPreferred` menang) dan `pickFixAllAction`
+  (kind `source.fixAll.eslint`, fallback command applyAllFixes);
+  (3) registry `lsp/lib/applyEdit.ts` (Map per uri, coba handler
+  berurutan sampai satu applied:true, malformed tidak pernah
+  throw); (4) transport: `answerServerRequest` mengembalikan
+  boolean - hanya `workspace/applyEdit` yang TIDAK diteruskan ke
+  library (balasan null-nya bisa menang balapan dan membuat server
+  melaporkan fix gagal), dijawab async `{result: {applied}}`;
+  method lain tetap perilaku lama (jawab + teruskan); (5) client
+  `TeraxLspClient` mengiklankan `textDocument.codeAction` dengan
+  valueSet `["quickfix", "source", "source.fixAll.eslint"]` plus
+  method `textDocumentCodeAction` dan `workspaceExecuteCommand`
+  (timeout 10 detik, pola yang sama dengan
+  `textDocumentDiagnostic`); (6) plugin `eslintCodeActionExtension`
+  dipasang sessionManager di samping pull plugin (gated
+  `preset.pullDiagnostics`, dynamic import) - mendaftarkan handler
+  applyEdit + bus handler, keybinding Mod+. (Ctrl+. di
+  Windows/Linux, Cmd+. di Mac; tidak ada bentrok - grep hanya
+  menemukan Ctrl-g/Ctrl-c/Ctrl+V/Ctrl+Enter/Ctrl+G), dan guard
+  identitas dokumen (`view.state.doc` saat request) - versi server
+  hanya maju lewat didOpen/didChange, jadi identitas dokumen sama
+  dengan kesamaan versi; guard mismatch atau tidak ada guard yang
+  aktif berarti `{applied: false}` + toast jujur. Alur
+  fix-at-cursor: diagnostik mentah di kursor/seleksi -> codeAction
+  `only: ["quickfix"]` -> inline edit langsung diterapkan (cek
+  guard) atau executeCommand (server menjawab applyEdit dulu
+  sebelum menjawab executeCommand, jadi `lastApply` sudah terisi
+  saat await selesai - tanpa waiter tambahan); fix-all: codeAction
+  `only: ["source.fixAll.eslint"]` dengan context diagnostics
+  kosong -> inline edit, fallback command applyAllFixes. Bus
+  `eslintCodeActionBus.ts` dipisah dari plugin karena modul plugin
+  mengimpor @codemirror/view dan import statis dari App.tsx
+  menarik CodeMirror ke eager chunk (dua budget test gagal sebelum
+  pemisahan - `eager-budget` dan `dist-budget`); bus hanya mengimpor
+  sonner + `eslintPathKey`, jadi aman diimpor statis
+  App.tsx/EditorPane.tsx. UI: Command Palette "Fix ESLint issue at
+  cursor" + "Fix all ESLint issues in file" (grup Editor,
+  disabledReason memakai alasan eslint + "ESLint server not active
+  for this file" bila server belum aktif); setting
+  `eslintFixOnSave` (default OFF seperti VS Code, SettingRow "Fix
+  ESLint on save" di GeneralSection) - `EditorPane.performSave`
+  menjalankan fix-all SEBELUM format-on-save (fix dulu, baru
+  format, baru save), quiet (sukses diam, hanya failure/stale yang
+  toast), tanpa server aktif save jalan seperti biasa. Jalur CLI
+  ESLint (Fase 10/15), kepemilikan autocompletion (Fase 16), dan
+  document sync (Fase 17) tidak disentuh. Code action generik
+  server TypeScript (mis. "add missing import") TIDAK dibangun -
+  plumbing-nya generik tapi follow-up terpisah. Test (TDD, commit
+  test dulu dan FAIL sebelum implementasi ada): 20 test baru -
+  `eslintCodeAction.test.ts` (14: mapper insert/delete/replace,
+  multi-edit terurut, karakter astral = 2 unit UTF-16, tolak
+  overlap/uri lain/non-TextDocumentEdit, clamp, tanpa versi; batas
+  findRawDiagnosticsAt; picker quickfix/fix-all),
+  `applyEdit.test.ts` (4: routing per uri, tanpa handler, coba
+  handler berikutnya, malformed tanpa throw), `commands.test.ts`
+  (2: fix commands disable saat server tidak aktif, enable saat
+  aktif). Verifikasi: check-types 0 error; lint 0 error / 88
+  warning / 1 info (baseline - sempat 1 error useImportType +
+  5 warning noNonNullAssertion dari kode baru, diperbaiki sebelum
+  commit); full test 2576/2576 hijau 2x (+20); tanpa perubahan
+  Rust. Batas jujur: repo tidak punya DOM env, jadi plugin
+  ViewPlugin-nya sendiri tidak teruji live - hanya unit murni;
+  pembuktian end-to-end HARUS dicek di laptop (cek persis: install
+  build Fase 18, buka file .tsx yang sudah punya pelanggaran
+  ESLint fixable - mis. `const unusedProbe = 1;` - letakkan kursor
+  di baris pelanggaran, tekan Ctrl+. - toast "Perbaikan diterapkan"
+  dan baris hilang; bila tidak ada pelanggaran di kursor, toast
+  "Tidak ada pelanggaran ESLint di kursor"; Command Palette "Fix
+  all ESLint issues in file" memperbaiki semua pelanggaran
+  sekaligus; nyalakan "Fix ESLint on save" di Settings, ketik
+  pelanggaran, Ctrl+S - pelanggaran terperbaiki sebelum tersimpan
+  tanpa toast; matikan lagi settingnya). Batas lain: beberapa
+  perbaikan di satu kursor hanya menerapkan yang pertama
+  (isPreferred) - belum ada picker UI; file yang sama di dua split
+  pane - handler applyEdit pertama yang terdaftar menang; alur fix
+  diasumsikan sekuensial (satu Ctrl+. dalam satu waktu).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
