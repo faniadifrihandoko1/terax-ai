@@ -505,12 +505,22 @@ class EslintCodeActionPlugin {
       } catch (e) {
         return { kind: "failed", message: String(e) };
       }
-      if (this.lastApply?.applied) {
+      if (this.readLastApply()?.applied) {
         return { kind: "applied", title: action.title };
       }
       return { kind: "no-action" };
     }
     return { kind: "no-action" };
+  }
+
+  /**
+   * Reads the last applyEdit outcome through a method (not a direct
+   * field read) so TypeScript does not narrow the field to the null
+   * assigned above: the handler may have set it while the
+   * executeCommand await was in flight.
+   */
+  private readLastApply(): ApplyEditOutcome | null {
+    return this.lastApply;
   }
 
   private async handleApplyEdit(

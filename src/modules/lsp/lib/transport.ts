@@ -1,6 +1,7 @@
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Transport } from "codemirror-languageserver";
+import { handleApplyEditRequest } from "./applyEdit";
 
 export type LspSpawnConfig = {
   command: string;
@@ -55,7 +56,12 @@ export class TauriLspTransport implements Transport {
     const onMessage = new Channel<ArrayBuffer>();
     onMessage.onmessage = (buf) => {
       const text = decoder.decode(buf);
-      this.answerServerRequest(text);
+      // A request Terax answers itself must not reach the client
+      // library: it would reply a second, competing answer (null)
+      // for the same id, and for workspace/applyEdit that null could
+      // win the race and make the server report the fix as failed.
+      // All other requests keep today's reply-and-forward behaviour.
+      if (this.answerServerRequest(text)) return;
       if (this.onMsg) this.onMsg(text);
       else this.backlog.push(text);
     };
@@ -78,20 +84,36 @@ export class TauriLspTransport implements Transport {
   }
 
   // The client library ignores server-to-client requests entirely.
-  private answerServerRequest(text: string): void {
+  // Returns true only for requests Terax answers itself (today just
+  // workspace/applyEdit): the caller must not forward those to the
+  // library, or its competing null reply could win the race. All
+  // other requests are answered here AND forwarded, as before.
+  private answerServerRequest(text: string): boolean {
     // Cheap pre-check: requests carry both markers; skips a redundant
     // JSON.parse of large notification payloads like publishDiagnostics.
-    if (!text.includes('"id"') || !text.includes('"method"')) return;
+    if (!text.includes('"id"') || !text.includes('"method"')) return false;
     let msg: unknown;
     try {
       msg = JSON.parse(text);
     } catch {
-      return;
+      return false;
     }
-    if (!isServerRequest(msg)) return;
+    if (!isServerRequest(msg)) return false;
     const reply = (body: Record<string, unknown>) =>
       this.send(JSON.stringify({ jsonrpc: "2.0", id: msg.id, ...body }));
     switch (msg.method) {
+      case "workspace/applyEdit": {
+        // Fase 18: the ESLint server applies quick fixes by sending
+        // the edit back here. Route it to the editor registered for
+        // the target document and answer with the outcome; the reply
+        // is async because the handler may apply CodeMirror changes.
+        // No handler (or a declined edit) answers applied:false so
+        // the server can report the failure instead of hanging.
+        void handleApplyEditRequest(msg.params).then((outcome) =>
+          reply({ result: { applied: outcome.applied } }),
+        );
+        return true;
+      }
       case "workspace/configuration": {
         const items =
           (msg.params as { items?: unknown[] } | undefined)?.items ?? [];
@@ -104,7 +126,7 @@ export class TauriLspTransport implements Transport {
         // lib/eslintServerConfig.ts).
         const value = this.workspaceConfiguration;
         reply({ result: items.map(() => value) });
-        return;
+        return false;
       }
       case "workspace/diagnostic/refresh":
       case "window/workDoneProgress/create":
@@ -113,11 +135,12 @@ export class TauriLspTransport implements Transport {
       case "window/showMessageRequest":
       case "workspace/workspaceFolders":
         reply({ result: null });
-        return;
+        return false;
       default:
         reply({
           error: { code: -32601, message: `unhandled method ${msg.method}` },
         });
+        return false;
     }
   }
 

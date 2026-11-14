@@ -29,9 +29,6 @@ const FIRST_PULL_RETRY_MS = 250;
 /** Same budget as the other LSP requests in the client. */
 const PULL_TIMEOUT_MS = 10_000;
 
-type LspPosition = { line: number; character: number };
-type LspRange = { start: LspPosition; end: LspPosition };
-
 /** Raw pull items are the store's exact server diagnostics. */
 type LspDiagnosticItem = EslintRawDiagnostic;
 

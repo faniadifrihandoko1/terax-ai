@@ -415,6 +415,18 @@ export class TeraxLspClient extends LanguageServerClient {
       // pulls them (textDocument/diagnostic); advertising the
       // capability is what lets it offer its diagnosticProvider.
       diagnostic: {},
+      // Fase 18: the ESLint server advertises its codeActionProvider
+      // (quickfix + source.fixAll.eslint) only when the client
+      // advertises literal support for those kinds; without this the
+      // server offers no code actions at all.
+      codeAction: {
+        dynamicRegistration: false,
+        codeActionLiteralSupport: {
+          codeActionKind: {
+            valueSet: ["quickfix", "source", "source.fixAll.eslint"],
+          },
+        },
+      },
     };
     return params;
   }
@@ -445,6 +457,42 @@ export class TeraxLspClient extends LanguageServerClient {
     timeoutMs = 10_000,
   ): Promise<unknown> {
     return this.raw.request("textDocument/diagnostic", params, timeoutMs);
+  }
+
+  /**
+   * Requests code actions for a range (`textDocument/codeAction`).
+   * Only servers that advertise a codeActionProvider answer; the
+   * ESLint server returns quickfix actions (with an
+   * `eslint.applySingleFix` command) and the fix-all action
+   * (`source.fixAll.eslint`, with an inline edit). See
+   * `eslintCodeAction` for the caller.
+   */
+  textDocumentCodeAction(
+    params: {
+      textDocument: { uri: string };
+      range: { start: LspPos; end: LspPos };
+      context: {
+        diagnostics: unknown[];
+        only?: string[];
+        triggerKind?: number;
+      };
+    },
+    timeoutMs = 10_000,
+  ): Promise<unknown> {
+    return this.raw.request("textDocument/codeAction", params, timeoutMs);
+  }
+
+  /**
+   * Runs a server command (`workspace/executeCommand`), e.g.
+   * `eslint.applySingleFix`. The ESLint server applies the fix by
+   * sending `workspace/applyEdit` back to the client, which the
+   * transport routes to the registered handler (see `applyEdit`).
+   */
+  workspaceExecuteCommand(
+    params: { command: string; arguments?: unknown[] },
+    timeoutMs = 10_000,
+  ): Promise<unknown> {
+    return this.raw.request("workspace/executeCommand", params, timeoutMs);
   }
 
   textDocumentDidClose(uri: string): void {
