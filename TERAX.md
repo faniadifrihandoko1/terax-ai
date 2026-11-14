@@ -1381,6 +1381,45 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   (isPreferred) - belum ada picker UI; file yang sama di dua split
   pane - handler applyEdit pertama yang terdaftar menang; alur fix
   diasumsikan sekuensial (satu Ctrl+. dalam satu waktu).
+  Fase 19 (warna merah/amber pada label file dan folder di explorer
+  saat ada error/warning, ala VS Code), DONE: sebelum fase ini
+  explorer hanya menampilkan ANGKA jumlah error di ujung baris
+  (DiagnosticsMark, merah untuk error, amber untuk warning)
+  sementara nama file/folder tidak diwarnai, jadi error tidak
+  terlihat sekilas. Implementasi: (1)
+  `src/modules/explorer/lib/diagnosticsSeverity.ts` - fungsi murni
+  `severityForCounts` (satu error mengalahkan warning sebanyak apa
+  pun, null bila bersih) dan `diagnosticsSeverityClass` (persis
+  warna badge: `text-destructive` untuk error, `text-amber-700
+  dark:text-amber-400` untuk warning), plus hook
+  `useDiagnosticsSeverity(path, isDir)` yang menggabungkan store +
+  `diagnosticsForEntry` (agregasi Fase 11: file exact, folder
+  worst-child) - dipakai bersama oleh badge dan label, jadi
+  keduanya tidak bisa berbeda pendapat tentang severity satu
+  entry; (2) `TreeRow.tsx` - label `<span>` nama memakai
+  `diagnosticsSeverityClass(severity)`; prioritas: diagnostik
+  menang atas warna git status (error > warning > git), baris
+  gitignored tetap muted; (3) `DiagnosticsMark.tsx` - warnanya kini
+  lewat `diagnosticsSeverityClass` yang sama, perilaku badge tidak
+  berubah. Keputusan desain baris selected: warna diagnostik tetap
+  diterapkan di atas background seleksi (class span sendiri
+  mengalahkan `text-foreground` warisan button) - merah/amber tetap
+  terbaca di atas `bg-accent`, dan error harus tetap terlihat di
+  baris yang baru diklik; ikon file/folder tidak diwarnai (seperti
+  VS Code, hanya label). Test (TDD, commit test dulu dan FAIL
+  sebelum implementasi ada): 7 test baru di
+  `diagnosticsSeverity.test.ts` (severityForCounts null/bersih/
+  error/warning, diagnosticsSeverityClass error/warning/null).
+  Verifikasi: check-types 0 error; lint 0 error / 88 warning / 1
+  info (baseline); full test 2583/2583 hijau 2x (+7); tanpa
+  perubahan Rust. Batas jujur: repo tidak punya DOM env, jadi
+  pewarnaan baris (TreeRow) tidak teruji render live - hanya unit
+  murni; pembuktian end-to-end HARUS dicek di laptop (cek persis:
+  install build Fase 19, buka proyek dengan file ber-error ESLint -
+  nama file merah + angka merah di ujung baris, folder induknya
+  juga merah; file yang hanya warning namanya amber; file bersih
+  tetap seperti biasa; file error yang diklik tetap merah di atas
+  background seleksi).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
