@@ -1152,13 +1152,13 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   menerima `didOpen`/`didChange` lewat plugin — instancenya
   tidak pernah dibuat — sehingga asumsi desain Fase 12 ("server
   me-lint buffer yang sudah dikirim editor via didOpen/didChange")
-  tidak berlaku untuk preset kedua; pull tetap mengembalikan
-  diagnostik (terverifikasi live di Fase 12), jadi server
-  evidently membaca file dari disk (atau membuka lazily saat
-  pull), tapi klaim "me-lint buffer / jalan di buffer kotor"
-  untuk preset ESLint belum terbukti dan butuh cek live dengan
-  buffer kotor di laptop. Fase 16 tidak mengubah ini (di luar
-  scope). Kalau suatu hari preset kedua menyediakan
+  tidak berlaku untuk preset kedua. KOREKSI (Fase 17): teori
+  "server membaca file dari disk" SALAH — pull handler server
+  mengembalikan laporan KOSONG untuk dokumen yang tidak dikenal
+  (terverifikasi dari source microsoft/vscode-eslint), jadi dalam
+  mode multi-preset diagnostik LSP ESLint tidak pernah muncul sama
+  sekali, bukan versi disk. Lihat Fase 17 untuk perbaikan dan cek
+  laptop yang masih dibutuhkan. Kalau suatu hari preset kedua menyediakan
   completion/hover, ia akan diam-diam tidak mendapat apa-apa —
   aturan satu pemilik perlu ditinjau ulang (autocompletion
   gabungan di level dokumen yang fan-out ke semua sesi).
@@ -1189,6 +1189,89 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   VM Linux — perbaikan sengaja tidak bergantung padanya;
   propagasi exit code di Rust (`exit $LASTEXITCODE`) tetap
   investigasi terpisah, di luar scope ini.
+  Fase 17 (document sync untuk preset non-pertama — server ESLint
+  me-lint buffer seperti VS Code), DONE: tujuan fase ini adalah
+  server ESLint menerima `textDocument/didOpen`/`didChange` untuk
+  tiap dokumen, sehingga ia me-lint BUFFER (teks belum di-save),
+  bukan file di disk. Investigasi dulu (baca kode, bukan asumsi):
+  plugin library (`LanguageServerPlugin`,
+  codemirror-languageserver 1.22.1) mengirim didOpen `{uri,
+  languageId, text, version: 0}` setelah `initializePromise`
+  selesai, lalu didChange incremental via `changeSetToEvents`
+  (iterasi `ChangeSet.iterChanges` → `{range, text}`, diurutkan
+  menurun berdasarkan offset awal supaya server bisa menerapkan
+  berurutan tanpa offset bergeser) dengan `version++`
+  post-increment (didChange pertama memakai lagi version 0);
+  `destroy()`-nya TIDAK mengirim didClose (didClose sudah dikirim
+  `releaseRef` di sessionManager). `changeSetToEvents` TIDAK
+  diekspor library, jadi harus ditiru; `client.textDocumentDidOpen`
+  / `textDocumentDidChange`, `client.ready`, dan
+  `client.initializePromise` adalah method/field publik di
+  `TeraxLspClient` (warisan `LanguageServerClient`). Server ESLint
+  diverifikasi dari source resminya (microsoft/vscode-eslint,
+  server/src/eslintServer.ts, main): `textDocumentSync:
+  { openClose: true, change: TextDocumentSyncKind.Incremental,
+  ... }` — Incremental diterima; dan pull handler-nya
+  mengembalikan laporan KOSONG bila dokumen tidak dikenal
+  (`documents.get(uri) === undefined → emptyDiagnosticResult`).
+  Ini MENGOREKSI teori Fase 12/16 ("server membaca file dari
+  disk"): dalam mode multi-preset (TS pertama), diagnostik LSP
+  ESLint tidak pernah muncul sama sekali — bukan versi disk —
+  karena didOpen tidak pernah sampai. Test live Fase 12 dulu
+  berhasil karena saat itu hanya satu preset (didOpen sampai).
+  Desain: `lspDocumentSync.ts` baru — (1) `changeSetToLspEvents`,
+  tiruan persis `changeSetToEvents` library termasuk sort menurun
+  dan offset UTF-16; (2) `resolveLspSyncKind`, membaca
+  `textDocumentSync` dari capabilities server (1/Full → full,
+  selain itu incremental — cocok dengan yang sudah dikirim Terax
+  dan yang dideklarasi server ESLint); (3) `DocumentSyncTracker`,
+  mesin versi/state murni (didOpen version 0, didChange
+  post-increment 0, 1, 2, …; null sebelum open); (4) adapter
+  `ViewPlugin` yang menunggu initialize, lalu mengirim didOpen
+  dan didChange incremental tiap edit (atau full bila server
+  mendeklarasi Full). Dua perbedaan sengaja dari plugin library:
+  didOpen membaca teks dokumen SAAT initialize selesai (bukan
+  saat konstruksi), jadi edit yang diketik selagi server start
+  sudah masuk snapshot; dan destroy() tidak mengirim didClose
+  (sudah ditangani `releaseRef`, supaya tidak double-close).
+  Wiring di `sessionManager.ts`: opsi `manualDocumentSync` di
+  `acquireForPreset` + flag `documentSyncTaken` di
+  `acquireDocExtensions` (kepemilikan mengikuti preset pertama
+  yang BERHASIL di-acquire — sama seperti `completionTaken` Fase
+  16, tapi flag terpisah dengan komentar sendiri); extension sync
+  dipasang sebelum pull plugin, via dynamic import (seperti pull
+  plugin, supaya static graph tidak berubah); preset pertama
+  TIDAK mendapat sync manual (double-sync dilarang). Race
+  didChange vs pull aman: keduanya lewat transport stdio yang
+  sama dalam urutan kirim, didChange dikirim sinkron di
+  `update()` sementara pull di-debounce 400 ms, dan pull pertama
+  punya retry 250 ms bila mendahului didOpen. Jalur CLI
+  (Fase 10/15) dan kepemilikan autocompletion (Fase 16) tidak
+  disentuh. Test (`lspDocumentSync.test.ts`, 13 test baru, TDD —
+  commit test dulu dan FAIL sebelum implementasi ada): mapper
+  (insert/delete/replace, multi-line, beberapa change dalam satu
+  transaksi terurut menurun, changeset kosong, karakter astral =
+  2 unit UTF-16), resolver sync-kind (2/1/object/undefined),
+  tracker (null sebelum open, versi 0, 1, 2, full tanpa range),
+  dan extension hasil factory yang hidup berdampingan dengan dua
+  set preset (satu penuh + satu di-strip) dalam satu state tanpa
+  throw. Verifikasi: check-types 0 error; lint 0 error / 88
+  warning / 1 info (baseline); full test 2556/2556 hijau 2x (+13);
+  tanpa perubahan Rust. Batas jujur: repo tidak punya DOM env,
+  jadi adapter ViewPlugin-nya sendiri tidak teruji live — hanya
+  unit murni + keberadaan extension di state; pembuktian
+  end-to-end HARUS dicek di laptop (cek persis: install build
+  Fase 17, buka file .tsx yang sudah punya pelanggaran ESLint,
+  TANPA save tambahkan `const unusedProbe = 1;` di satu baris —
+  dalam ~1 detik harus muncul squiggle merah ESLint di baris itu
+  (`'unusedProbe' is assigned a value but never used`) sebelum
+  Ctrl+S; hapus barisnya lagi tanpa save, squiggle harus hilang;
+  pastikan juga tidak crash dan completion TS (Ctrl+Space) tetap
+  jalan). Dua batas lain yang dibagi dengan plugin library (bukan
+  regresi fase ini): file yang sama dibuka di dua view akan
+  double-didOpen dengan nomor versi yang saling silang, dan tab
+  yang ditutup sebelum initialize selesai akan menerima didClose
+  untuk dokumen yang tidak pernah di-open (server mengabaikannya).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
