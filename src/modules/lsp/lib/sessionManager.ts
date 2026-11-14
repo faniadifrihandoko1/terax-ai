@@ -83,13 +83,25 @@ export async function acquireDocExtensions(
   // order (typescript before eslint), so for ts/tsx the TypeScript
   // server keeps completion; the ESLint server provides none anyway.
   let completionTaken = false;
+  // Same first-successful-acquire ownership decides document sync
+  // (Fase 17): the library's languageServerPlugin is deduped by the
+  // viewPlugin facet to its first provision, so only the first
+  // preset's plugin ever sends didOpen/didChange. Every later preset
+  // needs Terax's own sync plugin (lspDocumentSync) or its server
+  // never learns the document — for pull-diagnostics servers that
+  // means the pull returns empty, not disk content (the ESLint
+  // server's pull handler returns an empty report for unknown
+  // documents, verified from microsoft/vscode-eslint source).
+  let documentSyncTaken = false;
   for (const preset of presets) {
     const handle = await acquireForPreset(path, langId, preset, {
       includeCompletion: !completionTaken,
+      manualDocumentSync: documentSyncTaken,
     }).catch(() => null);
     if (handle) {
       handles.push(handle);
       completionTaken = true;
+      documentSyncTaken = true;
     }
   }
   return handles;
@@ -99,7 +111,7 @@ async function acquireForPreset(
   path: string,
   langId: string,
   preset: LspPreset,
-  opts: { includeCompletion?: boolean } = {},
+  opts: { includeCompletion?: boolean; manualDocumentSync?: boolean } = {},
 ): Promise<LspDocHandle | null> {
   if (currentWorkspaceEnv().kind !== "local") return null;
   if (usePreferencesStore.getState().lspActivation[preset.id] !== "enabled")
@@ -177,6 +189,22 @@ async function acquireForPreset(
       },
     }),
     opts.includeCompletion === false ? stripLspAutocompletion(lspExt) : lspExt,
+    // Non-first presets never get a library plugin instance (facet
+    // dedup, Fase 16/17), so their server would never receive
+    // didOpen/didChange. Terax syncs the document itself for them
+    // (lspDocumentSync). Dynamic import, like the pull plugin below,
+    // keeps this out of the static LSP graph.
+    ...(opts.manualDocumentSync
+      ? [
+          await import("./lspDocumentSync").then((m) =>
+            m.lspDocumentSyncExtension({
+              client: managed.client,
+              documentUri: uri,
+              languageId,
+            }),
+          ),
+        ]
+      : []),
     // Pull-diagnostics servers (the ESLint server) never push
     // publishDiagnostics, so the document also mounts the pull
     // plugin, which requests textDocument/diagnostic and publishes

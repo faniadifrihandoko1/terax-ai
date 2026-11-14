@@ -18,7 +18,7 @@ import { eslintPathKey } from "./eslintPaths";
 import { onEslintRunRequested } from "./eslintRequests";
 import { useEslintStore } from "./eslintStore";
 
-/** Delay before the first pull, so the language-server plugin's
+/** Delay before the first pull, so the document-sync plugin's
  * `didOpen` for the document has reached the server first. */
 const INITIAL_DELAY_MS = 100;
 /** Debounce between a buffer edit and the next pull. */
@@ -111,9 +111,16 @@ export function mapLspDiagnosticsToCodeMirror(
  * Why a pull plugin at all: the ESLint server never pushes
  * `publishDiagnostics`; diagnostics only arrive on a
  * `textDocument/diagnostic` request, which the generic LSP plugin
- * never sends. The server lints the buffer the editor already sent
- * it via `didOpen`/`didChange`, so unlike the CLI plugin this works
- * on dirty buffers and never depends on the file being saved.
+ * never sends. The server lints the buffer the editor sent it via
+ * `didOpen`/`didChange` — from the library plugin for the first
+ * preset, from Terax's manual sync plugin (`lspDocumentSync`) for
+ * later presets (Fase 17) — so unlike the CLI plugin this works on
+ * dirty buffers and never depends on the file being saved. Before
+ * Fase 17, in multi-preset mode the server never received `didOpen`
+ * at all, so the pull returned empty: the server's pull handler
+ * returns an empty report for unknown documents (verified from
+ * microsoft/vscode-eslint source), it does NOT read the file from
+ * disk — the earlier "reads from disk" theory was wrong.
  *
  * Merge rule (same as the CLI-vs-LSP case, `eslintMerge.ts`): the
  * store's `byPath` is the single source of truth for ESLint
