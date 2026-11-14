@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Tab } from "@/modules/tabs";
+import { useEslintStore } from "@/modules/eslint/lib/eslintStore";
 import {
   type CommandPaletteActionContext,
   createCommandItems,
@@ -32,6 +33,8 @@ function baseContext(
     eslintEnabled: true,
     runEslintOnCurrentFile: noop,
     runEslintOnEntireProject: noop,
+    fixEslintAtCursor: noop,
+    fixAllEslint: noop,
     openNewTab: noop,
     openNewBlock: noop,
     openNewPrivate: noop,
@@ -169,6 +172,37 @@ describe("createCommandItems", () => {
     expect(item?.group).toBe("Editor");
     item?.run();
     expect(ran).toBe(1);
+  });
+
+  it("disables the fix commands while the ESLint server is not active for the file", () => {
+    useEslintStore.getState().setLspActive("/proj/src/a.tsx", false);
+    expect(
+      reasonById(
+        { activeFilePath: "/proj/src/a.tsx" },
+        "eslint.fix-at-cursor",
+      ),
+    ).toBe("ESLint server not active for this file");
+    expect(
+      reasonById({ activeFilePath: "/proj/src/a.tsx" }, "eslint.fix-all"),
+    ).toBe("ESLint server not active for this file");
+  });
+
+  it("enables the fix commands when the ESLint server is active for the file", () => {
+    const store = useEslintStore.getState();
+    store.setLspActive("/proj/src/a.tsx", true);
+    try {
+      expect(
+        reasonById(
+          { activeFilePath: "/proj/src/a.tsx" },
+          "eslint.fix-at-cursor",
+        ),
+      ).toBeUndefined();
+      expect(
+        reasonById({ activeFilePath: "/proj/src/a.tsx" }, "eslint.fix-all"),
+      ).toBeUndefined();
+    } finally {
+      store.setLspActive("/proj/src/a.tsx", false);
+    }
   });
 
   it("enables Run ESLint on entire project when a root is open", () => {

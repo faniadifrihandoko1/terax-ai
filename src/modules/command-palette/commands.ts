@@ -1,5 +1,6 @@
 import type { SearchTarget } from "@/modules/header";
 import { isLintablePath } from "@/modules/eslint/lib/eslintPaths";
+import { isLspEslintActiveForPath } from "@/modules/eslint/lib/eslintStore";
 import { MAX_PANES_PER_TAB, type Tab } from "@/modules/tabs";
 import { leafIds } from "@/modules/terminal";
 import {
@@ -46,6 +47,8 @@ export type CommandPaletteActionContext = {
   eslintEnabled: boolean;
   runEslintOnCurrentFile: () => void;
   runEslintOnEntireProject: () => void;
+  fixEslintAtCursor: () => void;
+  fixAllEslint: () => void;
   openNewTab: () => void;
   openNewBlock: () => void;
   openNewPrivate: () => void;
@@ -118,6 +121,15 @@ export function createCommandItems(
     : !ctx.explorerRoot && !ctx.home
       ? "No project open"
       : undefined;
+  // Fase 18: quick fix needs the ESLint language server active for
+  // the file (the fix runs through its code actions), on top of the
+  // same editor-tab conditions as the manual lint command.
+  const eslintFixDisabledReason =
+    eslintDisabledReason ??
+    (ctx.activeFilePath &&
+    !isLspEslintActiveForPath(ctx.activeFilePath)
+      ? "ESLint server not active for this file"
+      : undefined);
 
   return [
     {
@@ -162,6 +174,24 @@ export function createCommandItems(
       icon: SourceCodeIcon,
       disabledReason: eslintProjectDisabledReason,
       run: ctx.runEslintOnEntireProject,
+    },
+    {
+      id: "eslint.fix-at-cursor",
+      title: "Fix ESLint issue at cursor",
+      group: "Editor",
+      keywords: ["eslint", "lint", "fix", "quick fix", "code action"],
+      icon: SourceCodeIcon,
+      disabledReason: eslintFixDisabledReason,
+      run: ctx.fixEslintAtCursor,
+    },
+    {
+      id: "eslint.fix-all",
+      title: "Fix all ESLint issues in file",
+      group: "Editor",
+      keywords: ["eslint", "lint", "fix", "fix all", "code action"],
+      icon: SourceCodeIcon,
+      disabledReason: eslintFixDisabledReason,
+      run: ctx.fixAllEslint,
     },
     {
       id: "spaces.overview",

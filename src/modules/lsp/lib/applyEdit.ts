@@ -66,7 +66,7 @@ function editTargetUri(edit: LspWorkspaceEdit): string | null {
     }
   }
   const keys = Object.keys(edit.changes ?? {});
-  return keys.length > 0 ? keys[0]! : null;
+  return keys[0] ?? null;
 }
 
 /**

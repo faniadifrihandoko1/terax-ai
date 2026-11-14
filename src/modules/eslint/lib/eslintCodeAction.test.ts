@@ -178,9 +178,10 @@ describe("workspaceEditToChanges", () => {
     }, URI);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    // Line 0 is "ab" (offsets 0-2), last line is "cd" (offsets 3-5):
-    // the edit clamps to from=2, to=5.
-    expect(res.changes).toEqual([{ from: 2, to: 5, insert: "X" }]);
+    // Line 0 is "ab" (offsets 0-2); the last line is the empty line
+    // after the final newline (offset 6): the edit clamps to
+    // from=2, to=6.
+    expect(res.changes).toEqual([{ from: 2, to: 6, insert: "X" }]);
   });
 
   it("accepts an edit with no version (version is not the guard)", () => {

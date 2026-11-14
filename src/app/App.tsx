@@ -42,6 +42,10 @@ import { CommandPalette, createCommandItems } from "@/modules/command-palette";
 import { EslintProblemsPanel } from "@/modules/eslint/components/ProblemsPanel";
 import { useEslintStore } from "@/modules/eslint/lib/eslintStore";
 import { requestEslintRunWithReport } from "@/modules/eslint/lib/runEslintManual";
+import {
+  requestEslintFixAll,
+  requestEslintFixAtCursor,
+} from "@/modules/eslint/lib/eslintCodeActionBus";
 import { requestEslintProjectLint } from "@/modules/eslint/lib/runEslintProject";
 import { scheduleEslintProjectLint } from "@/modules/eslint/lib/eslintAutoProjectLint";
 import { useControlBridge } from "@/modules/control";
@@ -1460,6 +1464,16 @@ export default function App() {
               if (activeFilePath) requestEslintRunWithReport(activeFilePath);
             },
             runEslintOnEntireProject: runEslintProjectLint,
+            fixEslintAtCursor: () => {
+              if (activeFilePath) {
+                void requestEslintFixAtCursor(activeFilePath);
+              }
+            },
+            fixAllEslint: () => {
+              if (activeFilePath) {
+                void requestEslintFixAll(activeFilePath);
+              }
+            },
             openNewTab,
             openNewBlock: openNewBlockTab,
             openNewPrivate: openNewPrivateTab,

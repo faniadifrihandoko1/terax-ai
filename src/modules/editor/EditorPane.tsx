@@ -3,7 +3,9 @@ import { getCustomEndpointKey, getKey } from "@/modules/ai/lib/keyring";
 import { reviewHistoryFor } from "@/modules/ai/lib/reviewHistory";
 import type { HunkDecision, HunkDecisions } from "@/modules/ai/lib/reviewApply";
 import { requestEslintRun, useEslintExtension } from "@/modules/eslint";
+import { requestEslintFixAll } from "@/modules/eslint/lib/eslintCodeActionBus";
 import { scheduleEslintProjectLintForFile } from "@/modules/eslint/lib/eslintAutoProjectLint";
+import { isLspEslintActiveForPath } from "@/modules/eslint/lib/eslintStore";
 import { getProjectLintCounts } from "@/modules/eslint/lib/eslintProjectLint";
 import { lspFormatDocument, useLspExtensions } from "@/modules/lsp";
 import { usePreferencesStore } from "@/modules/settings/preferences";
@@ -224,6 +226,18 @@ export const EditorPane = memo(
       const view = cmRef.current?.view;
       const prefs = usePreferencesStore.getState();
       const formatter = resolveFormatter(languageRef.current, prefs);
+      // Fase 18: fix-all runs BEFORE format-on-save (the fix can
+      // leave formatting to clean up, e.g. a removed import) and
+      // before the disk write. Quiet: success is silent, only a
+      // failure or a stale refusal toasts. Without an active ESLint
+      // server the save proceeds unchanged.
+      if (
+        prefs.eslintFixOnSave &&
+        view &&
+        isLspEslintActiveForPath(pathRef.current)
+      ) {
+        await requestEslintFixAll(pathRef.current, { quiet: true });
+      }
       if (prefs.editorFormatOnSave && formatter === "lsp" && view) {
         if (lspActiveRef.current) {
           let res: "done" | "unsupported" = "done";

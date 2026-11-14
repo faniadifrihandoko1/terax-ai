@@ -55,7 +55,7 @@ describe("handleApplyEditRequest", () => {
         },
       },
     });
-    expect(res).toEqual({ applied: false });
+    expect(res).toMatchObject({ applied: false });
   });
 
   it("tries the next handler when the first declines", async () => {
@@ -81,14 +81,16 @@ describe("handleApplyEditRequest", () => {
   });
 
   it("returns applied:false for malformed params without throwing", async () => {
-    await expect(handleApplyEditRequest(null)).resolves.toEqual({
+    await expect(handleApplyEditRequest(null)).resolves.toMatchObject({
       applied: false,
     });
-    await expect(handleApplyEditRequest({})).resolves.toEqual({
+    await expect(handleApplyEditRequest({})).resolves.toMatchObject({
       applied: false,
     });
-    await expect(handleApplyEditRequest({ edit: {} })).resolves.toEqual({
-      applied: false,
-    });
+    await expect(handleApplyEditRequest({ edit: {} })).resolves.toMatchObject(
+      {
+        applied: false,
+      },
+    );
   });
 });

@@ -189,6 +189,14 @@ export type Preferences = {
    * manual palette commands keep working either way.
    */
   eslintAutoProjectLint: boolean;
+  /**
+   * Fase 18: run fix-all on the file before saving it (via the ESLint
+   * language server's code actions). Default OFF, like VS Code's
+   * `editor.codeActionsOnSave` for `source.fixAll.eslint`: an
+   * automatic edit on save must be opt-in. Needs the ESLint server
+   * active for the file; without it the save proceeds unchanged.
+   */
+  eslintFixOnSave: boolean;
   editorFormatter: EditorFormatter;
   /** languageResolver id -> formatter, overriding the global default. */
   editorFormatterByLang: Record<string, EditorFormatter>;
@@ -287,6 +295,7 @@ const KEY_EDITOR_AUTO_SAVE_DELAY = "editorAutoSaveDelay";
 const KEY_AI_REVIEW_INLINE = "aiReviewInline";
 const KEY_ESLINT_ENABLED = "eslintEnabled";
 const KEY_ESLINT_AUTO_PROJECT_LINT = "eslintAutoProjectLint";
+const KEY_ESLINT_FIX_ON_SAVE = "eslintFixOnSave";
 /** Fase 3 key, kept so loadPreferences can migrate an explicit choice. */
 const KEY_AI_REVIEW_PER_LINE_LEGACY = "aiReviewPerLine";
 const KEY_EDITOR_FORMAT_ON_SAVE = "editorFormatOnSave";
@@ -387,6 +396,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   aiReviewInline: true,
   eslintEnabled: true,
   eslintAutoProjectLint: true,
+  eslintFixOnSave: false,
   editorFormatOnSave: false,
   editorFormatter: "lsp",
   editorFormatterByLang: {},
@@ -585,6 +595,9 @@ export async function loadPreferences(): Promise<Preferences> {
     eslintAutoProjectLint:
       get<boolean>(KEY_ESLINT_AUTO_PROJECT_LINT) ??
       DEFAULT_PREFERENCES.eslintAutoProjectLint,
+    eslintFixOnSave:
+      get<boolean>(KEY_ESLINT_FIX_ON_SAVE) ??
+      DEFAULT_PREFERENCES.eslintFixOnSave,
     editorAutoSaveDelay: clampAutoSaveDelay(
       get<number>(KEY_EDITOR_AUTO_SAVE_DELAY) ??
         DEFAULT_PREFERENCES.editorAutoSaveDelay,
@@ -835,6 +848,10 @@ export async function setEslintAutoProjectLint(
   value: boolean,
 ): Promise<void> {
   await writePref(KEY_ESLINT_AUTO_PROJECT_LINT, value);
+}
+
+export async function setEslintFixOnSave(value: boolean): Promise<void> {
+  await writePref(KEY_ESLINT_FIX_ON_SAVE, value);
 }
 
 export async function setExplorerGitDecorations(value: boolean): Promise<void> {

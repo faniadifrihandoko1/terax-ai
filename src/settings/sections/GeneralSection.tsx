@@ -24,6 +24,7 @@ import {
   setDefaultWorkspaceEnv,
   setEslintAutoProjectLint,
   setEslintEnabled,
+  setEslintFixOnSave,
   setExplorerGitDecorations,
   setRestoreWindowState,
   setShowHidden,
@@ -125,6 +126,7 @@ export function GeneralSection() {
   const eslintAutoProjectLint = usePreferencesStore(
     (s) => s.eslintAutoProjectLint,
   );
+  const eslintFixOnSave = usePreferencesStore((s) => s.eslintFixOnSave);
   const agentNotifications = usePreferencesStore((s) => s.agentNotifications);
   const agentNotificationSound = usePreferencesStore(
     (s) => s.agentNotificationSound,
@@ -284,6 +286,15 @@ export function GeneralSection() {
           <Switch
             checked={eslintAutoProjectLint}
             onCheckedChange={(v) => void setEslintAutoProjectLint(v)}
+          />
+        </SettingRow>
+        <SettingRow
+          title="Fix ESLint on save"
+          description="Saat file disimpan, Terax memperbaiki dulu semua pelanggaran ESLint yang bisa diperbaiki otomatis (seperti VS Code), lalu menyimpan. Default mati; aktif hanya bila language server ESLint berjalan untuk file itu. Tanpa server, penyimpanan jalan seperti biasa."
+        >
+          <Switch
+            checked={eslintFixOnSave}
+            onCheckedChange={(v) => void setEslintFixOnSave(v)}
           />
         </SettingRow>
       </div>

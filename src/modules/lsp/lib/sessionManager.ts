@@ -219,6 +219,18 @@ async function acquireForPreset(
               path,
             }),
           ),
+          // Fase 18: the same server also offers quick fixes. The
+          // code-action plugin registers the workspace/applyEdit
+          // handler for this document and the Mod+. keybinding; it
+          // mounts only where the pull plugin does, so it never
+          // applies to servers without a diagnostic provider.
+          await import("@/modules/eslint/lib/eslintCodeAction").then((m) =>
+            m.eslintCodeActionExtension({
+              client: managed.client,
+              documentUri: uri,
+              path,
+            }),
+          ),
         ]
       : []),
   ];

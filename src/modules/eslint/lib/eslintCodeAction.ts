@@ -1,6 +1,5 @@
 import type { ChangeSpec, Text } from "@codemirror/state";
-import { EditorView, keymap, ViewPlugin } from "@codemirror/view";
-import { toast } from "sonner";
+import { type EditorView, keymap, ViewPlugin } from "@codemirror/view";
 import type { TeraxLspClient } from "@/modules/lsp/lib/client";
 import {
   registerApplyEditHandler,
@@ -9,6 +8,11 @@ import {
   type LspWorkspaceEdit,
 } from "@/modules/lsp/lib/applyEdit";
 import { offsetToLspPosition } from "@/modules/lsp/lib/lspDocumentSync";
+import {
+  registerEslintCodeActionHandler,
+  toastFixOutcome,
+  type FixOutcome,
+} from "./eslintCodeActionBus";
 import { eslintPathKey } from "./eslintPaths";
 import { useEslintStore, type EslintRawDiagnostic } from "./eslintStore";
 
@@ -27,14 +31,6 @@ export type LspCodeAction = {
   };
   isPreferred?: boolean;
 };
-
-export type FixOutcome =
-  | { kind: "applied"; title: string; edits?: number }
-  | { kind: "no-diagnostic" }
-  | { kind: "no-action" }
-  | { kind: "no-plugin" }
-  | { kind: "stale" }
-  | { kind: "failed"; message: string };
 
 // ──────────────────────────────────────────────────────────────────────────
 // Pure: LSP range ↔ CodeMirror offsets, WorkspaceEdit → ChangeSpec
@@ -140,7 +136,9 @@ export function workspaceEditToChanges(
   }
   raw.sort((a, b) => a.from - b.from || a.to - b.to);
   for (let i = 1; i < raw.length; i++) {
-    if (raw[i]!.from < raw[i - 1]!.to) {
+    const prev = raw[i - 1];
+    const cur = raw[i];
+    if (prev && cur && cur.from < prev.to) {
       return { ok: false, reason: "overlapping edits" };
     }
   }
@@ -193,7 +191,7 @@ export function pickQuickFixAction(
     (a) => a.command?.command === "eslint.applySingleFix" || a.edit !== undefined,
   );
   if (fixes.length === 0) return null;
-  return fixes.find((a) => a.isPreferred) ?? fixes[0]!;
+  return fixes.find((a) => a.isPreferred) ?? fixes[0] ?? null;
 }
 
 /**
@@ -220,128 +218,6 @@ function asCodeActionArray(result: unknown): LspCodeAction[] {
   );
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Bus: palette commands and fix-on-save reach the mounted plugin
-// ──────────────────────────────────────────────────────────────────────────
-
-export type EslintCodeActionHandler = {
-  fixAtCursor(): Promise<FixOutcome>;
-  fixAll(): Promise<FixOutcome>;
-};
-
-const codeActionHandlers = new Map<
-  string,
-  Set<EslintCodeActionHandler>
->();
-
-export function registerEslintCodeActionHandler(
-  path: string,
-  handler: EslintCodeActionHandler,
-): () => void {
-  const key = eslintPathKey(path);
-  let set = codeActionHandlers.get(key);
-  if (!set) {
-    set = new Set();
-    codeActionHandlers.set(key, set);
-  }
-  set.add(handler);
-  return () => {
-    set.delete(handler);
-    if (set.size === 0) codeActionHandlers.delete(key);
-  };
-}
-
-function firstHandler(path: string): EslintCodeActionHandler | null {
-  const set = codeActionHandlers.get(eslintPathKey(path));
-  if (!set || set.size === 0) return null;
-  return [...set][0]!;
-}
-
-export function toastFixOutcome(
-  outcome: FixOutcome,
-  opts?: { quiet?: boolean },
-): void {
-  const quiet = opts?.quiet ?? false;
-  switch (outcome.kind) {
-    case "applied":
-      if (!quiet) {
-        toast.success("Perbaikan diterapkan", {
-          description:
-            outcome.edits !== undefined
-              ? `${outcome.title} (${outcome.edits} edit)`
-              : outcome.title,
-        });
-      }
-      break;
-    case "no-diagnostic":
-      if (!quiet) {
-        toast.warning("Tidak ada pelanggaran ESLint di kursor", {
-          description:
-            "Pindahkan kursor ke garis merah/kuning, atau pakai fix-all untuk seluruh file.",
-        });
-      }
-      break;
-    case "no-action":
-      if (!quiet) {
-        toast.warning("Tidak ada perbaikan otomatis", {
-          description:
-            "Pelanggaran ini tidak punya quick fix (atau diagnostik sudah berubah). Perbaiki manual.",
-        });
-      }
-      break;
-    case "no-plugin":
-      if (!quiet) {
-        toast.warning("ESLint server belum aktif untuk file ini", {
-          description:
-            "Nyalakan language server ESLint, lalu coba lagi setelah diagnostik muncul.",
-        });
-      }
-      break;
-    case "stale":
-      toast.warning("Dokumen berubah", {
-        description:
-          "Perbaikan dibatalkan karena file berubah sejak diminta. Coba lagi.",
-      });
-      break;
-    case "failed":
-      toast.error("Gagal meminta perbaikan", {
-        description: outcome.message,
-      });
-      break;
-  }
-}
-
-export async function requestEslintFixAtCursor(
-  path: string,
-  opts?: { quiet?: boolean },
-): Promise<FixOutcome> {
-  const handler = firstHandler(path);
-  const outcome: FixOutcome = handler
-    ? await handler.fixAtCursor().catch((e) => ({
-        kind: "failed",
-        message: String(e),
-      }) as FixOutcome)
-    : { kind: "no-plugin" };
-  toastFixOutcome(outcome, opts);
-  return outcome;
-}
-
-export async function requestEslintFixAll(
-  path: string,
-  opts?: { quiet?: boolean },
-): Promise<FixOutcome> {
-  const handler = firstHandler(path);
-  const outcome: FixOutcome = handler
-    ? await handler.fixAll().catch((e) => ({
-        kind: "failed",
-        message: String(e),
-      }) as FixOutcome)
-    : { kind: "no-plugin" };
-  toastFixOutcome(outcome, opts);
-  return outcome;
-}
-
-// ──────────────────────────────────────────────────────────────────────────
 // Plugin: mounts in the editor, owns the client + the staleness guard
 // ──────────────────────────────────────────────────────────────────────────
 
