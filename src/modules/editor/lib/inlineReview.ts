@@ -214,12 +214,17 @@ function buildButton(
 /**
  * Header widget above a hunk: label + Accept / Reject. Clicking a
  * decided button again clears the decision back to undecided (the
- * inline equivalent of undoing that hunk).
+ * inline equivalent of undoing that hunk). Shared with the ai-diff
+ * tab (Fase 21), where the same bar renders above each hunk in the
+ * diff view: `disabled` renders the buttons inert on a review that
+ * is no longer reviewable, while the bar itself still shows the
+ * hunk's state.
  */
-class HunkBarWidget extends WidgetType {
+export class HunkBarWidget extends WidgetType {
   constructor(
     private plan: InlineHunkPlan,
     private callbacks: InlineReviewCallbacks,
+    private disabled = false,
   ) {
     super();
   }
@@ -235,32 +240,32 @@ class HunkBarWidget extends WidgetType {
     label.className = "cm-inlineHunkBar-label";
     label.textContent = `Hunk ${this.plan.hunkIndex + 1} · ${this.plan.label} · ${hunkStateLabel(this.plan.state)}`;
     bar.appendChild(label);
-    bar.appendChild(
-      buildButton(
-        this.plan.state === "accepted" ? "✓ Accepted" : "Accept",
-        "cm-inlineHunkBar-btn cm-inlineHunkBar-accept",
-        (e) => {
-          e.stopPropagation();
-          this.callbacks.onDecideHunk(
-            this.plan.hunkIndex,
-            this.plan.state === "accepted" ? "undecided" : "accepted",
-          );
-        },
-      ),
+    const acceptButton = buildButton(
+      this.plan.state === "accepted" ? "✓ Accepted" : "Accept",
+      "cm-inlineHunkBar-btn cm-inlineHunkBar-accept",
+      (e) => {
+        e.stopPropagation();
+        this.callbacks.onDecideHunk(
+          this.plan.hunkIndex,
+          this.plan.state === "accepted" ? "undecided" : "accepted",
+        );
+      },
     );
-    bar.appendChild(
-      buildButton(
-        this.plan.state === "rejected" ? "✕ Rejected" : "Reject",
-        "cm-inlineHunkBar-btn cm-inlineHunkBar-reject",
-        (e) => {
-          e.stopPropagation();
-          this.callbacks.onDecideHunk(
-            this.plan.hunkIndex,
-            this.plan.state === "rejected" ? "undecided" : "rejected",
-          );
-        },
-      ),
+    acceptButton.disabled = this.disabled;
+    bar.appendChild(acceptButton);
+    const rejectButton = buildButton(
+      this.plan.state === "rejected" ? "✕ Rejected" : "Reject",
+      "cm-inlineHunkBar-btn cm-inlineHunkBar-reject",
+      (e) => {
+        e.stopPropagation();
+        this.callbacks.onDecideHunk(
+          this.plan.hunkIndex,
+          this.plan.state === "rejected" ? "undecided" : "rejected",
+        );
+      },
     );
+    rejectButton.disabled = this.disabled;
+    bar.appendChild(rejectButton);
     return bar;
   }
 
@@ -269,7 +274,8 @@ class HunkBarWidget extends WidgetType {
       other.plan.hunkIndex === this.plan.hunkIndex &&
       other.plan.state === this.plan.state &&
       other.plan.focused === this.plan.focused &&
-      other.plan.label === this.plan.label
+      other.plan.label === this.plan.label &&
+      other.disabled === this.disabled
     );
   }
 
@@ -406,7 +412,7 @@ export function buildInlineDecorations(
   );
 }
 
-const INLINE_REVIEW_THEME = EditorView.theme({
+export const INLINE_REVIEW_THEME = EditorView.theme({
   ".cm-inlineAddedLine": {
     backgroundColor: "color-mix(in srgb, #22c55e 10%, transparent)",
   },
@@ -449,6 +455,10 @@ const INLINE_REVIEW_THEME = EditorView.theme({
     backgroundColor: "var(--background)",
     color: "var(--foreground)",
     cursor: "pointer",
+  },
+  ".cm-inlineHunkBar-btn:disabled": {
+    opacity: "0.45",
+    cursor: "default",
   },
   ".cm-inlineHunkBar-accept": {
     color: "#16a34a",
