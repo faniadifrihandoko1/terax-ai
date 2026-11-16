@@ -1533,6 +1533,79 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   sudah tidak ada; klik Accept/Reject di bar, lalu ↑↓, Alt+Enter,
   Alt+Shift+Enter, Ctrl+Z; file yang sudah dikonfirmasi tetap
   menampilkan bar-nya dengan tombol nonaktif).
+  Fase 22 (minimap navigasi ala Antigravity di editor, DEL-119), DONE:
+  overview kode mengecil di sisi kanan editor, dengan indikator
+  viewport, klik/drag untuk lompat, dan marker warna diagnostik +
+  hunk review. Keputusan paket: `@replit/codemirror-minimap` 0.5.2
+  (bukan overview kustom) - peer ranges-nya sudah cocok dengan
+  CodeMirror Terax (view ^6.21.3 vs 6.43.13, state, language, lint,
+  @lezer/common ^1.1.0 vs 1.5.2, @lezer/highlight ^1.1.6 vs 1.2.3),
+  kecil (~104 KB unpacked, satu runtime dep: crelt), dan me-render
+  teks kode miniatur asli, bukan garis. Sumber dist-nya dibaca
+  langsung sebelum memakai: viewport overlay selalu tampil dan
+  mengikuti scroll, klik minimap menggerakkan scroll (`scrollTop =
+  top + deltaY - clientHeight/2`), drag overlay menggeser viewport,
+  mount ke `view.scrollDOM` setelah contentDOM, dan `EditorView.
+  scrollMargins` kanan = lebar minimap; ada wash diagnostik bawaan
+  (transparan #d11 / orange, warna standar @codemirror/lint) yang
+  membaca diagnostik lint yang sama dengan yang Terax umpankan ke
+  editor, plus API `gutters` (kolom `Record<lineNumber, color>`).
+  Implementasi: (1) `src/modules/editor/lib/minimap.ts` - builder
+  murni: `diagnosticMinimapGutter` (worst severity per baris menang,
+  info tidak ditandai), `hunkMinimapGutter` (warna per keputusan,
+  hunk penghapusan murni menandai satu baris di titik hapusnya,
+  semua di-clamp ke dokumen), `buildMinimapGutters` (kolom
+  [diagnostik, hunk], kolom kosong dibuang), `minimapGuttersEqual`
+  untuk guard sync, `buildMinimapSnapshot` (dipakai bersama oleh ref
+  listener dan effect, supaya keduanya tidak bisa drift), plus
+  wiring: `syncMinimap` (reconfigure `minimapCompartment`, WeakMap
+  guard supaya transaksi reconfigure tidak memicu loop lewat update
+  listener), `minimapSyncExtension` (update listener: sync saat
+  docChanged atau ada effect - di sinilah diagnostik baru via
+  `setDiagnosticsEffect` masuk); (2) `EditorPane`: compartment +
+  extension di daftar ekstensi statis, ref snapshot, effect sync
+  untuk perubahan sisi React (toggle setting, review baru,
+  keputusan); (3) setting `editorMinimap` (default ON) di store +
+  grup "Editor" baru di Settings -> General. Warna marker: error =
+  `--destructive` yang sedang aktif dibaca dari computed style
+  saat sync (fallback #c0392f terang / #e35d5d gelap, dari
+  globals.css), warning amber-700 #b45309 / amber-400 #fbbf24
+  (sama dengan `diagnosticsSeverityClass` di explorer), hunk
+  #22c55e belum diputuskan / #16a34a diterima / #e11d48 ditolak
+  (hex yang sama dengan `INLINE_REVIEW_THEME`); wash bawaan paket
+  tetap memakai #d11/orange-nya sendiri, bukan warna tema.
+  Insiden install: `pnpm add` gagal dua kali dengan EPERM chown
+  pada penulisan lockfile atomik - penyebabnya file repo ber-uid 0
+  gid 65534 (nogroup) dan user namespace VM hanya memetakan uid 0,
+  sehingga chown ke 0:65534 ditolak; workaround `chgrp 0` pada
+  pnpm-lock.yaml, package.json, node_modules/.pnpm-workspace-state-
+  v1.json, dan node_modules/.pnpm/lock.yaml. `pnpm add` juga
+  menaikkan oxlint-plugin-react-doctor/react-doctor 0.9.18 -> 0.9.23
+  sebagai efek samping - dikembalikan di lockfile supaya diff
+  minimal, lalu diverifikasi dengan `pnpm install --frozen-lockfile`.
+  Test (TDD, commit test dulu dan FAIL sebelum implementasi ada):
+  20 test baru di `minimap.test.ts` (pemetaan diagnostik/hunk ->
+  marker, prioritas severity, clamp, equality guard, snapshot) +
+  3 test `editorMinimap.test.ts` (default, persistensi, toggle);
+  satu warning lint baru (`useExhaustiveDependencies` di effect
+  sync) diperbaiki dengan mengekstrak `buildMinimapSnapshot`
+  supaya deps-nya benar-benar dipakai, bukan di-ignore; satu test
+  yang salah tulis (snapshot dengan reviewable true seharusnya
+  tetap membawa hunk) diperbaiki di test-nya, bukan di implementasi.
+  Verifikasi: check-types 0 error; lint 0 error / 88 warning / 1
+  info (baseline); full test 2627/2627 hijau 2x (+23); tanpa
+  perubahan Rust. Batas jujur: repo tidak punya DOM env, jadi render
+  minimap, overlay viewport, klik/drag, dan pewarnaan teks miniatur
+  tidak teruji live - hanya unit murni; pembuktian end-to-end HARUS
+  dicek di laptop (cek persis: install build Fase 22, buka file
+  panjang - minimap muncul di tepi kanan dengan kode mengecil;
+  scroll - overlay mengikuti; klik/drag minimap - editor melompat;
+  baris error -> marker merah (+ wash), warning -> amber; file
+  dengan review pending -> marker hunk hijau; matikan di Settings
+  -> General -> Editor -> Minimap - minimap hilang dan layout
+  editor utuh, nyalakan lagi - muncul kembali). Warna marker
+  di-resolve saat sync, jadi ganti tema baru terlihat penuh setelah
+  edit/scroll/diag berikutnya. Tab ai-diff di luar scope fase ini.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
