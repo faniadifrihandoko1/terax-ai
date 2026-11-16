@@ -114,13 +114,9 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
     () => buildEntries(parts, reviewStatusByApproval),
     [parts, reviewStatusByApproval],
   );
-  if (entries.length === 0) return null;
-
-  const allResolved = entries.every((e) =>
-    ["applied", "rejected", "conflict", "restored"].includes(e.status),
-  );
   // Fase 20: the ids Accept all will confirm. Memoized so the button
   // only appears while there is actually something left to confirm.
+  // Hooks stay above the early return below (Rules of Hooks).
   const pendingIds = useMemo(
     () => acceptAllApprovalIds(entries),
     [entries],
@@ -129,6 +125,11 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
   // only flip to applied once the confirms land, so a second click
   // before that would re-confirm the same files.
   const [accepting, setAccepting] = useState(false);
+  if (entries.length === 0) return null;
+
+  const allResolved = entries.every((e) =>
+    ["applied", "rejected", "conflict", "restored"].includes(e.status),
+  );
   const handleAcceptAll = () => {
     if (!onAcceptAll || accepting || pendingIds.length === 0) return;
     setAccepting(true);
