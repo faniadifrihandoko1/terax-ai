@@ -61,10 +61,11 @@ type Props = {
  * Antigravity-style "Changed Files" summary (FR-01) for one assistant
  * message: every file the agent proposed to change, with +added/-removed
  * and its per-file review status (FR-06). Clicking a file opens its
- * ai-diff tab (FR-02), or the file in the editor when inline review is
- * on. When the ai-diff tab does not exist yet (the agent is still
- * working), the click still opens the file in the editor and says so
- * with a toast, instead of doing nothing.
+ * ai-diff tab (FR-02, Fase 20 — always the tab, whether inline review
+ * is on or off, and whether the file was already reviewed). When the
+ * ai-diff tab does not exist yet (the agent is still working), the
+ * click still opens the file in the editor and says so with a toast,
+ * instead of doing nothing.
  */
 export const ChangedFilesCard = memo(function ChangedFilesCard({
   parts,

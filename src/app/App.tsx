@@ -449,12 +449,15 @@ export default function App() {
     return s;
   }, [tabs]);
 
-  // FR-02: a click on a file in the Changed Files card brings its review
-  // forward and marks the file as being reviewed. With inline review on,
-  // Review opens the file in the editor at its first undecided hunk
-  // (Fase 4, Antigravity-style); otherwise it activates the ai-diff tab.
-  // Delete/rename proposals (Fase 5) have no inline editor view, so they
-  // always activate the ai-diff tab.
+  // FR-02, Fase 20: a click on a file in the Changed Files card always
+  // brings its ai-diff tab to the front (like Antigravity, the card
+  // opens the diff, not the file) — for edits, deletes, and renames,
+  // whether inline review is on or off, and whether the file was
+  // already reviewed. The old Fase 4 routing (open the file in the
+  // editor when inline review is on) is gone: the inline decorations
+  // disappear once a file is no longer reviewable, so the click landed
+  // on a plain file with no diff at all. The inline review itself
+  // still renders in the editor; only the card's click routing changed.
   //
   // The click must never do nothing: the ai-diff tab is created by
   // AgentRunBridge after the proposal lands, while the card row already
@@ -473,8 +476,6 @@ export default function App() {
       );
       const decision = decideOpenFileDiff({
         tabExists: tab !== undefined,
-        aiReviewInline,
-        mutationKind: tab?.mutationKind ?? "edit",
       });
       if (decision.kind === "fallback-editor-toast") {
         openFileTab(path, true);
@@ -487,13 +488,9 @@ export default function App() {
       // Unreachable: the fallback branch above already returned when
       // there is no tab. Kept so TypeScript can narrow `tab` below.
       if (tab === undefined) return;
-      if (decision.kind === "open-editor") {
-        openFileTab(tab.path, true);
-      } else if (!activateAiDiffTab(approvalId)) {
+      if (!activateAiDiffTab(approvalId)) {
         const afterActivate = decideOpenFileDiff({
           tabExists: true,
-          aiReviewInline,
-          mutationKind: tab.mutationKind,
           activateSucceeded: false,
         });
         if (afterActivate.kind === "error-toast") {
@@ -507,7 +504,7 @@ export default function App() {
         setAiDiffStatus(approvalId, "reviewing");
       }
     },
-    [activateAiDiffTab, aiReviewInline, openFileTab, setAiDiffStatus, tabs],
+    [activateAiDiffTab, openFileTab, setAiDiffStatus, tabs],
   );
 
   // Fase 5: Restore from the Changed Files card. The guarded restore
