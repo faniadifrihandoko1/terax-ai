@@ -1420,6 +1420,65 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   juga merah; file yang hanya warning namanya amber; file bersih
   tetap seperti biasa; file error yang diklik tetap merah di atas
   background seleksi).
+  Fase 20 (klik Changed Files membuka tab diff + tombol Accept all di
+  atas list, ala Antigravity), DONE: sebelum fase ini klik baris di
+  Changed Files card membuka file di editor saat inline review ON (by
+  design Fase 4) - padahal user mengharapkan tab diff seperti
+  Antigravity; celahnya: dekorasi inline hilang kalau file sudah
+  tidak reviewable, jadi klik membuka editor polos tanpa diff sama
+  sekali, dan tidak ada jalan dari card ke tab ai-diff yang ada di
+  background. Accept all pun hanya ada di dalam tab ai-diff per file,
+  belum ada yang global. Implementasi: (1) `decideOpenFileDiff`
+  (`src/modules/tabs/lib/openFileDiffAction.ts`) kini selalu
+  mengembalikan `activate-ai-diff` kalau tab ada - input
+  `aiReviewInline`/`mutationKind` dan cabang `open-editor` dihapus;
+  `handleOpenFileDiff` di `App.tsx` mengaktifkan tab untuk
+  edit/delete/rename, fallback ke editor + toast jujur hanya kalau tab
+  belum terbentuk; file yang sudah direview tetap membuka tab-nya
+  (read-only); inline review di editor dan setting `aiReviewInline`
+  tidak disentuh, begitu pula AgentRunBridge; (2)
+  `confirmAcceptedReview`
+  (`src/modules/editor/lib/confirmAcceptedReview.ts`) - Confirm per
+  file tanpa pane, memanggil fungsi `confirmReviewed*` /
+  `applyReviewed*` yang sama dengan Confirm di AiDiffPane (bukan
+  jalur paralel): hunk yang belum diputuskan jadi accepted, hunk yang
+  sudah ditolak user tetap ditolak sehingga rekonstruksinya
+  mengembalikan konten hunk itu, file delete/rename yang sudah
+  ditolak di-skip (tidak pernah dibalik), tab yang sudah resolved dan
+  edit tanpa hunk di-skip; (3) tombol Accept all di header Changed
+  Files card, di samping badge 'Perlu review' (muncul hanya bila ada
+  file pending/reviewing/done, disable saat proses berjalan) -
+  `acceptAllApprovalIds` memilih approval id-nya, `handleAcceptAll`
+  di App.tsx mengonfirmasi file satu per satu (keputusan dicatat dulu
+  seperti pane, lalu status dipetakan: applied/discarded ->
+  clearReviewHistory + status, conflict -> status conflict) dan
+  melaporkan toast jujur (sukses / selesai sebagian dengan file
+  pertama yang gagal / tidak ada yang dikonfirmasi). Reject all TIDAK
+  masuk scope. Dua perbaikan saat verifikasi: hook Accept all sempat
+  berdiri setelah early return (lint useHookAtTopLevel +2 warning,
+  pelanggaran Rules of Hooks - dipindah ke atas return, lint kembali
+  ke baseline); import statis helper di App.tsx menarik
+  `@codemirror/merge` lewat lineDiff ke eager chunk (3 budget test
+  gagal - helper kini di-dynamic-import di dalam handler, seperti
+  pemisahan bus Fase 18). Test (TDD, commit test dulu dan FAIL
+  sebelum implementasi ada): 14 test baru + file routing ditulis
+  ulang (9 -> 4) - `openFileDiffAction.test.ts` (4: tab ada ->
+  activate, tanpa tab -> fallback, aktivasi gagal -> error),
+  `confirmAcceptedReview.test.ts` (10: edit written tanpa tulis,
+  hunk pre-rejected, konflik disk, legacy menulis proposal,
+  write-failed, delete/rename written, delete yang sudah ditolak
+  di-skip, edit tanpa hunk di-skip, tab resolved di-skip),
+  `ChangedFilesCard.test.ts` (4: helper acceptAllApprovalIds).
+  Verifikasi: check-types 0 error; lint 0 error / 88 warning / 1
+  info (baseline); full test 2592/2592 hijau 2x (+9 net); tanpa
+  perubahan Rust. Batas jujur: repo tidak punya DOM env, jadi tombol
+  Accept all dan routing klik tidak teruji render live - hanya unit
+  murni; pembuktian end-to-end HARUS dicek di laptop (cek persis:
+  install build Fase 20, jalankan agent sampai ada beberapa file
+  berubah, klik satu baris di Changed Files - harus membuka tab
+  ai-diff-nya, bukan editor; klik Accept all di atas list - semua
+  file pending terkonfirmasi sekaligus dan badge berubah 'Selesai';
+  file yang sudah dikonfirmasi tetap bisa dibuka tab diff-nya).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
