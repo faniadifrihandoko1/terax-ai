@@ -6,10 +6,11 @@
  * rendering any UI.
  *
  * Two surfaces, two key sets:
- * - The ai-diff pane is a read-only review list: plain ArrowUp/ArrowDown
- *   move between hunks, Alt+Enter accepts the focused hunk,
- *   Alt+Shift+Enter rejects it, Ctrl/Cmd+Z undoes the last review
- *   decision and Ctrl/Cmd+Y (or Ctrl/Cmd+Shift+Z) redoes it.
+ * - The ai-diff pane is a read-only diff view with per-hunk bars
+ *   (Fase 21): plain ArrowUp/ArrowDown move between hunks,
+ *   Alt+Enter accepts the focused hunk, Alt+Shift+Enter rejects it,
+ *   Ctrl/Cmd+Z undoes the last review decision and Ctrl/Cmd+Y (or
+ *   Ctrl/Cmd+Shift+Z) redoes it.
  * - The inline editor is a live buffer: plain arrows move the cursor and
  *   Ctrl/Cmd+Z belongs to the buffer's own undo, so only the Alt combos
  *   act there (Alt+arrows move between hunks). That is a deliberate

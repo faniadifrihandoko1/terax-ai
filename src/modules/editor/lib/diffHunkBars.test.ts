@@ -1,6 +1,6 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { HunkBarWidget, planInlineReview } from "./inlineReview";
 import { computeLineChanges } from "./lineDiff";
 import {
@@ -237,7 +237,9 @@ describe("applyDiffHunkBarAction (Fase 21)", () => {
       d,
     );
     const iter = decorations.iter();
-    const widget = (iter.value?.spec as { widget?: unknown }).widget as
+    const first = iter.value;
+    if (!first) throw new Error("expected a hunk bar decoration");
+    const widget = (first.spec as { widget?: unknown }).widget as
       | HunkBarWidget
       | undefined;
     expect(widget).toBeInstanceOf(HunkBarWidget);

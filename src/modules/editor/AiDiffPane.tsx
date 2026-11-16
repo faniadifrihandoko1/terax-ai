@@ -40,26 +40,26 @@ import {
 import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
 import {
   Cancel01Icon,
-  ChevronDownIcon,
-  ChevronRightIcon,
   Tick02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildSharedExtensions,
   DEFAULT_INDENT,
   languageCompartment,
 } from "./lib/extensions";
 import { computeLineStats } from "./lib/diffStats";
-import { labelForHunk } from "./lib/inlineReview";
+import {
+  diffHunkBarsExtension,
+  setDiffHunkBarsEffect,
+} from "./lib/diffHunkBars";
 import {
   computeLineChanges,
   countHunkDecisions,
   reconstructFileFromHunks,
 } from "./lib/lineDiff";
-import { nextReviewFocus, reviewKeyAction } from "./lib/reviewKeyboard";
 import { resolveLanguage, resolveLanguageSync } from "./lib/languageResolver";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
 
@@ -189,6 +189,10 @@ export function AiDiffPane({
         collapseUnchanged: { margin: 3, minSize: 6 },
       }),
       DIFF_THEME,
+      // Fase 21: per-hunk Accept/Reject bars above each hunk in the
+      // diff itself (Antigravity-style). The field starts empty; the
+      // effect below pushes the review data into it.
+      diffHunkBarsExtension(),
     ],
     [originalContent, lang],
   );
@@ -232,7 +236,6 @@ export function AiDiffPane({
   // Delete/rename proposals (Fase 5) have no hunks: the whole file is one
   // decision, and the merge view below only shows what would be lost.
   const isFileOp = mutationKind !== "edit";
-  const [reviewOpen, setReviewOpen] = useState(true);
   const [showPreview, setShowPreview] = useState(false);
   const [applying, setApplying] = useState(false);
   const [conflict, setConflict] = useState<string | null>(null);
@@ -251,13 +254,11 @@ export function AiDiffPane({
   const restorable =
     status === "applied" && getCheckpoint(approvalId) !== undefined;
   const [focusedHunk, setFocusedHunk] = useState<number | null>(null);
-  const rowRefs = useRef(new Map<number, HTMLDivElement>());
   // Bumped on every record/undo/redo so the Undo/Redo buttons re-render.
   const [historyVersion, setHistoryVersion] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies(approvalId): approvalId is a manual reset trigger, the keyboard focus resets when the proposal changes
   useEffect(() => {
     setFocusedHunk(null);
-    rowRefs.current.clear();
   }, [approvalId]);
 
   // Keep the file status in step with the decisions: first decision moves
@@ -292,37 +293,48 @@ export function AiDiffPane({
     return { canUndo: history.canUndo, canRedo: history.canRedo };
   }, [approvalId, historyVersion]);
 
-  const focusHunk = (index: number) => {
-    setFocusedHunk(index);
-    rowRefs.current.get(index)?.focus();
-    const view = cmRef.current?.view;
-    const hunk = changeSet.hunks[index];
-    if (view && hunk) {
-      const line = Math.max(
-        1,
-        Math.min(hunk.proposedFrom + 1, view.state.doc.lines),
-      );
-      view.dispatch({
-        effects: EditorView.scrollIntoView(view.state.doc.line(line).from, {
-          y: "center",
-        }),
-      });
-    }
-  };
+  // useCallback so the Fase 21 hunk-bars effect can depend on these
+  // without re-pushing on every render: each identity only changes
+  // when the data it closes over changes.
+  const focusHunk = useCallback(
+    (index: number) => {
+      setFocusedHunk(index);
+      const view = cmRef.current?.view;
+      const hunk = changeSet.hunks[index];
+      if (view && hunk) {
+        const line = Math.max(
+          1,
+          Math.min(hunk.proposedFrom + 1, view.state.doc.lines),
+        );
+        view.dispatch({
+          effects: EditorView.scrollIntoView(view.state.doc.line(line).from, {
+            y: "center",
+          }),
+        });
+      }
+    },
+    [changeSet],
+  );
 
-  const recordDecisions = (changes: ReviewDecisionGroup) => {
-    if (changes.length === 0) return;
-    reviewHistoryFor(approvalId).record(changes);
-    setHistoryVersion((v) => v + 1);
-  };
+  const recordDecisions = useCallback(
+    (changes: ReviewDecisionGroup) => {
+      if (changes.length === 0) return;
+      reviewHistoryFor(approvalId).record(changes);
+      setHistoryVersion((v) => v + 1);
+    },
+    [approvalId],
+  );
 
-  const decideHunk = (hunkIndex: number, decision: HunkDecision) => {
-    const current = decisions.get(hunkIndex) ?? "undecided";
-    const next = current === decision ? "undecided" : decision;
-    if (next === current) return;
-    onSetHunkDecision(hunkIndex, next);
-    recordDecisions([{ hunkIndex, prev: current, next }]);
-  };
+  const decideHunk = useCallback(
+    (hunkIndex: number, decision: HunkDecision) => {
+      const current = decisions.get(hunkIndex) ?? "undecided";
+      const next = current === decision ? "undecided" : decision;
+      if (next === current) return;
+      onSetHunkDecision(hunkIndex, next);
+      recordDecisions([{ hunkIndex, prev: current, next }]);
+    },
+    [decisions, onSetHunkDecision, recordDecisions],
+  );
 
   const decideGroup = (decision: HunkDecision, onlyUndecided: boolean) => {
     const changes: ReviewDecisionGroup = [];
@@ -339,18 +351,18 @@ export function AiDiffPane({
   const decideRemaining = (decision: HunkDecision) =>
     decideGroup(decision, true);
 
-  const handleUndo = () => {
+  const handleUndo = useCallback(() => {
     const group = reviewHistoryFor(approvalId).undo();
     if (!group) return;
     for (const c of group) onSetHunkDecision(c.hunkIndex, c.prev);
     setHistoryVersion((v) => v + 1);
-  };
-  const handleRedo = () => {
+  }, [approvalId, onSetHunkDecision]);
+  const handleRedo = useCallback(() => {
     const group = reviewHistoryFor(approvalId).redo();
     if (!group) return;
     for (const c of group) onSetHunkDecision(c.hunkIndex, c.next);
     setHistoryVersion((v) => v + 1);
-  };
+  }, [approvalId, onSetHunkDecision]);
 
   const handleConfirm = async () => {
     if (applying || status === "conflict") return;
@@ -552,37 +564,50 @@ export function AiDiffPane({
     onSetStatus("rejected");
   };
 
-  // --- Fase 4: keyboard navigation -----------------------------------------
-  // Focus lives in the review list only: the container must be focused
-  // for the shortcuts to act, so typing in the composer, editor, or
-  // terminal is never affected. Alt+Enter / Alt+Shift+Enter match
-  // Antigravity; Ctrl+Z / Ctrl+Y undo and redo review decisions.
-  const onReviewKeyDown = (e: React.KeyboardEvent) => {
-    if (!reviewable) return;
-    const action = reviewKeyAction(e);
-    if (!action) return;
-    e.preventDefault();
-    if (action === "move-next" || action === "move-prev") {
-      const next = nextReviewFocus(
+  // --- Fase 21: per-hunk Accept/Reject bars in the diff view -----------
+  // The bars render above each hunk in the diff itself
+  // (Antigravity-style), replacing the "Review hunks" list that used to
+  // sit at the top of the tab. The data is pushed into the CodeMirror
+  // field the same way the editor pushes its inline review; the
+  // callbacks are the pane's own decide/focus/undo functions, so a
+  // click on a bar and a shortcut decide the same way. File
+  // operations have no hunks, so they get no data; on a resolved
+  // review the bars stay visible with inert buttons (reviewable is
+  // false), showing what was decided.
+  useEffect(() => {
+    const view = cmRef.current?.view;
+    if (!view) return;
+    if (isFileOp || counts.total === 0) {
+      view.dispatch({ effects: setDiffHunkBarsEffect.of(null) });
+      return;
+    }
+    view.dispatch({
+      effects: setDiffHunkBarsEffect.of({
+        changeSet,
+        decisions,
         focusedHunk,
-        changeSet.hunks.length,
-        action === "move-next" ? 1 : -1,
-      );
-      if (next === null) return;
-      focusHunk(next);
-      return;
-    }
-    if (action === "undo") {
-      handleUndo();
-      return;
-    }
-    if (action === "redo") {
-      handleRedo();
-      return;
-    }
-    if (focusedHunk === null) return;
-    decideHunk(focusedHunk, action === "accept" ? "accepted" : "rejected");
-  };
+        reviewable,
+        callbacks: {
+          onDecideHunk: decideHunk,
+          onFocusHunk: focusHunk,
+          onMoveHunk: focusHunk,
+          onUndo: handleUndo,
+          onRedo: handleRedo,
+        },
+      }),
+    });
+  }, [
+    changeSet,
+    decisions,
+    focusedHunk,
+    reviewable,
+    isFileOp,
+    counts.total,
+    decideHunk,
+    focusHunk,
+    handleUndo,
+    handleRedo,
+  ]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -632,8 +657,18 @@ export function AiDiffPane({
             </span>
           ) : null}
           {!isFileOp && counts.total > 0 ? (
-            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-              {counts.decided}/{counts.total} decided
+            <span
+              className="shrink-0 text-[11px] tabular-nums text-muted-foreground"
+              title="↑ ↓ move between hunks · Alt+Enter accept · Alt+Shift+Enter reject · Ctrl+Z undo · Ctrl+Y redo"
+            >
+              {counts.decided}/{counts.total} decided · {counts.accepted}{" "}
+              accepted · {counts.rejected} rejected
+            </span>
+          ) : null}
+          {!isFileOp && counts.total > 0 ? (
+            <span className="hidden shrink-0 text-[11px] text-muted-foreground/70 xl:inline">
+              ↑ ↓ move · Alt+Enter accept · Alt+Shift+Enter reject · Ctrl+Z
+              undo
             </span>
           ) : null}
         </div>
@@ -945,112 +980,6 @@ export function AiDiffPane({
         </div>
       ) : null}
 
-      {!isFileOp && counts.total > 0 ? (
-        <div className="shrink-0 border-b border-border/60">
-          <button
-            type="button"
-            onClick={() => setReviewOpen((v) => !v)}
-            className="flex h-8 w-full items-center gap-2 px-3 text-left text-[11.5px] font-medium hover:bg-accent/40"
-          >
-            <HugeiconsIcon
-              icon={reviewOpen ? ChevronDownIcon : ChevronRightIcon}
-              size={13}
-              strokeWidth={2}
-            />
-            Review hunks
-            <span className="font-normal tabular-nums text-muted-foreground">
-              {counts.decided}/{counts.total} decided · {counts.accepted}{" "}
-              accepted · {counts.rejected} rejected
-            </span>
-            <span className="ml-auto font-normal text-muted-foreground">
-              ↑ ↓ move · Alt+Enter accept · Alt+Shift+Enter reject · Ctrl+Z undo
-            </span>
-          </button>
-          {reviewOpen ? (
-            <div
-              className="max-h-64 overflow-y-auto border-t border-border/40 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              tabIndex={0}
-              role="listbox"
-              onKeyDown={onReviewKeyDown}
-              aria-label="Hunks review. Use arrow keys to move, Alt+Enter to accept, Alt+Shift+Enter to reject, Ctrl+Z to undo."
-            >
-              {changeSet.hunks.map((hunk, i) => {
-                const decision = decisions.get(hunk.index) ?? "undecided";
-                const accepted = decision === "accepted";
-                const rejected = decision === "rejected";
-                return (
-                  <div
-                    key={hunk.index}
-                    ref={(el) => {
-                      if (el) rowRefs.current.set(i, el);
-                      else rowRefs.current.delete(i);
-                    }}
-                    tabIndex={-1}
-                    role="option"
-                    aria-selected={focusedHunk === i}
-                    onFocus={() => focusHunk(i)}
-                    className={cn(
-                      "flex cursor-pointer items-center gap-2 border-l-2 px-3 py-1.5 font-mono text-[12px]",
-                      accepted && "border-emerald-500/70 bg-emerald-500/8",
-                      rejected && "border-rose-500/70 bg-rose-500/8",
-                      !accepted && !rejected && "border-transparent",
-                      focusedHunk === i &&
-                        "bg-accent/50 ring-1 ring-inset ring-ring/60",
-                    )}
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      Hunk {i + 1} · {labelForHunk(hunk)}
-                    </span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {accepted
-                        ? "Accepted"
-                        : rejected
-                          ? "Rejected"
-                          : "Undecided"}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1">
-                      <Button
-                        size="sm"
-                        variant={accepted ? "default" : "ghost"}
-                        disabled={!reviewable}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          decideHunk(hunk.index, "accepted");
-                        }}
-                        className="h-6 px-2 text-[11px]"
-                        title={
-                          accepted
-                            ? "Accepted, click to clear"
-                            : "Accept this hunk"
-                        }
-                      >
-                        Accept
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={rejected ? "default" : "ghost"}
-                        disabled={!reviewable}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          decideHunk(hunk.index, "rejected");
-                        }}
-                        className="h-6 px-2 text-[11px]"
-                        title={
-                          rejected
-                            ? "Rejected, click to clear"
-                            : "Reject this hunk"
-                        }
-                      >
-                        Reject
-                      </Button>
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
 
       <div className="flex min-h-0 flex-1">
         <div
