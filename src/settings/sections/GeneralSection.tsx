@@ -25,6 +25,7 @@ import {
   setEslintAutoProjectLint,
   setEslintEnabled,
   setEslintFixOnSave,
+  setEditorMinimap,
   setExplorerGitDecorations,
   setRestoreWindowState,
   setShowHidden,
@@ -122,6 +123,7 @@ export function GeneralSection() {
   );
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
   const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
+  const editorMinimap = usePreferencesStore((s) => s.editorMinimap);
   const eslintEnabled = usePreferencesStore((s) => s.eslintEnabled);
   const eslintAutoProjectLint = usePreferencesStore(
     (s) => s.eslintAutoProjectLint,
@@ -251,6 +253,19 @@ export function GeneralSection() {
           <Switch
             checked={explorerGitDecorations}
             onCheckedChange={(v) => void setExplorerGitDecorations(v)}
+          />
+        </SettingRow>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label>Editor</Label>
+        <SettingRow
+          title="Minimap"
+          description="Show a shrunken overview of the file on the right edge of the editor, like Antigravity: the viewport is highlighted, click or drag it to jump, and errors, warnings, and review hunks are marked in color."
+        >
+          <Switch
+            checked={editorMinimap}
+            onCheckedChange={(v) => void setEditorMinimap(v)}
           />
         </SettingRow>
       </div>
