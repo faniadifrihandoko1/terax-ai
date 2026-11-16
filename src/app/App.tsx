@@ -37,7 +37,6 @@ import {
   restoreCheckpoint,
 } from "@/modules/ai/lib/reviewCheckpoint";
 import { clearReviewHistory } from "@/modules/ai/lib/reviewHistory";
-import { confirmAcceptedReview } from "@/modules/editor/lib/confirmAcceptedReview";
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
@@ -542,6 +541,13 @@ export default function App() {
   // the toast can report an honest per-file result.
   const handleAcceptAll = useCallback(
     async (approvalIds: string[]) => {
+      // Dynamic import, not a static one: confirmAcceptedReview reads
+      // the hunk model from lineDiff, which pulls @codemirror/merge
+      // into the eager chunk (same lesson as the Fase 18 bus split).
+      // Accept all is a user gesture, so loading it on demand is free.
+      const { confirmAcceptedReview } = await import(
+        "@/modules/editor/lib/confirmAcceptedReview"
+      );
       let confirmed = 0;
       let skipped = 0;
       const failed: { path: string; reason: string }[] = [];
