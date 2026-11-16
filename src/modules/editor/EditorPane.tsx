@@ -50,6 +50,12 @@ import {
 } from "./lib/inlineReview";
 import { computeLineChanges } from "./lib/lineDiff";
 import { diagnosticsReporter } from "./lib/diagnosticsReporter";
+import {
+  buildMinimapSnapshot,
+  minimapSyncExtension,
+  syncMinimap,
+  type MinimapSnapshot,
+} from "./lib/minimap";
 import { useDiagnosticsStore } from "./lib/diagnosticsStore";
 import {
   buildSharedExtensions,
@@ -59,6 +65,7 @@ import {
   indentExtension,
   languageCompartment,
   lspCompartment,
+  minimapCompartment,
   vimCompartment,
   wordWrapExtension,
   wrapCompartment,
@@ -159,6 +166,7 @@ export const EditorPane = memo(
     const cmRef = useRef<ReactCodeMirrorRef>(null);
     const themeExt = useEditorThemeExt();
     const vimMode = usePreferencesStore((s) => s.vimMode);
+    const editorMinimap = usePreferencesStore((s) => s.editorMinimap);
     const wordWrapColumn = usePreferencesStore((s) =>
       s.editorWordWrap ? s.editorWordWrapColumn : null,
     );
@@ -221,6 +229,13 @@ export const EditorPane = memo(
     const lspActiveRef = useRef(false);
     const warnedNoLspRef = useRef(false);
     const warnedNoFormatRef = useRef(false);
+    // Fase 22: latest minimap inputs for the sync extension. Assigned
+    // during render once the review change set is known (below); the
+    // extension only reads it at event time.
+    const minimapSnapshotRef = useRef<MinimapSnapshot>({
+      enabled: true,
+      hunks: [],
+    });
 
     const performSave = useCallback(async () => {
       const view = cmRef.current?.view;
@@ -387,7 +402,11 @@ export const EditorPane = memo(
         languageCompartment.of([]),
         lspCompartment.of([]),
         eslintCompartment.of([]),
+        minimapCompartment.of([]),
         diagnosticsReporter(() => pathRef.current),
+        // Fase 22: keeps the minimap markers fresh on doc/diagnostic
+        // changes; React-side changes sync via the effect below.
+        minimapSyncExtension(() => minimapSnapshotRef.current),
         // Fase 4: inline AI review decorations. Static: without review
         // data the field is null and the extension renders nothing.
         inlineReviewExtension(),
@@ -512,6 +531,37 @@ export const EditorPane = memo(
       reviewTab?.status === "pending" ||
       reviewTab?.status === "reviewing" ||
       reviewTab?.status === "done";
+
+    // Fase 22: minimap markers follow the review. Assigned during
+    // render (same ref pattern as pathRef); the sync extension reads
+    // it when the editor state changes, and the effect below covers
+    // React-side changes (setting toggle, new review, decisions).
+    minimapSnapshotRef.current = buildMinimapSnapshot({
+      enabled: editorMinimap,
+      reviewChangeSet,
+      reviewDecisions,
+      reviewable,
+    });
+
+    useEffect(() => {
+      const view = cmRef.current?.view;
+      if (!view || doc.status !== "ready") return;
+      syncMinimap(
+        view,
+        buildMinimapSnapshot({
+          enabled: editorMinimap,
+          reviewChangeSet,
+          reviewDecisions,
+          reviewable,
+        }),
+      );
+    }, [
+      editorMinimap,
+      reviewChangeSet,
+      reviewDecisions,
+      reviewable,
+      doc.status,
+    ]);
 
     useEffect(() => {
       const view = cmRef.current?.view;

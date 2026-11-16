@@ -75,6 +75,7 @@
     "@lezer/highlight": "^1.2.3",
     "@radix-ui/react-use-controllable-state": "^1.2.6",
     "@replit/codemirror-lang-svelte": "^6.0.0",
+    "@replit/codemirror-minimap": "0.5.2",
     "@replit/codemirror-vim": "^6.4.0",
     "@tanstack/react-virtual": "^3.14.13",
     "@tauri-apps/api": "^2.12.3",

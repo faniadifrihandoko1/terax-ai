@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMinimapGutters,
+  buildMinimapSnapshot,
   diagnosticMinimapGutter,
   hunkMinimapGutter,
   minimapGuttersEqual,
@@ -201,6 +202,54 @@ describe("minimapGuttersEqual", () => {
     ).toBe(false);
     expect(minimapGuttersEqual([{ 2: "#fbbf24" }], [])).toBe(false);
     expect(minimapGuttersEqual([], [])).toBe(true);
+  });
+});
+
+describe("buildMinimapSnapshot", () => {
+  it("maps hunks to marker inputs with their decision", () => {
+    expect(
+      buildMinimapSnapshot({
+        enabled: true,
+        reviewChangeSet: {
+          hunks: [
+            { index: 0, proposedFrom: 4, proposedTo: 7 },
+            { index: 1, proposedFrom: 10, proposedTo: 10 },
+          ],
+        },
+        reviewDecisions: new Map([[1, "rejected"]]),
+        reviewable: true,
+      }),
+    ).toEqual({
+      enabled: true,
+      hunks: [
+        { proposedFrom: 4, proposedTo: 7, state: "undecided" },
+        { proposedFrom: 10, proposedTo: 10, state: "rejected" },
+      ],
+    });
+  });
+
+  it("drops hunks when there is no review or it is not reviewable", () => {
+    const base = {
+      enabled: false,
+      reviewChangeSet: {
+        hunks: [{ index: 0, proposedFrom: 0, proposedTo: 1 }],
+      },
+      reviewDecisions: new Map(),
+      reviewable: true,
+    } as const;
+    // Disabled only hides the minimap; the hunks are still in the
+    // snapshot, so toggling it back on needs no new review data.
+    expect(buildMinimapSnapshot(base)).toEqual({
+      enabled: false,
+      hunks: [{ proposedFrom: 0, proposedTo: 1, state: "undecided" }],
+    });
+    expect(buildMinimapSnapshot({ ...base, reviewable: false })).toEqual({
+      enabled: false,
+      hunks: [],
+    });
+    expect(
+      buildMinimapSnapshot({ ...base, reviewChangeSet: null }),
+    ).toEqual({ enabled: false, hunks: [] });
   });
 });
 
