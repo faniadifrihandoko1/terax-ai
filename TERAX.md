@@ -1479,6 +1479,60 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   ai-diff-nya, bukan editor; klik Accept all di atas list - semua
   file pending terkonfirmasi sekaligus dan badge berubah 'Selesai';
   file yang sudah dikonfirmasi tetap bisa dibuka tab diff-nya).
+  Fase 21 (Accept/Reject tiap hunk di atas diff-nya di tab ai-diff,
+  hapus list Review hunks di atas, ala Antigravity), DONE: sebelum
+  fase ini Accept/Reject per hunk tinggal di list collapsible
+  'Review hunks' di bagian ATAS tab (satu baris per hunk), sementara
+  tampilan diff di bawahnya tidak punya tombol apa pun di atas
+  hunk-nya - user menganggap ini membingungkan. Implementasi: (1)
+  `diffHunkBars` (`src/modules/editor/lib/diffHunkBars.ts`) - StateField
+  + decorations + keymap baru untuk diff view di AiDiffPane: satu
+  `HunkBarWidget` (dipakai ulang dari inline review Fase 4, kini
+  di-export dengan flag `disabled` opsional) di atas tiap hunk, satu
+  block widget per hunk di posisi anchor-nya; sengaja BUKAN seluruh
+  ekstensi inline review, karena `unifiedMergeView` sudah me-render
+  removed lines (deleted-chunk widgets) dan highlight perubahan
+  sendiri - memakai ulang removed-lines widget dan added-line marks
+  akan menampilkan tiap deletion dua kali; (2) AiDiffPane mendorong
+  data review (changeSet, decisions, focusedHunk, reviewable,
+  callbacks decide/focus/undo/redo) ke field lewat effect, pola yang
+  sama dengan push inline review di EditorPane - klik bar dan
+  shortcut memakai callback pane yang sama (`decideHunk`,
+  `focusHunk`, `handleUndo`/`handleRedo`), jadi semantik keputusan,
+  history/undo, dan Confirm tidak berubah; keempat fungsi itu jadi
+  `useCallback` supaya effect bisa depend pada mereka tanpa
+  re-push tiap render (mula-mula biome-ignore multi-identifier di
+  dalam body effect - tidak dikenali biome, +5 warning - diganti
+  useCallback, lint kembali ke baseline); (3) list 'Review hunks'
+  dihapus (106 baris: listbox, baris-barisnya, `reviewOpen`,
+  `rowRefs`, `onReviewKeyDown`), ringkasan hitungan pindah ke header
+  pane ('decided/total · accepted · rejected') plus hint keyboard
+  (tooltip + teks tersembunyi di bawah xl); set keyboard lama
+  (↑↓ pindah hunk, Alt+Enter accept, Alt+Shift+Enter reject, Ctrl+Z
+  undo, Ctrl+Y redo) kini jalan di keymap diff view (pane read-only,
+  jadi plain arrows dan Ctrl+Z tidak merebut perilaku buffer seperti
+  di editor); pada review yang sudah resolved bar tetap terlihat
+  dengan tombol inert (reviewable false). Header toolbar (Accept all
+  / Reject all / Reject remaining / Undo / Redo / Confirm / Restore),
+  Changed Files card, Accept all (Fase 20), dan review inline di
+  editor tidak disentuh. Test (TDD, commit test dulu dan FAIL sebelum
+  implementasi ada): 12 test baru di `diffHunkBars.test.ts` (pemetaan
+  hunk -> widget dengan anchor/state/focus/disabled yang benar,
+  dekorasi via EditorState - satu block widget per hunk, eq dengan
+  widget yang diharapkan, tanpa data -> kosong - dan
+  `applyDiffHunkBarAction`: pindah hunk clamped di ujung, accept /
+  reject lewat callback pane, tanpa fokus -> false, undo / redo,
+  reviewable false -> tidak ada aksi). Verifikasi: check-types 0
+  error; lint 0 error / 88 warning / 1 info (baseline); full test
+  2604/2604 hijau 2x (+12); tanpa perubahan Rust. Batas jujur: repo
+  tidak punya DOM env, jadi render bar dan klik tombolnya tidak
+  teruji live - hanya unit murni; pembuktian end-to-end HARUS dicek
+  di laptop (cek persis: install build Fase 21, jalankan agent
+  sampai ada file berubah, buka tab ai-diff - tiap hunk harus punya
+  bar Accept/Reject di atas diff-nya dan list 'Review hunks' di atas
+  sudah tidak ada; klik Accept/Reject di bar, lalu ↑↓, Alt+Enter,
+  Alt+Shift+Enter, Ctrl+Z; file yang sudah dikonfirmasi tetap
+  menampilkan bar-nya dengan tombol nonaktif).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
