@@ -1,15 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { decideOpenFileDiff } from "./openFileDiffAction";
 
-describe("decideOpenFileDiff", () => {
-  it("opens the editor when inline review is on and the proposal is an edit", () => {
+/**
+ * Fase 20: a click on a Changed Files row always opens the ai-diff tab
+ * (like Antigravity). The old Fase 4 behaviour — opening the file in the
+ * editor when inline review is on — is deliberately gone: with the
+ * inline decorations hidden for already-reviewed files, the click
+ * landed on a plain file with no diff at all. The inline review itself
+ * (Fase 4) still renders in the editor; only the card's click routing
+ * changed.
+ */
+describe("decideOpenFileDiff (Fase 20)", () => {
+  it("activates the ai-diff tab for an edit even when inline review is on", () => {
     expect(
       decideOpenFileDiff({
         tabExists: true,
         aiReviewInline: true,
         mutationKind: "edit",
       }),
-    ).toEqual({ kind: "open-editor" });
+    ).toEqual({ kind: "activate-ai-diff" });
   });
 
   it("activates the ai-diff tab when inline review is off", () => {
@@ -82,18 +91,5 @@ describe("decideOpenFileDiff", () => {
         activateSucceeded: true,
       }),
     ).toEqual({ kind: "activate-ai-diff" });
-  });
-
-  it("prefers the editor for an inline edit even when activation failed before", () => {
-    // The inline branch never attempts activation, so a stale failure
-    // must not turn an inline open into an error toast.
-    expect(
-      decideOpenFileDiff({
-        tabExists: true,
-        aiReviewInline: true,
-        mutationKind: "edit",
-        activateSucceeded: false,
-      }),
-    ).toEqual({ kind: "open-editor" });
   });
 });
