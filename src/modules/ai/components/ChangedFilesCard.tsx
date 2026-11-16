@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Collapsible,
   CollapsibleContent,
@@ -9,7 +10,11 @@ import type { AiDiffStatus } from "@/modules/tabs";
 import { AI_DIFF_STATUS_BADGE } from "@/modules/tabs/lib/aiDiffStatus";
 import { computeLineStats } from "@/modules/editor/lib/diffStats";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { ArrowRight01Icon, File01Icon } from "@hugeicons/core-free-icons";
+import {
+  ArrowRight01Icon,
+  File01Icon,
+  Tick02Icon,
+} from "@hugeicons/core-free-icons";
 import type { UIMessagePart } from "ai";
 import { memo, useEffect, useMemo, useState } from "react";
 import {
@@ -55,7 +60,37 @@ type Props = {
   /** Approval ids with a checkpoint, so their Restore button can show. */
   restorableApprovals?: ReadonlySet<string>;
   onRestoreFile?: (approvalId: string) => void;
+  /**
+   * Fase 20: confirm every file that still needs review, in one click
+   * (Antigravity-style Accept all). Receives the approval ids from
+   * `acceptAllApprovalIds`; the handler reports the result with toasts.
+   */
+  onAcceptAll?: (approvalIds: string[]) => void | Promise<void>;
 };
+
+/**
+ * Approval ids the card's Accept all button confirms (Fase 20): files
+ * that still need review (pending, reviewing, or done — decided but not
+ * yet confirmed). Already-resolved files — applied, rejected, conflict,
+ * restored — and rows without an approval id are never touched.
+ */
+export function acceptAllApprovalIds(
+  entries: ChangedFileEntry[],
+): string[] {
+  const out: string[] = [];
+  for (const e of entries) {
+    if (e.approvalId === null) continue;
+    if (
+      e.status !== "pending" &&
+      e.status !== "reviewing" &&
+      e.status !== "done"
+    ) {
+      continue;
+    }
+    out.push(e.approvalId);
+  }
+  return out;
+}
 
 /**
  * Antigravity-style "Changed Files" summary (FR-01) for one assistant
@@ -73,6 +108,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
   onOpenFileDiff,
   restorableApprovals,
   onRestoreFile,
+  onAcceptAll,
 }: Props) {
   const entries = useMemo(
     () => buildEntries(parts, reviewStatusByApproval),
@@ -83,16 +119,41 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
   const allResolved = entries.every((e) =>
     ["applied", "rejected", "conflict", "restored"].includes(e.status),
   );
+  // Fase 20: the ids Accept all will confirm. Memoized so the button
+  // only appears while there is actually something left to confirm.
+  const pendingIds = useMemo(
+    () => acceptAllApprovalIds(entries),
+    [entries],
+  );
+  // While a run is in flight the button disables itself: the statuses
+  // only flip to applied once the confirms land, so a second click
+  // before that would re-confirm the same files.
+  const [accepting, setAccepting] = useState(false);
+  const handleAcceptAll = () => {
+    if (!onAcceptAll || accepting || pendingIds.length === 0) return;
+    setAccepting(true);
+    void (async () => {
+      try {
+        await onAcceptAll(pendingIds);
+      } catch {
+        // The handler reports failures with toasts; the card only
+        // needs to re-enable the button.
+      } finally {
+        setAccepting(false);
+      }
+    })();
+  };
 
   return (
     <Collapsible className="group/changes overflow-hidden rounded-md border border-border/50 bg-card/50">
-      <CollapsibleTrigger
-        className={cn(
-          "flex w-full items-center gap-2 px-2 py-1.5 text-left text-[12px]",
-          "transition-colors hover:bg-muted/50",
-          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-        )}
-      >
+      <div className="flex items-center gap-1 pr-1">
+        <CollapsibleTrigger
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-[12px]",
+            "transition-colors hover:bg-muted/50",
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          )}
+        >
         <HugeiconsIcon
           icon={ArrowRight01Icon}
           size={11}
@@ -121,7 +182,21 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
         >
           {allResolved ? "Selesai" : "Perlu review"}
         </Badge>
-      </CollapsibleTrigger>
+        </CollapsibleTrigger>
+        {pendingIds.length > 0 && onAcceptAll ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={handleAcceptAll}
+            disabled={accepting}
+            className="h-7 shrink-0 gap-1"
+            title="Confirm every file that still needs review"
+          >
+            <HugeiconsIcon icon={Tick02Icon} size={13} strokeWidth={2} />
+            {accepting ? "Confirming…" : "Accept all"}
+          </Button>
+        ) : null}
+      </div>
       <CollapsibleContent className="terax-collapsible-content border-t border-border/30">
         <ul className="flex flex-col gap-0.5 px-2 py-1.5">
           {entries.map((entry) => (

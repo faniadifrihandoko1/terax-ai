@@ -36,6 +36,8 @@ import {
   listCheckpoints,
   restoreCheckpoint,
 } from "@/modules/ai/lib/reviewCheckpoint";
+import { clearReviewHistory } from "@/modules/ai/lib/reviewHistory";
+import { confirmAcceptedReview } from "@/modules/editor/lib/confirmAcceptedReview";
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
@@ -530,6 +532,95 @@ export default function App() {
       }
     },
     [setAiDiffStatus],
+  );
+
+  // Fase 20: Accept all from the Changed Files card (Antigravity-style).
+  // One Confirm per file, through the same headless path the ai-diff
+  // tab's Confirm uses (confirmAcceptedReview): undecided hunks become
+  // accepted, explicit rejections are kept, and a file the user already
+  // rejected is skipped, never flipped. Files confirm sequentially so
+  // the toast can report an honest per-file result.
+  const handleAcceptAll = useCallback(
+    async (approvalIds: string[]) => {
+      let confirmed = 0;
+      let skipped = 0;
+      const failed: { path: string; reason: string }[] = [];
+      for (const approvalId of approvalIds) {
+        const tab = tabs.find(
+          (t): t is AiDiffTab =>
+            t.kind === "ai-diff" && t.approvalId === approvalId,
+        );
+        if (!tab) {
+          skipped += 1;
+          continue;
+        }
+        const result = await confirmAcceptedReview(
+          tab,
+          activeSessionId ?? undefined,
+        );
+        if (result.outcome === "skipped") {
+          skipped += 1;
+          continue;
+        }
+        // Mirror the pane: decisions are recorded at decision time,
+        // independent of the confirm outcome, so a conflict still
+        // shows what was accepted.
+        for (const [index, decision] of result.hunkDecisions) {
+          setAiDiffHunkDecision(approvalId, index, decision);
+        }
+        if (result.acceptFileOp) {
+          setAiDiffFileDecision(approvalId, "accepted");
+        }
+        if (result.outcome === "applied" || result.outcome === "discarded") {
+          clearReviewHistory(approvalId);
+          setAiDiffStatus(
+            approvalId,
+            result.outcome === "applied" ? "applied" : "rejected",
+          );
+          confirmed += 1;
+        } else if (result.outcome === "conflict") {
+          setAiDiffStatus(approvalId, "conflict");
+          failed.push({
+            path: tab.path,
+            reason: result.reason ?? "conflict",
+          });
+        } else {
+          failed.push({
+            path: tab.path,
+            reason: result.reason ?? result.outcome,
+          });
+        }
+      }
+      const skippedNote =
+        skipped > 0 ? `, ${skipped} dilewati` : "";
+      if (failed.length === 0 && confirmed > 0) {
+        toast.success(`Accept all selesai: ${confirmed} file dikonfirmasi`, {
+          description:
+            skipped > 0
+              ? `${skipped} file dilewati (sudah selesai atau sudah ditolak — konfirmasi dari tab-nya).`
+              : undefined,
+        });
+      } else if (failed.length > 0) {
+        toast.warning(
+          `Accept all selesai sebagian: ${confirmed} dikonfirmasi, ${failed.length} gagal${skippedNote}`,
+          {
+            description: `${failed[0]?.path}: ${failed[0]?.reason}`,
+          },
+        );
+      } else if (skipped > 0) {
+        toast.info("Tidak ada file yang dikonfirmasi", {
+          description:
+            "Semua file sudah selesai atau sudah ditolak — konfirmasi dari tab-nya.",
+        });
+      }
+    },
+    [
+      activeSessionId,
+      setAiDiffFileDecision,
+      setAiDiffHunkDecision,
+      setAiDiffStatus,
+      tabs,
+    ],
   );
 
   const { hasComposer, keysLoaded } = useAiBootstrap();
@@ -1833,6 +1924,7 @@ export default function App() {
               reviewStatusByApproval={reviewStatusByApproval}
               restorableApprovals={restorableApprovals}
               onRestoreFile={handleRestoreFile}
+              onAcceptAll={handleAcceptAll}
             />
           ) : null}
           {askPresence.mounted ? (
