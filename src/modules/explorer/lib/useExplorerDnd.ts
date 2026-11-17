@@ -61,13 +61,21 @@ export function finishExplorerDrag(
   moveTarget: string | null,
   pathDropTarget: ExplorerPathDropTarget | undefined,
   onMove: (from: string[], toDir: string) => void,
-): void {
+): boolean {
+  // Fase 25: reports whether the drag actually moved anything, so the
+  // caller only suppresses the click that follows a REAL move. A drag
+  // that ends in place (same folder / empty space / cancelled) must let
+  // the click through — otherwise a click whose pointer drifted past
+  // the 5px drag threshold opens nothing at all.
   const handledByPathTarget =
     commit && (pathDropTarget?.dropPath(sources, clientX, clientY) ?? false);
+  let moved = handledByPathTarget;
   if (commit && !handledByPathTarget && moveTarget) {
     onMove(sources, moveTarget);
+    moved = true;
   }
   pathDropTarget?.clearTarget();
+  return moved;
 }
 
 // Pointer-based, delegated on the container (no per-row handlers); sidesteps
@@ -194,7 +202,7 @@ export function useExplorerDnd({
       detach();
       if (!active) return;
       const { x, y } = lastPosRef.current;
-      finishExplorerDrag(
+      const moved = finishExplorerDrag(
         commit,
         sources,
         x,
@@ -203,10 +211,17 @@ export function useExplorerDnd({
         optsRef.current.pathDropTarget,
         optsRef.current.onMove,
       );
-      suppressClickRef.current = true;
-      setTimeout(() => {
-        suppressClickRef.current = false;
-      }, 0);
+      // Fase 25: suppress the click that follows the drag only when the
+      // drag really moved something. A no-op drag (dropped where it
+      // started — same folder, empty space) used to swallow the click,
+      // so a click whose pointer drifted past the 5px drag threshold
+      // opened nothing at all: no selection, no tab, no activation.
+      if (moved) {
+        suppressClickRef.current = true;
+        setTimeout(() => {
+          suppressClickRef.current = false;
+        }, 0);
+      }
       dropTargetRef.current = null;
       setDragLabel(null);
       setDropTargetDir(null);
