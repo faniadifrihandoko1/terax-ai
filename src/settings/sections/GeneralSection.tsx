@@ -26,6 +26,7 @@ import {
   setEslintEnabled,
   setEslintFixOnSave,
   setEditorMinimap,
+  setEditorMinimapColors,
   setExplorerGitDecorations,
   setRestoreWindowState,
   setShowHidden,
@@ -124,6 +125,9 @@ export function GeneralSection() {
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
   const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
   const editorMinimap = usePreferencesStore((s) => s.editorMinimap);
+  const editorMinimapColors = usePreferencesStore(
+    (s) => s.editorMinimapColors,
+  );
   const eslintEnabled = usePreferencesStore((s) => s.eslintEnabled);
   const eslintAutoProjectLint = usePreferencesStore(
     (s) => s.eslintAutoProjectLint,
@@ -266,6 +270,15 @@ export function GeneralSection() {
           <Switch
             checked={editorMinimap}
             onCheckedChange={(v) => void setEditorMinimap(v)}
+          />
+        </SettingRow>
+        <SettingRow
+          title="Syntax colors in the minimap"
+          description="When on, the miniature code uses the editor's syntax colors. When off, it draws plain in the default text color — the editor itself stays colored."
+        >
+          <Switch
+            checked={editorMinimapColors}
+            onCheckedChange={(v) => void setEditorMinimapColors(v)}
           />
         </SettingRow>
       </div>

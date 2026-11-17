@@ -182,6 +182,8 @@ export type Preferences = {
   aiReviewInline: boolean;
   /** Fase 22: minimap navigation in the editor (Antigravity-style overview). Default on, like VS Code's `editor.minimap.enabled`. */
   editorMinimap: boolean;
+  /** Fase 23: syntax colors in the minimap. Off draws the miniature code plain (default foreground); the editor itself stays colored. Default on. */
+  editorMinimapColors: boolean;
   /** Fase 10: ESLint diagnostics from the project's own install. Off disables the ESLint runner entirely. */
   eslintEnabled: boolean;
   /**
@@ -296,6 +298,7 @@ const KEY_EDITOR_AUTO_SAVE = "editorAutoSave";
 const KEY_EDITOR_AUTO_SAVE_DELAY = "editorAutoSaveDelay";
 const KEY_AI_REVIEW_INLINE = "aiReviewInline";
 const KEY_EDITOR_MINIMAP = "editorMinimap";
+const KEY_EDITOR_MINIMAP_COLORS = "editorMinimapColors";
 const KEY_ESLINT_ENABLED = "eslintEnabled";
 const KEY_ESLINT_AUTO_PROJECT_LINT = "eslintAutoProjectLint";
 const KEY_ESLINT_FIX_ON_SAVE = "eslintFixOnSave";
@@ -398,6 +401,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorAutoSaveDelay: 1000,
   aiReviewInline: true,
   editorMinimap: true,
+  editorMinimapColors: true,
   eslintEnabled: true,
   eslintAutoProjectLint: true,
   eslintFixOnSave: false,
@@ -596,6 +600,9 @@ export async function loadPreferences(): Promise<Preferences> {
       DEFAULT_PREFERENCES.aiReviewInline,
     editorMinimap:
       get<boolean>(KEY_EDITOR_MINIMAP) ?? DEFAULT_PREFERENCES.editorMinimap,
+    editorMinimapColors:
+      get<boolean>(KEY_EDITOR_MINIMAP_COLORS) ??
+      DEFAULT_PREFERENCES.editorMinimapColors,
     eslintEnabled:
       get<boolean>(KEY_ESLINT_ENABLED) ?? DEFAULT_PREFERENCES.eslintEnabled,
     eslintAutoProjectLint:
@@ -848,6 +855,10 @@ export async function setAiReviewInline(value: boolean): Promise<void> {
 
 export async function setEditorMinimap(value: boolean): Promise<void> {
   await writePref(KEY_EDITOR_MINIMAP, value);
+}
+
+export async function setEditorMinimapColors(value: boolean): Promise<void> {
+  await writePref(KEY_EDITOR_MINIMAP_COLORS, value);
 }
 
 export async function setEslintEnabled(value: boolean): Promise<void> {
