@@ -146,9 +146,7 @@ describe("extractLinePreview", () => {
   it("truncates very long lines", () => {
     const long = "x".repeat(300);
     const preview = extractLinePreview(long, 0);
-    expect(preview).not.toBeNull();
-    expect(preview!.length).toBeLessThanOrEqual(161);
-    expect(preview!.endsWith("…")).toBe(true);
+    expect(preview).toBe(`${"x".repeat(160)}…`);
   });
 });
 
