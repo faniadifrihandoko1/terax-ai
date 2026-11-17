@@ -1752,6 +1752,43 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   baris yang benar; buka/tutup grup dengan klik dan panah kiri/kanan;
   Shift+F12 menampilkan tree yang sama; F12 tetap lompat ke
   definisi). Tab ai-diff di luar scope fase ini.
+  Fase 24.1 (tombol X di panel reference, DEL-122), DONE - user
+  bertanya cara menghilangkan panel reference: sebelumnya panel hanya
+  bisa ditutup lewat Esc (keydown di elemen list, jadi hanya jalan
+  saat panel fokus) atau klik baris; tidak ada cara menutup yang
+  terlihat. Perbaikan: tombol X di header panel tree references
+  (Fase 24) DAN panel datar lama (Definitions/References flat list) -
+  gap-nya identik, polanya sama. Tombol berupa elemen <button>
+  sungguhan (`createCloseButton` di `locationsPanel.ts`, class
+  bersama `.cm-lsp-panel-close`, aria-label "Tutup panel", teks "×"),
+  klik menutup panel lewat `closeReferenceTreePanel` /
+  `closeLocationsPanel` yang sudah ada (dispatch effect null +
+  `view.focus()`), tanpa jalur tutup baru. Mousedown di tombol
+  di-preventDefault supaya klik tidak mencuri seleksi editor,
+  sementara event click tetap jalan (termasuk aktivasi keyboard
+  Enter/Space saat tombol difokuskan Tab). Header jadi flex
+  (`display: flex`, tombol `margin-left: auto`); styling mengikuti
+  token tombol close panel search yang sudah ada di `chromeTheme.ts`
+  (20x20, transparan, muted-foreground, hover accent). Keputusan:
+  TIDAK ada click-outside-to-close (risiko tutup tidak sengaja,
+  di luar permintaan user); Esc tetap seperti sekarang; `closePanel`
+  di-rename jadi `closeLocationsPanel` dan kedua fungsi close
+  di-export sebagai seam test. Test (TDD, commit test dulu dan FAIL
+  sebelum implementasi ada): 4 test baru di
+  `locationsPanel.test.ts` - round-trip open -> close mengosongkan
+  field panel (flat + tree, lewat EditorState asli + stub view),
+  close mengembalikan fokus ke editor, close saat panel sudah
+  tertutup tetap null tanpa throw. Verifikasi: check-types 0 error;
+  lint 0 error / 88 warning / 1 info (baseline); full test
+  2669/2669 hijau 2x (+4); tanpa perubahan Rust. Batas jujur: repo
+  tidak punya DOM env, jadi tombol X-nya sendiri (render, klik,
+  fokus keyboard) belum teruji live - hanya seam close di bawahnya
+  yang teruji; pembuktian end-to-end HARUS dicek di laptop (cek
+  persis: install build Fase 24.1, Ctrl+klik komponen - panel tree
+  muncul dengan tombol X di kanan header; klik X - panel hilang dan
+  fokus kembali ke editor; sama untuk panel datar F12 multi-definisi;
+  Esc dan klik baris tetap menutup seperti sebelumnya). Tab ai-diff
+  di luar scope fase ini.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
