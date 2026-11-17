@@ -202,6 +202,7 @@ describe("confirmAcceptedReview (Fase 20)", () => {
     const { io, calls } = makeIo({ disk: {} });
     const result = await confirmAcceptedReview(tab, "sess-1", io);
     expect(result.outcome).toBe("skipped");
+    expect(result.skipReason).toBe("file-rejected");
     expect(result.acceptFileOp).toBe(false);
     expect(calls).toHaveLength(0);
   });
@@ -228,6 +229,7 @@ describe("confirmAcceptedReview (Fase 20)", () => {
     const { io, calls } = makeIo({ disk: { "/x/a.ts": "same\n" } });
     const result = await confirmAcceptedReview(tab, "sess-1", io);
     expect(result.outcome).toBe("skipped");
+    expect(result.skipReason).toBe("no-changes");
     expect(calls).toHaveLength(0);
   });
 
@@ -238,6 +240,7 @@ describe("confirmAcceptedReview (Fase 20)", () => {
     });
     const result = await confirmAcceptedReview(tab, "sess-1", io);
     expect(result.outcome).toBe("skipped");
+    expect(result.skipReason).toBe("already-resolved");
     expect(calls).toHaveLength(0);
   });
 });
