@@ -1,6 +1,8 @@
 import { forEachDiagnostic } from "@codemirror/lint";
-import type { Extension } from "@codemirror/state";
+import { highlightingFor, language } from "@codemirror/language";
+import type { EditorState, Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { tags } from "@lezer/highlight";
 import { showMinimap } from "@replit/codemirror-minimap";
 import type { HunkDecision } from "@/modules/ai/lib/reviewApply";
 import { minimapCompartment } from "./extensions";
@@ -33,6 +35,20 @@ import { minimapCompartment } from "./extensions";
 // Bundle: this module imports @codemirror/*, so it must stay behind
 // the lazy editor path (EditorPane) and never be imported from eager
 // code (App, settings) — see eager-budget.test.ts.
+//
+// Fase 23: the minimap rendered plain white. Two causes, both fixed
+// here and in the editor theme (see cmThemes.ts): (1) a race — the
+// editor mounts with an empty language compartment and the language
+// resolves async, so the package's TextState was built with no
+// parser and its shouldUpdate never fires on a language/highlighter
+// change; minimapHighlightChanged + the forced sync below fix that.
+// (2) The default theme's own palette was pastel with shared hues
+// (string = variable blue), so even a working minimap read as
+// white; the enriched github palettes fix that, and the minimap
+// reads them through the editor's HighlightStyle — one source of
+// truth. The `syntaxColors` setting (patched into the package)
+// only gates the minimap's highlight passes; the editor stays
+// colored when it is off.
 
 export type MinimapDiagnosticInput = {
   /** 1-based line number. */
@@ -61,6 +77,8 @@ export type MinimapMarkerColors = {
 /** React-side inputs for one sync. Diagnostics come from the view. */
 export type MinimapSnapshot = {
   enabled: boolean;
+  /** False draws the miniature code plain (Fase 23 setting). */
+  syntaxColors: boolean;
   hunks: readonly MinimapHunkInput[];
 };
 
@@ -72,6 +90,7 @@ export type MinimapSnapshot = {
  */
 export function buildMinimapSnapshot(input: {
   enabled: boolean;
+  syntaxColors?: boolean;
   reviewChangeSet: {
     hunks: readonly {
       index: number;
@@ -84,6 +103,7 @@ export function buildMinimapSnapshot(input: {
 }): MinimapSnapshot {
   return {
     enabled: input.enabled,
+    syntaxColors: input.syntaxColors ?? true,
     hunks:
       input.reviewChangeSet && input.reviewable
         ? input.reviewChangeSet.hunks.map((hunk) => ({
@@ -256,16 +276,71 @@ function diagnosticsForMinimap(view: EditorView): MinimapDiagnosticInput[] {
   return out;
 }
 
-type AppliedConfig = { enabled: boolean; gutters: MinimapGutter[] };
+export type MinimapAppliedConfig = {
+  enabled: boolean;
+  gutters: MinimapGutter[];
+  syntaxColors: boolean;
+};
 
-const lastApplied = new WeakMap<EditorView, AppliedConfig>();
+const lastApplied = new WeakMap<EditorView, MinimapAppliedConfig>();
+
+/**
+ * Pure sync decision, extracted so tests can prove the guard without
+ * a view: the first sync always runs, a forced sync always runs
+ * (that is what wakes the package's TextState after the language
+ * arrives), otherwise only a real change syncs.
+ */
+export function shouldSyncMinimap(
+  prev: MinimapAppliedConfig | undefined,
+  next: MinimapAppliedConfig,
+  force: boolean,
+): boolean {
+  if (force) return true;
+  if (!prev) return true;
+  return (
+    prev.enabled !== next.enabled ||
+    prev.syntaxColors !== next.syntaxColors ||
+    !minimapGuttersEqual(prev.gutters, next.gutters)
+  );
+}
+
+/**
+ * Fase 23: did the inputs the minimap highlights from change between
+ * two states? The package's TextState only re-highlights on doc,
+ * Config, theme-classList or fold changes — never when the language
+ * or the highlighter changes — so Terax must notice that itself and
+ * force a reconfigure, or the minimap stays plain white (default
+ * foreground) on clean files: the editor mounts with an empty
+ * language compartment and the language resolves async afterwards,
+ * so the TextState is built with no parser and never wakes up.
+ *
+ * Two signals, both cheap and DOM-free. The `language` facet
+ * identity catches the language arriving or switching (one Language
+ * object per language, so identity is exact). The probe catches a
+ * theme change: highlightingFor returns the concatenated generated
+ * class names for three common tags, and HighlightStyle.define
+ * generates globally unique class names per HighlightStyle instance,
+ * so the same keyword class means the same highlighter (same
+ * colors) and a different one means the colors moved. One combined
+ * call (an ARRAY of tags — a bare Tag throws "tags is not
+ * iterable") covers keyword, string and comment at once.
+ */
+export function minimapHighlightChanged(
+  prev: EditorState,
+  next: EditorState,
+): boolean {
+  if (prev.facet(language) !== next.facet(language)) return true;
+  const probe = [tags.keyword, tags.string, tags.comment];
+  return highlightingFor(prev, probe) !== highlightingFor(next, probe);
+}
 
 function buildAppliedConfig(
   view: EditorView,
   snapshot: MinimapSnapshot,
-): AppliedConfig {
+): MinimapAppliedConfig {
   return {
     enabled: snapshot.enabled,
+    syntaxColors: snapshot.syntaxColors,
     gutters: snapshot.enabled
       ? buildMinimapGutters({
           diagnostics: diagnosticsForMinimap(view),
@@ -280,25 +355,36 @@ function buildAppliedConfig(
 
 /**
  * Reconfigure the minimap compartment when the config actually
- * changed (setting, diagnostics, hunks, theme). The equality guard
- * also breaks the loop the reconfigure transaction itself would
- * otherwise start through the update listener below.
+ * changed (setting, diagnostics, hunks, theme) — or when forced,
+ * which is how a language/theme arrival wakes the package's
+ * TextState (see minimapHighlightChanged). The equality guard also
+ * breaks the loop the reconfigure transaction itself would
+ * otherwise start through the update listener below. The
+ * syntaxColors flag is forwarded to the package (patched in
+ * patches/@replit__codemirror-minimap@0.5.2.patch): false skips its
+ * highlight passes, so the miniature code draws plain.
  */
-export function syncMinimap(view: EditorView, snapshot: MinimapSnapshot): void {
+export function syncMinimap(
+  view: EditorView,
+  snapshot: MinimapSnapshot,
+  opts?: { force?: boolean },
+): void {
   const next = buildAppliedConfig(view, snapshot);
   const prev = lastApplied.get(view);
-  if (
-    prev &&
-    prev.enabled === next.enabled &&
-    minimapGuttersEqual(prev.gutters, next.gutters)
-  ) {
+  if (!shouldSyncMinimap(prev, next, opts?.force ?? false)) {
     return;
   }
   lastApplied.set(view, next);
   view.dispatch({
     effects: minimapCompartment.reconfigure(
       next.enabled
-        ? [showMinimap.of({ create: createMinimapDom, gutters: next.gutters })]
+        ? [
+            showMinimap.of({
+              create: createMinimapDom,
+              gutters: next.gutters,
+              syntaxColors: next.syntaxColors,
+            }),
+          ]
         : [],
     ),
   });
@@ -307,19 +393,27 @@ export function syncMinimap(view: EditorView, snapshot: MinimapSnapshot): void {
 /**
  * Update listener that keeps the markers fresh when the editor state
  * changes: diagnostics arrive via setDiagnosticsEffect, edits move
- * line numbers. React-side changes (setting toggle, review hunks)
- * are synced by the EditorPane effect calling syncMinimap directly.
+ * line numbers. It also watches for highlight-input changes (the
+ * language arriving async after mount, a theme switch) and forces a
+ * minimap reconfigure for those — the package itself never notices
+ * them. React-side changes (setting toggle, review hunks) are synced
+ * by the EditorPane effect calling syncMinimap directly.
  */
 export function minimapSyncExtension(
   getSnapshot: () => MinimapSnapshot,
 ): Extension {
   return EditorView.updateListener.of((update) => {
+    const highlightChanged = minimapHighlightChanged(
+      update.startState,
+      update.state,
+    );
     if (
+      !highlightChanged &&
       !update.docChanged &&
       !update.transactions.some((tr) => tr.effects.length > 0)
     ) {
       return;
     }
-    syncMinimap(update.view, getSnapshot());
+    syncMinimap(update.view, getSnapshot(), { force: highlightChanged });
   });
 }
