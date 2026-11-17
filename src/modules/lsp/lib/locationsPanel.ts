@@ -43,9 +43,28 @@ export function openLocationsPanel(view: EditorView, spec: PanelSpec): void {
   view.dispatch({ effects: setLocationList.of(spec) });
 }
 
-function closePanel(view: EditorView): void {
+export function closeLocationsPanel(view: EditorView): void {
   view.dispatch({ effects: setLocationList.of(null) });
   view.focus();
+}
+
+// Fase 24.1 — shared X button for the panel headers below. A real
+// <button> (not a div) so it is keyboard-focusable and announces
+// itself; mousedown is prevented so clicking it does not steal the
+// editor selection, while the click event still fires (including
+// keyboard activation via Enter/Space).
+function createCloseButton(
+  label: string,
+  onClose: () => void,
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "cm-lsp-panel-close";
+  button.setAttribute("aria-label", label);
+  button.textContent = "×";
+  button.addEventListener("mousedown", (e) => e.preventDefault());
+  button.addEventListener("click", () => onClose());
+  return button;
 }
 
 function createPanel(view: EditorView, spec: PanelSpec): Panel {
@@ -54,7 +73,12 @@ function createPanel(view: EditorView, spec: PanelSpec): Panel {
 
   const header = document.createElement("div");
   header.className = "cm-lsp-locations-header";
-  header.textContent = `${spec.title} (${spec.items.length})`;
+  const title = document.createElement("span");
+  title.textContent = `${spec.title} (${spec.items.length})`;
+  header.appendChild(title);
+  header.appendChild(
+    createCloseButton("Tutup panel", () => closeLocationsPanel(view)),
+  );
   dom.appendChild(header);
 
   const list = document.createElement("ul");
@@ -82,7 +106,7 @@ function createPanel(view: EditorView, spec: PanelSpec): Panel {
 
   const pick = (i: number) => {
     const item = spec.items[i];
-    closePanel(view);
+    closeLocationsPanel(view);
     spec.onPick(item);
   };
 
@@ -96,7 +120,7 @@ function createPanel(view: EditorView, spec: PanelSpec): Panel {
     } else if (e.key === "Enter") {
       pick(active);
     } else if (e.key === "Escape") {
-      closePanel(view);
+      closeLocationsPanel(view);
     } else {
       return;
     }
@@ -147,7 +171,7 @@ export function openReferenceTreePanel(
   view.dispatch({ effects: setReferenceTree.of(spec) });
 }
 
-function closeReferenceTreePanel(view: EditorView): void {
+export function closeReferenceTreePanel(view: EditorView): void {
   view.dispatch({ effects: setReferenceTree.of(null) });
   view.focus();
 }
@@ -161,7 +185,12 @@ function createReferenceTreePanel(
 
   const header = document.createElement("div");
   header.className = "cm-lsp-references-header";
-  header.textContent = `${spec.title} (${spec.tree.total})`;
+  const title = document.createElement("span");
+  title.textContent = `${spec.title} (${spec.tree.total})`;
+  header.appendChild(title);
+  header.appendChild(
+    createCloseButton("Tutup panel", () => closeReferenceTreePanel(view)),
+  );
   dom.appendChild(header);
 
   const list = document.createElement("ul");

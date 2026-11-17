@@ -374,6 +374,8 @@ const chrome = EditorView.theme({
     backgroundColor: "var(--popover)",
     color: "var(--popover-foreground)",
     "& .cm-lsp-locations-header": {
+      display: "flex",
+      alignItems: "center",
       padding: "5px 10px",
       fontSize: "10.5px",
       fontWeight: "600",
@@ -412,6 +414,8 @@ const chrome = EditorView.theme({
     backgroundColor: "var(--popover)",
     color: "var(--popover-foreground)",
     "& .cm-lsp-references-header": {
+      display: "flex",
+      alignItems: "center",
       padding: "5px 10px",
       fontSize: "10.5px",
       fontWeight: "600",
@@ -482,6 +486,28 @@ const chrome = EditorView.theme({
       marginLeft: "auto",
       flexShrink: "0",
       color: "var(--muted-foreground)",
+    },
+  },
+
+  // Fase 24.1: shared X button in the LSP panel headers (flat list and
+  // references tree). Same tokens as the search panel's close button
+  // above: 20x20, transparent, muted until hovered.
+  ".cm-lsp-panel-close": {
+    marginLeft: "auto",
+    flexShrink: "0",
+    width: "20px",
+    height: "20px",
+    padding: "0",
+    lineHeight: "1",
+    borderRadius: "5px",
+    border: "none",
+    background: "transparent",
+    color: "var(--muted-foreground)",
+    fontSize: "14px",
+    cursor: "pointer",
+    "&:hover": {
+      backgroundColor: "var(--accent)",
+      color: "var(--foreground)",
     },
   },
 
