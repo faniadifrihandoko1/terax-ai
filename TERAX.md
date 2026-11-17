@@ -1606,6 +1606,85 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   editor utuh, nyalakan lagi - muncul kembali). Warna marker
   di-resolve saat sync, jadi ganti tema baru terlihat penuh setelah
   edit/scroll/diag berikutnya. Tab ai-diff di luar scope fase ini.
+  Fase 23 (warna sintaks di editor + minimap + toggle warna minimap,
+  DEL-120), DONE - perluasan scope dari klarifikasi user 2026-11-17
+  09:37: bukan hanya minimap, kode di editor juga harus lebih
+  berwarna ("bukan warna di minimapnya aja tapi di codenya juga").
+  Diagnosis minimap - dua penyebab, keduanya terbukti dari kode:
+  (1) race - editor mount dengan `languageCompartment` kosong dan
+  bahasa resolve async (`resolveLanguage` -> dynamic `def.loader()`),
+  jadi TextState paket dibangun tanpa parser (`state.facet(language)`
+  undefined -> tidak ada tree -> tidak ada highlight), dan
+  `shouldUpdate`-nya hanya bereaksi ke docChanged / Config / theme
+  classList / fold, bukan ke perubahan bahasa/highlighter - jadi
+  tidak pernah re-highlight; baru sembuh sendiri saat diagnostik
+  datang (gutters berubah -> Config berubah) atau user mengetik
+  (docChanged); file bersih tanpa diagnostik tetap putih sampai user
+  mengetik; ganti tema sesama gelap juga stale (classList tidak
+  berubah); (2) palet tema default sendiri pastel (lihat diagnosis
+  editor). Hipotesis probe mock-token gagal DITOLAK - probe bekerja
+  (`getFontInfo` membuat mock `<span class="tok-...">` di contentDOM
+  dan membaca computed `color`); penyebabnya race + palet. Diagnosis
+  editor: tema default github-dark (@uiw, pairing terax-default)
+  memakai string #a5d6ff vs variable/number/operator #79c0ff (satu
+  biru pucat yang sama), keyword = typeName #ff7b72, func = property
+  = className #d2a8ff, foreground #c9d1d9 untuk semua yang tak
+  ter-highlight - dari kejauhan kode terbaca putih polos; light:
+  string #032f62 nyaris hitam, variable/number/operator #005cc5.
+  Perbaikan editor: github-dark/light dibangun ulang secara lokal
+  lewat pola `build()` di `cmThemes.ts` (palet diekspor sebagai data
+  supaya test mengunci aturan satu-hue-per-kelompok-token); hue tetap
+  keluarga primer GitHub, chrome @uiw verbatim (bg/fg/caret/selection/
+  lineHighlight/gutter), operator/punctuation sengaja tetap abu-abu
+  (struktur, bukan konten), komentar italic (bawaan `build()`); id
+  dan label tema tidak berubah, tanpa pemilih tema baru. Palet dark:
+  keyword #ff7b72, string #7ee787, number #79c0ff, constant #ffa657,
+  func #d2a8ff, variable #e3b341, property #39c5cf, type #ff9bce;
+  light: keyword #d73a49, string #116329, number #005cc5, constant
+  #e36209, func #6f42c1, variable #9a6700, property #0a3069, type
+  #8250df. `themes.ts` kini mengimpor githubDark/githubLight dari
+  `./cmThemes`, bukan dari @uiw. Perbaikan minimap:
+  `minimapHighlightChanged` (identitas facet `language` + probe
+  `highlightingFor` atas [keyword, string, comment] - class hasil
+  `HighlightStyle.define` unik per instance, jadi perubahan kelas =
+  perubahan warna) + flag `force` di `syncMinimap` lewat
+  `shouldSyncMinimap` yang diekstrak; listener memaksa reconfigure
+  saat input highlight berubah. Minimap membaca warna yang sama
+  lewat HighlightStyle editor (probe `getFontInfo`) - satu sumber
+  kebenaran. Koreksi kecil yang ditemukan saat implementasi:
+  `highlightingFor` menerima ARRAY tag - Tag tunggal melempar "tags
+  is not iterable". Toggle warna: patch pnpm
+  `@replit/codemirror-minimap`
+  (`patches/@replit__codemirror-minimap@0.5.2.patch`,
+  `patchedDependencies` di `pnpm-workspace.yaml`) - opsi
+  `syntaxColors` (default true) yang melewatkan kedua `highlightTree`
+  saat false; setting `editorMinimapColors` (default ON) di store +
+  baris "Syntax colors in the minimap" di Settings -> General ->
+  Editor; `EditorPane` meneruskan ke kedua call site
+  `buildMinimapSnapshot` (+ deps effect); saat OFF hanya minimap
+  yang polos, editor tetap berwarna. Insiden: `pnpm patch-commit`
+  gagal EPERM chown pada `pnpm-workspace.yaml.<tmp>` (file ber-gid
+  nogroup) - workaround `chgrp 0` lalu ulangi, sama seperti pelajaran
+  Fase 22; `pnpm install --frozen-lockfile` OK (patch teraplikasi
+  ulang). Test (TDD, commit test dulu dan FAIL sebelum implementasi
+  ada): 25 test baru - `minimap.test.ts` 12 (detektor perubahan
+  highlight di EditorState asli termasuk race bahasa-datang, guard
+  sync, snapshot syntaxColors), `editorMinimap.test.ts` 3 (default
+  editorMinimapColors), `cmThemes.test.ts` 6 (distinctness palet +
+  chrome @uiw), `themes.test.ts` 4 (EDITOR_THEME_EXT memetakan ke
+  build lokal + HighlightStyle terbaca probe). Verifikasi:
+  check-types 0 error; lint 0 error / 88 warning / 1 info (baseline);
+  full test 2652/2652 hijau 2x (+25); tanpa perubahan Rust. Batas
+  jujur: repo tidak punya DOM env, jadi render minimap, warna canvas,
+  dan warna editor live tidak teruji - hanya unit murni di bawahnya
+  (nilai palet sebagai data, detektor perubahan highlight di
+  EditorState asli, guard sync); pembuktian end-to-end HARUS dicek
+  di laptop (cek persis: install build Fase 23, buka file TSX -
+  keyword merah, string hijau, variable kuning, property teal, type
+  pink, func ungu di editor; minimap menampilkan warna yang sama
+  tanpa mengetik; matikan "Syntax colors in the minimap" - minimap
+  jadi polos, editor tetap berwarna; matikan Minimap - minimap
+  hilang, layout utuh). Tab ai-diff di luar scope fase ini.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
