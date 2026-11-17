@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { EditorState } from "@codemirror/state";
+import { javascript } from "@codemirror/lang-javascript";
+import { python } from "@codemirror/lang-python";
+import { atomone } from "@uiw/codemirror-theme-atomone";
+import { githubDark } from "@uiw/codemirror-theme-github";
 import {
   buildMinimapGutters,
   buildMinimapSnapshot,
   diagnosticMinimapGutter,
   hunkMinimapGutter,
   minimapGuttersEqual,
+  minimapHighlightChanged,
   minimapMarkerColors,
   resolveMinimapDark,
+  shouldSyncMinimap,
+  type MinimapAppliedConfig,
 } from "./minimap";
 
 // Fase 22: minimap ala Antigravity. Marker dihitung murni dari data
@@ -210,6 +218,7 @@ describe("buildMinimapSnapshot", () => {
     expect(
       buildMinimapSnapshot({
         enabled: true,
+        syntaxColors: true,
         reviewChangeSet: {
           hunks: [
             { index: 0, proposedFrom: 4, proposedTo: 7 },
@@ -221,6 +230,7 @@ describe("buildMinimapSnapshot", () => {
       }),
     ).toEqual({
       enabled: true,
+      syntaxColors: true,
       hunks: [
         { proposedFrom: 4, proposedTo: 7, state: "undecided" },
         { proposedFrom: 10, proposedTo: 10, state: "rejected" },
@@ -231,6 +241,7 @@ describe("buildMinimapSnapshot", () => {
   it("drops hunks when there is no review or it is not reviewable", () => {
     const base = {
       enabled: false,
+      syntaxColors: false,
       reviewChangeSet: {
         hunks: [{ index: 0, proposedFrom: 0, proposedTo: 1 }],
       },
@@ -241,20 +252,133 @@ describe("buildMinimapSnapshot", () => {
     // snapshot, so toggling it back on needs no new review data.
     expect(buildMinimapSnapshot(base)).toEqual({
       enabled: false,
+      syntaxColors: false,
       hunks: [{ proposedFrom: 0, proposedTo: 1, state: "undecided" }],
     });
     expect(buildMinimapSnapshot({ ...base, reviewable: false })).toEqual({
       enabled: false,
+      syntaxColors: false,
       hunks: [],
     });
     expect(
       buildMinimapSnapshot({ ...base, reviewChangeSet: null }),
-    ).toEqual({ enabled: false, hunks: [] });
+    ).toEqual({ enabled: false, syntaxColors: false, hunks: [] });
+  });
+
+  it("defaults syntaxColors to on when the caller omits it", () => {
+    expect(
+      buildMinimapSnapshot({
+        enabled: true,
+        reviewChangeSet: null,
+        reviewDecisions: new Map(),
+        reviewable: true,
+      }),
+    ).toEqual({ enabled: true, syntaxColors: true, hunks: [] });
   });
 });
 
 describe("resolveMinimapDark", () => {
   it("is false without a DOM (node test env)", () => {
     expect(resolveMinimapDark()).toBe(false);
+  });
+});
+
+// Fase 23: the minimap is built before the language arrives (the
+// editor mounts with an empty language compartment; the language
+// resolves async), and the package's TextState only re-highlights
+// on doc/config/theme/fold changes — never on a language or
+// highlighter change. Terax must therefore notice when the
+// highlight inputs change and force a minimap reconfigure, or the
+// minimap stays plain white (default foreground) forever on clean
+// files. These tests prove the detector on real EditorStates: no
+// DOM is needed, only facets.
+describe("minimapHighlightChanged", () => {
+  const doc = "const answer = 42;\n";
+  const js = javascript();
+  const py = python();
+
+  function stateWith(theme: unknown, lang?: unknown): EditorState {
+    return EditorState.create({
+      doc,
+      extensions: [
+        theme as never,
+        ...(lang ? [lang as never] : []),
+      ],
+    });
+  }
+
+  it("is false for the same state", () => {
+    const state = stateWith(githubDark, js);
+    expect(minimapHighlightChanged(state, state)).toBe(false);
+  });
+
+  it("is false when nothing changed (separately built, same inputs)", () => {
+    expect(
+      minimapHighlightChanged(
+        stateWith(githubDark, js),
+        stateWith(githubDark, js),
+      ),
+    ).toBe(false);
+  });
+
+  it("is true when the language arrives (the Fase 23 race)", () => {
+    expect(
+      minimapHighlightChanged(stateWith(githubDark), stateWith(githubDark, js)),
+    ).toBe(true);
+  });
+
+  it("is true when the language switches", () => {
+    expect(
+      minimapHighlightChanged(stateWith(githubDark, js), stateWith(githubDark, py)),
+    ).toBe(true);
+  });
+
+  it("is true when the theme changes (same language)", () => {
+    expect(
+      minimapHighlightChanged(stateWith(githubDark, js), stateWith(atomone, js)),
+    ).toBe(true);
+  });
+});
+
+// Fase 23: the sync guard must let a forced reconfigure through
+// (that is what wakes the package's TextState after the language
+// arrives) and must notice the new syntaxColors flag, so toggling
+// the color setting re-renders the minimap.
+describe("shouldSyncMinimap", () => {
+  const config = (over: Partial<MinimapAppliedConfig> = {}): MinimapAppliedConfig => ({
+    enabled: true,
+    gutters: [],
+    syntaxColors: true,
+    ...over,
+  });
+
+  it("syncs the first time (no previous config)", () => {
+    expect(shouldSyncMinimap(undefined, config(), false)).toBe(true);
+  });
+
+  it("skips an identical config", () => {
+    expect(shouldSyncMinimap(config(), config(), false)).toBe(false);
+  });
+
+  it("forces through an identical config when asked", () => {
+    expect(shouldSyncMinimap(config(), config(), true)).toBe(true);
+  });
+
+  it("syncs when the gutters change", () => {
+    expect(
+      shouldSyncMinimap(config(), config({ gutters: [{ 3: "#c0392f" }] }), false),
+    ).toBe(true);
+  });
+
+  it("syncs when syntaxColors flips", () => {
+    expect(
+      shouldSyncMinimap(config(), config({ syntaxColors: false }), false),
+    ).toBe(true);
+  });
+
+  it("syncs when enabled flips", () => {
+    expect(shouldSyncMinimap(config(), config({ enabled: false }), false)).toBe(
+      true,
+    );
   });
 });

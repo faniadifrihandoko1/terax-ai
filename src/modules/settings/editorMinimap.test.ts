@@ -40,3 +40,26 @@ describe("editorMinimap default (Fase 22)", () => {
     expect((await loadPreferences()).editorMinimap).toBe(false);
   });
 });
+
+describe("editorMinimapColors default (Fase 23)", () => {
+  beforeEach(() => {
+    entries.value = [];
+    vi.resetModules();
+  });
+
+  it("is on by default", async () => {
+    const { DEFAULT_PREFERENCES } = await import("./store");
+    expect(DEFAULT_PREFERENCES.editorMinimapColors).toBe(true);
+  });
+
+  it("applies to users who never stored a choice", async () => {
+    const { loadPreferences } = await import("./store");
+    expect((await loadPreferences()).editorMinimapColors).toBe(true);
+  });
+
+  it("never overrides an explicit stored choice", async () => {
+    entries.value = [["editorMinimapColors", false]];
+    const { loadPreferences } = await import("./store");
+    expect((await loadPreferences()).editorMinimapColors).toBe(false);
+  });
+});
