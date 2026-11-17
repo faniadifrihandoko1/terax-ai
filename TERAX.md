@@ -2152,6 +2152,47 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   mitigasinya), sidebar auto-reveal (Fase 27), kode attach-failure
   LSP (Fase 26), warna sintaks/minimap (Fase 23), review inline
   (Fase 4), hunk bars (Fase 21), jalur ESLint, panel reference.
+  Fase 29 (auto-import completion tidak menulis import, DEL-128),
+  DONE - user: Ctrl+Space di `useGetModulePosition` menampilkan
+  kandidat auto-import (`useGetModulePosition`,
+  `useGetModulePositionById` dari `@/hooks/query/module-position`),
+  tapi klik hanya memasukkan namanya - statement import tidak ikut
+  tertulis (screenshot). Diagnosis (terbukti dengan fixture +
+  typescript-language-server 6.1.0 + TypeScript 5.9.3 asli, bukan
+  tebakan): item di `textDocument/completion` TIDAK membawa
+  `additionalTextEdits` (hanya label/detail/kind/data.cacheId) -
+  edit import baru muncul setelah `completionItem/resolve`
+  (`import { useGetModulePosition } from "...";` di (0,0)); varian
+  dengan `additionalTextEdits` di `resolveSupport` tidak mengubah
+  list - server tidak membutuhkan capability itu. Di sisi client,
+  `codemirror-languageserver@1.22.1` menerapkan `additionalTextEdits`
+  di `apply()` tapi tidak pernah me-resolve (resolve hanya untuk
+  dokumentasi di `completion.info`), jadi apply memakai item yang
+  belum di-resolve. Fix: patch pnpm
+  `patches/codemirror-languageserver@1.22.1.patch` - `apply()` kini
+  async dan me-resolve item saat diterima bila server mengiklankan
+  `resolveProvider`, lalu menggabungkan `textEdit` /
+  `additionalTextEdits` hasil resolve sebelum dispatch; gagal resolve
+  atau tanpa resolveProvider = fallback ke item list (hanya label).
+  `client.ts` juga mengiklankan `additionalTextEdits` di
+  `resolveSupport` (spec-correct; yang dikonsumsi client sekarang
+  dideklarasikan). Aturan Fase 16 tidak berubah (hanya preset
+  pertama menyimpan autocompletion). Verifikasi: check-types 0 error;
+  lint 0 error / 88 warning / 1 info (baseline); full test 2717/2717
+  hijau 2x (+4, semua di `completionAutoImport.test.ts`, TDD);
+  `pnpm install --frozen-lockfile` OK (patch ter-apply bersih); tanpa
+  perubahan Rust. Batas jujur: repo tidak punya DOM env, jadi klik
+  completion -> import tertulis live TIDAK teruji - yang teruji adalah
+  `requestCompletion` + `apply` library dengan fake client dan
+  fixture server di bawahnya; pembuktian end-to-end HARUS dicek di
+  laptop (cek persis: install build Fase 29, di file tanpa import
+  ketik `useGetModulePosition` lalu Ctrl+Space, klik kandidat dari
+  `@/hooks/query/...` - import harus tertulis di baris atas file).
+  Di luar scope: panel reference + tombol X (Fase 24/24.1), klik
+  sidebar/DnD (Fase 25), warna sintaks/minimap (Fase 23), review
+  inline (Fase 4), hunk bars (Fase 21), Changed Files/Accept all /
+  tab recreation (Fase 20/28), jalur ESLint, kode attach-failure LSP
+  (Fase 26), auto-reveal sidebar (Fase 27).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
