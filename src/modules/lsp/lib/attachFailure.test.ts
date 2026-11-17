@@ -57,6 +57,12 @@ describe("attachFailureReason", () => {
     expect(reason).toContain("4");
     expect(reason).toContain("Restart");
   });
+
+  it("initialize-failed says the server never finished starting", () => {
+    const reason = attachFailureReason(tsPreset, "initialize-failed");
+    expect(reason).toContain("initializ");
+    expect(reason).toContain("Restart");
+  });
 });
 
 describe("recordAttachFailure / clearAttachFailure", () => {

@@ -4,6 +4,11 @@ import type { Extension } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import {
+  attachFailureReason,
+  clearAttachFailure,
+  recordAttachFailure,
+} from "./attachFailure";
 import type { TeraxLspClient } from "./client";
 import { detectBinary } from "./detect";
 import { getLspNavigator } from "./navigator";
@@ -116,7 +121,19 @@ async function acquireForPreset(
   if (currentWorkspaceEnv().kind !== "local") return null;
   if (usePreferencesStore.getState().lspActivation[preset.id] !== "enabled")
     return null;
-  if (!(await detectBinary(preset.command))) return null;
+  // Fase 26: every gate below used to `return null` with no record
+  // anywhere — no diagnostics, no squiggle, no pill, nothing. The
+  // user could not tell whether Terax was broken, the server was
+  // missing, or the project was unrecognised. Each gate now records
+  // a reason in the runtime store, which the LSP status pill already
+  // renders as an error with Restart/Disable.
+  if (!(await detectBinary(preset.command))) {
+    recordAttachFailure(
+      preset.id,
+      attachFailureReason(preset, "binary-missing"),
+    );
+    return null;
+  }
 
   // No project root means no session: a per-directory fallback multiplied
   // servers per open file and burned gigabytes.
@@ -125,9 +142,21 @@ async function acquireForPreset(
     path,
     markers,
   }).catch(() => null);
-  if (!root) return null;
+  if (!root) {
+    recordAttachFailure(
+      preset.id,
+      attachFailureReason(preset, "no-root", { path }),
+    );
+    return null;
+  }
   const key = `${preset.id}\u0000${root}`;
-  if (crashedOut(key)) return null;
+  if (crashedOut(key)) {
+    recordAttachFailure(
+      preset.id,
+      attachFailureReason(preset, "crashed-out"),
+    );
+    return null;
+  }
   if (
     !sessions.has(key) &&
     [...sessions.values()].filter((m) => m.preset.id === preset.id).length >=
@@ -135,6 +164,12 @@ async function acquireForPreset(
   ) {
     console.warn(
       `[lsp] session cap reached for ${preset.id}, skipping ${root}`,
+    );
+    recordAttachFailure(
+      preset.id,
+      attachFailureReason(preset, "session-cap", {
+        maxSessions: MAX_SESSIONS_PER_PRESET,
+      }),
     );
     return null;
   }
@@ -335,16 +370,35 @@ async function createSession(
   }
 
   void client.initializePromise.then(() => {
-    if (sessions.get(key) === managed) {
-      const runtime = useLspRuntimeStore.getState();
-      runtime.clearFailed(preset.id);
-      runtime.upsertSession({
+    if (sessions.get(key) !== managed) return;
+    // initializePromise resolves whether initialize succeeded or not
+    // (the library swallows the failure into onError); only a
+    // successful initialize sets client.ready. A failed initialize
+    // used to leave the session marked "running" while every request
+    // returned null and didChange was never sent — diagnostics never
+    // arrived and nothing said why. Tear the dead session down and
+    // record the failure so the pill shows it with a Restart path.
+    // removeSessionQuiet (no generation bump) on purpose: a bump
+    // would re-acquire immediately and respawn a server that cannot
+    // initialize, in a loop.
+    if (client.ready) {
+      clearAttachFailure(preset.id);
+      useLspRuntimeStore.getState().upsertSession({
         key,
         presetId: preset.id,
         root,
         status: "running",
       });
+      return;
     }
+    managed.closing = true;
+    sessions.delete(key);
+    managed.client.close();
+    useLspRuntimeStore.getState().removeSessionQuiet(key);
+    recordAttachFailure(
+      preset.id,
+      attachFailureReason(preset, "initialize-failed"),
+    );
   });
 
   return managed;
