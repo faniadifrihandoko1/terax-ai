@@ -5,7 +5,7 @@ import { createTheme } from "@uiw/codemirror-themes";
 // Syntax palette shared by every locally-defined theme. The editor renders as
 // glass over the app surface, so `background`/`selection`/`caret` here are
 // overridden by buildSharedExtensions() — only the syntax colors really land.
-type Palette = {
+export type Palette = {
   mode: "light" | "dark";
   bg: string;
   fg: string;
@@ -415,3 +415,84 @@ export const rosePineDawn = build({
   link: "#907aa9",
   invalid: "#b4637a",
 });
+
+// Fase 23 — enriched GitHub Dark / Light.
+//
+// These two are the default editor theme (terax-default pairs dark ->
+// github-dark, light -> github-light), and the raw @uiw builds made
+// code read as plain white: their palette is pastel and several
+// token groups share one color (dark: string #a5d6ff vs
+// variable/number/operator #79c0ff — one pale blue; keyword =
+// typeName #ff7b72; func = property = className #d2a8ff; light:
+// string #032f62 near-black, variable/number/operator #005cc5).
+// The palettes below keep the GitHub hue family and the exact @uiw
+// chrome settings (background/foreground/caret/selection/
+// lineHighlight/gutter — same theme, not a new one), but give every
+// common token group its own hue, so code reads as colorful at a
+// glance. Hues are all GitHub primer hues; only the assignment is
+// new. Operators/punctuation stay muted gray on purpose — they are
+// structure, not content. The palettes are exported as data (not
+// inlined in build()) so cmThemes.test.ts can lock the
+// one-hue-per-token-group rule. The minimap reads these same colors
+// through the editor's HighlightStyle, so editor and minimap share
+// one source of truth. Tradeoff, accepted: in light mode the JSX tag
+// shares green with strings (separated by the blue attribute name
+// and the quotes); in dark mode the tag is blue instead, sharing
+// with numbers, which almost never sit inside a tag.
+export const githubDarkPalette: Palette = {
+  mode: "dark",
+  bg: "#0d1117",
+  fg: "#c9d1d9",
+  caret: "#c9d1d9",
+  selection: "#003d73",
+  lineHighlight: "#36334280",
+  gutterFg: "#8b949e",
+  comment: "#8b949e",
+  keyword: "#ff7b72",
+  string: "#7ee787",
+  number: "#79c0ff",
+  constant: "#ffa657",
+  func: "#d2a8ff",
+  variable: "#e3b341",
+  property: "#39c5cf",
+  type: "#ff9bce",
+  operator: "#8b949e",
+  tag: "#79c0ff",
+  tagBracket: "#8b949e",
+  attr: "#d2a8ff",
+  attrValue: "#7ee787",
+  heading: "#79c0ff",
+  link: "#79c0ff",
+  invalid: "#ff7b72",
+};
+
+export const githubDark = build(githubDarkPalette);
+
+export const githubLightPalette: Palette = {
+  mode: "light",
+  bg: "#fff",
+  fg: "#24292e",
+  caret: "#24292e",
+  selection: "#BBDFFF",
+  lineHighlight: "#f6f8fa",
+  gutterFg: "#6e7781",
+  comment: "#6a737d",
+  keyword: "#d73a49",
+  string: "#116329",
+  number: "#005cc5",
+  constant: "#e36209",
+  func: "#6f42c1",
+  variable: "#9a6700",
+  property: "#0a3069",
+  type: "#8250df",
+  operator: "#6a737d",
+  tag: "#116329",
+  tagBracket: "#6a737d",
+  attr: "#005cc5",
+  attrValue: "#116329",
+  heading: "#6f42c1",
+  link: "#005cc5",
+  invalid: "#cf222e",
+};
+
+export const githubLight = build(githubLightPalette);

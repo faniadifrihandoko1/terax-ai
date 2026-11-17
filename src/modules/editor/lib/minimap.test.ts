@@ -3,7 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
 import { atomone } from "@uiw/codemirror-theme-atomone";
-import { githubDark } from "@uiw/codemirror-theme-github";
+import { githubDark } from "./cmThemes";
 import {
   buildMinimapGutters,
   buildMinimapSnapshot,

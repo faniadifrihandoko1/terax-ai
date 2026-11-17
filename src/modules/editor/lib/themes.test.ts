@@ -34,8 +34,10 @@ describe("EDITOR_THEME_EXT github themes (Fase 23)", () => {
     // (getFontInfo probes tok-* spans in the editor DOM), so a
     // non-empty class here is the unit-level proof that the enriched
     // colors reach the minimap's single source of truth.
-    expect(highlightingFor(state, tags.keyword)).toBeTruthy();
-    expect(highlightingFor(state, tags.string)).toBeTruthy();
-    expect(highlightingFor(state, tags.comment)).toBeTruthy();
+    // highlightingFor takes an ARRAY of tags (its HighlightStyle
+    // iterates them); a bare Tag throws "tags is not iterable".
+    expect(highlightingFor(state, [tags.keyword])).toBeTruthy();
+    expect(highlightingFor(state, [tags.string])).toBeTruthy();
+    expect(highlightingFor(state, [tags.comment])).toBeTruthy();
   });
 });
