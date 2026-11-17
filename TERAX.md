@@ -1845,6 +1845,101 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   tidak konfirmasi TIDAK dijelaskan oleh mekanisme ini - bila itu
   terjadi setelah fix ini, itu masalah berbeda. Tab ai-diff di luar
   scope fase ini.
+  Fase 26 (diagnostics TypeScript tidak muncul di editor, DEL-125),
+  DONE - user: `tsc --noEmit` di proyek Next.js-nya
+  (modernize-next-free) melaporkan 2x error TS2322 di
+  `container.tsx:179` dan `:187` (`partData={testData.part[0]}`
+  tidak assignable ke `NumericPart` karena `NumericQuestion.image`
+  bertipe `string` tapi datanya berisi `StaticImageData`); file
+  SUDAH dibuka di Terax tapi tetap tidak merah - tidak ada squiggle,
+  tidak ada label merah. Di Antigravity error yang sama tampil
+  sebagai error. Ini BUKAN error ESLint - ESLint tidak memeriksa
+  kesesuaian tipe; pelapornya adalah TypeScript language server.
+  Belum pernah ada satu pun error tipe TS yang terkonfirmasi tampil
+  di Terax user (kasus `cvReport` kemarin itu dari ESLint, bukan
+  TS) - jadi ini kemungkinan gap "tidak pernah jalan", bukan
+  regresi. Diagnosis (dibuktikan rantai demi rantai, bukan tebakan):
+  (1) Server MENGELUARKAN publishDiagnostics - fixture yang
+  mereplika kasus user (TS2322 StaticImageData vs string) + tsserver
+  asli dari `node_modules/typescript` mengembalikan tepat 2x TS2322
+  dengan kode/pesan/posisi yang benar (tsc 0 vs 2 error membuktikan
+  fixture-nya); path fixture berkarakter CJK + spasi
+  (`D:\现代 项目\...`) menghasilkan URI yang byte-identik dengan
+  `pathToFileUri` Terax
+  (`file:///D:/.../%E7%8E%B0%E4%BB%A3%20%E9%A1%B9%E7%9B%AE/...`),
+  jadi tidak ada mismatch encoding/case/normalisasi. (2) Transport
+  framing utuh - pesan Content-Length lolos semua pemeriksaan
+  validitas/UTF-8/batas tanpa pemotongan diam-diam. (3) Library
+  menghantar ke state editor - harness dengan
+  codemirror-languageserver 1.22.1 asli + EditorState/EditorView +
+  lintGutter asli: publishDiagnostics untuk URI dokumen mendarat di
+  field diagnostics editor (2 diagnostics, range tepat); URI asing
+  benar diabaikan; lapisan merge ESLint (`mergeDiagnostics`,
+  `eslintDiagnostics`) mempertahankan diagnostics TS apa adanya.
+  (4) Audit gate mount: attach membutuhkan activation enabled +
+  binary terdeteksi + root ter-resolve + tidak crashed-out + di
+  bawah cap sesi + dokumen ready + langId cocok - dan SETIAP gate
+  itu gagal DIAM-DIAM (`return null` / `console.warn` saja, tanpa
+  toast, tanpa status pill, tanpa log yang bisa dilihat user); pill
+  hanya me-render sesi atau entri `failed`, dan keduanya tidak ada
+  - jadi "tidak merah" tidak bisa dibedakan dari "server tidak
+  pernah attach". (5) Initialize gagal juga diam-diam:
+  `initializePromise` library resolve baik sukses maupun gagal
+  (error ditelan ke onError -> console.error saja);
+  `client.ready` hanya true bila initialize sukses; createSession
+  menandai sesi "running" tanpa syarat - sesi mati (semua request
+  null, didChange tidak pernah terkirim) tampil sebagai "running".
+  Hipotesis lama Fase 10.2 (dokumen tidak ready / file OneDrive
+  CJK gagal dibaca) TIDAK terbukti sebagai penyebab - tetap mungkin
+  sebagai salah satu gate, tapi cacat yang terbukti adalah
+  kebisuannya sendiri: gate manapun yang gagal, tidak ada yang
+  muncul. Perbaikan: modul baru
+  `src/modules/lsp/lib/attachFailure.ts` -
+  `attachFailureReason` per gate (binary-missing / no-root /
+  crashed-out / session-cap / initialize-failed) ditulis untuk
+  user (apa yang hilang + apa yang harus dilakukan) dan
+  `recordAttachFailure` / `clearAttachFailure` ke map `failed` di
+  runtime store yang sudah ada - pill sudah me-render ErrorPill
+  (alasan + Restart/Disable) dari map itu, jadi tidak ada UI baru.
+  `sessionManager.ts`: setiap gate di `acquireForPreset` kini
+  mencatat alasannya; `.then` initialize di `createSession` kini
+  memeriksa `client.ready` - sukses: clear + "running" (tidak
+  berubah); gagal: teardown sesi mati (closing=true, hapus dari
+  map, `client.close()` yang mematikan proses server via lsp_kill,
+  `removeSessionQuiet`) + catat initialize-failed.
+  `removeSessionQuiet` disengaja (tanpa generation bump): bump
+  akan memicu re-acquire seketika dan me-respawn server yang tidak
+  bisa initialize, berulang-ulang. Restart dari pill sudah
+  membersihkan `failed` + bump generation -> re-acquire.
+  Keputusan desain: tanpa toast baru (pill adalah satu-satunya
+  permukaan, supaya buka dokumen tidak men-spam toast); tanpa
+  recordCrash untuk initialize gagal (Restart user itu eksplisit,
+  tidak dihitung menuju crashed-out); tanpa clear saat acquire
+  (cabang .then sudah menutup siklus hidupnya - clear di acquire
+  bisa menghapus kegagalan yang baru dicatat oleh initialize yang
+  sudah settle). Test (TDD, commit test dulu dan FAIL sebelum
+  implementasi ada): 10 test baru di `attachFailure.test.ts` -
+  alasan per gate + record/clear/overwrite/no-op di store asli.
+  Verifikasi: check-types 0 error; lint 0 error / 88 warning / 1
+  info (baseline); full test 2680/2680 hijau di run 1 dan run 3
+  (+10) - run 2 ada 1 file gagal yang tidak ter-reproduksi di run 1
+  maupun run 3 (identitas file tidak tertangkap karena output
+  terpotong tail, diduga flake VM seperti di Fase 24); tanpa
+  perubahan Rust. Batas jujur: pill bersifat per-preset, bukan
+  per-root - bila ada sesi untuk root lain dari preset yang sama,
+  sesi itu menang atas `failed` di `useLspHint`, jadi kegagalan
+  attach per-root tersembunyi di balik pill "active" root lain
+  (tetap tercatat di store, tapi tidak tampil). Squiggle merah live
+  TIDAK teruji (repo tidak punya DOM env, tidak ada akses ke
+  laptop/proyek user) - fix ini membuat kegagalan TERLIHAT; langkah
+  berikut HARUS dicek di laptop (cek persis: install build Fase 26,
+  buka container.tsx, dan laporkan apa yang ditampilkan pill -
+  teks error vs "TypeScript LSP" running - jawaban itu yang
+  memberitahu gate mana yang gagal di mesin user). Di luar scope:
+  panel reference + tombol X (Fase 24/24.1), klik sidebar/DnD
+  (Fase 25), warna sintaks/minimap (Fase 23), review inline
+  (Fase 4), hunk bars (Fase 21), Changed Files/Accept all
+  (Fase 20), jalur ESLint, tab ai-diff.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
