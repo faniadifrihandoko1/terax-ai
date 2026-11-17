@@ -1789,6 +1789,62 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   fokus kembali ke editor; sama untuk panel datar F12 multi-definisi;
   Esc dan klik baris tetap menutup seperti sebelumnya). Tab ai-diff
   di luar scope fase ini.
+  Fase 25 (klik file di sidebar tidak membuka/mengaktifkan tab,
+  DEL-123), DONE - user: klik file index.ts di sidebar tidak
+  mengarahkan ke file itu / tab tidak aktif; user tidak menjawab
+  apakah tab tidak terbuka sama sekali atau terbuka tapi tidak aktif,
+  jadi diagnosis mencakup kedua kasus. Diagnosis (terbukti dari kode,
+  bukan tebakan): rantai klik SELAIN drag-and-drop dinyatakan tidak
+  bersalah - handler klik TreeRow (onSelectPath lalu onOpenFile),
+  handleOpenFile di App.tsx (openFileTab(path, pin ?? false)),
+  planFileTabOpen + openFileTab (preview slot diganti/dibuat lalu
+  setActiveId, tanpa satu pun pemanggil activate:false), sync space
+  (setActiveSpaceForNewTabs), render EditorStack/WorkspaceSurface
+  (visibilitas dari activeId), dan path baris (joinPath) semuanya
+  benar; renameInProgress yang macet juga tidak terbukti (akan
+  terlihat input rename terbuka). Penyebab pasti: supresi klik
+  drag-and-drop di `useExplorerDnd.ts` - `onPointerDown` memasang
+  listener window; begitu pointer bergerak >= 5px (THRESHOLD) drag
+  dianggap aktif (ghost muncul); saat pointerup, `end()` selalu
+  menyetel `suppressClickRef.current = true`, dan `onClickCapture`
+  (fase capture di container scroll, jalan SEBELUM onClick baris)
+  lalu `preventDefault()` + `stopPropagation()` - jadi klik yang
+  jarinya sedikit bergeser (sangat umum di trackpad) TIDAK PERNAH
+  sampai ke `TreeRow.handleClick`: tidak ada perubahan seleksi,
+  tidak ada onOpenFile, tidak ada tab, tidak ada aktivasi - persis
+  gejala yang dilaporkan (klik yang bersih tanpa gerakan tetap
+  jalan, itulah kenapa bug ini terasa kadang-kadang). Perbaikan:
+  `finishExplorerDrag` kini mengembalikan boolean - true hanya bila
+  drag BENAR-BENAR memindahkan sesuatu (path target menangani drop,
+  atau onMove dipanggil dengan target nyata); `end()` hanya menyetel
+  `suppressClickRef` bila `moved` true. Drag no-op (dijatuhkan di
+  tempat semula - folder yang sama / ruang kosong / dibatalkan)
+  membiarkan klik lewat, sehingga klik membuka file di bawah pointer
+  seperti yang diinginkan user. Threshold tetap 5px (rasa drag tidak
+  berubah); drag sungguhan tetap men-suppress klik sesudahnya
+  (pointer berada di atas target drop, klik di sana tidak boleh
+  membuka/men-toggle target itu). Tidak berubah: klik folder tetap
+  expand/collapse, Shift/Ctrl+klik tetap multi-select tanpa membuka
+  file, double-click tetap rename, DnD tetap jalan. Test (TDD, commit
+  test dulu dan FAIL sebelum implementasi ada): 1 test baru di
+  `useExplorerDnd.test.ts` - finishExplorerDrag melaporkan true saat
+  drop ditangani path target / onMove dipanggil, false saat
+  dibatalkan, saat drop no-op tanpa target, dan saat path target
+  menolak drop. Verifikasi: check-types 0 error; lint 0 error / 88
+  warning / 1 info (baseline); full test 2670/2670 hijau 2x (+1);
+  tanpa perubahan Rust. Batas jujur: repo tidak punya DOM env, jadi
+  urutan event pointerdown/move/up -> click yang tertelan TIDAK BISA
+  direproduksi di VM - yang teruji adalah fungsi murni
+  finishExplorerDrag di bawahnya; pembuktian end-to-end HARUS dicek
+  di laptop (cek persis: install build Fase 25, klik file index.ts
+  di sidebar - tab file terbuka dan aktif; ulangi klik dengan jari
+  sedikit bergeser saat klik - file tetap terbuka; drag file ke
+  folder lain - file pindah DAN klik sesudahnya tidak membuka
+  apa-apa; drag lalu jatuhkan di tempat semula - klik tetap membuka
+  file). Catatan: kasus "tab terbuka tapi tidak aktif" yang user
+  tidak konfirmasi TIDAK dijelaskan oleh mekanisme ini - bila itu
+  terjadi setelah fix ini, itu masalah berbeda. Tab ai-diff di luar
+  scope fase ini.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
