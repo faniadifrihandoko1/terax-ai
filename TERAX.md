@@ -1995,6 +1995,163 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   inline (Fase 4), hunk bars (Fase 21), Changed Files/Accept all
   (Fase 20), jalur ESLint, tab ai-diff, kode attach-failure LSP
   (Fase 26).
+  Fase 28 (Accept all vs Pending - tab review hilang, DEL-127),
+  DONE - user: setelah run "Saya salah edit - perbaiki package.json"
+  (3 file: dua index.tsx + package.json), card Changed Files
+  menampilkan ketiganya "Pending", tapi klik Accept all
+  membalas toast "Tidak ada file yang dikonfirmasi. Semua file
+  sudah selesai atau sudah ditolak - konfirmasi dari tab-nya."
+  (screenshot). Diagnosis (dari kode + fixture, bukan tebakan):
+  status card berasal dari `reviewStatusByApproval` (App.tsx:427)
+  yang dibangun DARI tab ai-diff, dan `buildEntries`
+  (ChangedFilesCard.tsx) memberi default "pending" bila tidak ada
+  tab untuk approvalId itu - sementara `handleAcceptAll` (App.tsx)
+  mencari tab ai-diff per approvalId dan tab yang tidak ada =
+  skipped; toast itu muncul bila confirmed=0, failed=0,
+  skipped>0. Cabang yang men-skip ketiga file itu DIBUKTIKAN
+  lewat eliminasi: tab RESOLVED gugur (card akan menampilkan
+  Dikonfirmasi/Ditolak, bukan Pending - dan `acceptAllApprovalIds`
+  tidak menawarkan file resolved); hunk 0 gugur sebagai penyebab
+  utama (statistik card +195 -573 / +184 -395 berasal dari registry
+  `getPendingProposal`, membuktikan ada diff nyata; bridge
+  membangun tab dari isi registry yang sama, jadi hunk tab = hunk
+  registry bukan 0). Yang tersisa adalah cabang **tab tidak ada**
+  (`!tab` di `handleAcceptAll`). Empat mekanisme yang terbukti
+  menghasilkan tab yang hilang (pemicu runtime persis di laptop
+  user tidak bisa ditentukan dari VM): (M1) race - card render
+  dari parts di commit yang sama dengan perubahan messages,
+  sementara tab dibuat oleh effect async pasca-render di
+  `AgentRunBridge` (menunggu `loadReviewState` sekali per sesi);
+  selalu ada minimal satu frame di mana baris sudah ada tanpa tab;
+  (M2) parts tidak pernah mencapai `output-available` - bridge
+  hanya membuat tab untuk parts `output-available` (tanpa error
+  output) atau legacy `approval-requested`
+  (`collectPendingFileProposals` di `fileProposals.ts`); run yang
+  terputus / tool call tidak lengkap (Fase 9:
+  `ignoreIncompleteToolCalls`) meninggalkan baris tanpa tab secara
+  permanen dalam sesi, sementara registry masih memegang tulisannya
+  (statistik terlihat); (M3) derive-fail pada fallback legacy -
+  bila tidak ada registry entry DAN tidak ada checkpoint yang
+  tersimpan, bridge menurunkan proposal dari disk; untuk file
+  write-first disk sudah berisi konten baru, jadi `deriveProposed`
+  gagal ("string not found / not unique") dan bridge menandai
+  proposal selesai TANPA membuka tab (`tracker.markCompleted` +
+  `continue`), sehingga tidak pernah bisa dicoba ulang; (M4) tab
+  ditutup - `closeAiDiffTab` menghapus tab dari store bila ada tab
+  fallback, peta kehilangan entrinya, card kembali menampilkan
+  "Pending", Accept all tidak pernah bisa mengonfirmasinya, dan
+  bridge tidak pernah membuatnya ulang (id tetap di
+  `tracker.opened`) - kehilangan review permanen tanpa jalan pulang
+  (sebelum fase ini). Satu kandidat lain terbukti sebagai cacat
+  nyata TAPI tidak menjelaskan toast ini: komposisi basi -
+  `updateAiDiffTab` menolak bila status tab bukan lagi "pending"
+  (`updateAiDiffTabState` di `aiDiffUpdate.ts`), sehingga bridge
+  membuka tab KEDUA untuk file yang sama dengan proposal id baru,
+  sementara baris card tetap memegang approvalId PERTAMA - konten
+  terbaru tidak terjangkau dari card dan Accept all mengonfirmasi
+  konten basi. Tracker diperiksa dan dinyatakan tidak bersalah:
+  `FileMutationBridgeTracker` (`fileMutationBridge.ts`) membatalkan
+  penandaan proposal yang ditandai tapi tidak pernah selesai pada
+  flight yang dibatalkan dan meminta retry (`retryPending` +
+  `bridgeRetryTick`); `markOpened` mengembalikan false bila run
+  lain yang tumpang tindih sudah menandai id itu. Perbaikan:
+  (1) kejujuran card (`ChangedFilesCard.tsx`): `ChangedFileEntry`
+  mendapat `hasTab: boolean` (true iff approvalId non-null DAN
+  `reviewStatusByApproval` memilikinya); loop pasca-proses di
+  `buildEntries` mengarahkan ulang tiap baris yang terkomposisi ke
+  mutasi TERAKHIR yang approvalId-nya punya tab (status mengikuti
+  tab itu); bila tidak ada mutasi yang punya tab, baris menyimpan id
+  pertama dengan `hasTab: false`; `acceptAllApprovalIds` tidak
+  menawarkan entri tanpa tab; badge baris menampilkan **"Tanpa
+  tab"** (varian pending/outline) dengan tooltip yang menjelaskan
+  tab review belum terbentuk dan klik baris bisa mencoba membukanya
+  ulang, bukan label "Pending" yang menyesatkan; (2) pelaporan
+  Accept-all yang jujur: modul murni baru `acceptAllSkips.ts` -
+  `AcceptAllSkipReason` ("missing-tab" | "already-resolved" |
+  "no-changes" | "file-rejected"), `ACCEPT_ALL_SKIP_LABEL`,
+  `describeAcceptAllSkips(skipped)` yang menghasilkan mis.
+  "Dilewati: tab review belum ada (3)" (dikelompokkan sesuai
+  urutan pertama terlihat, `undefined` bila tidak ada yang
+  dilewati); `confirmAcceptedReview` mengembalikan `skipReason`
+  pada hasil skipped; `handleAcceptAll` mencatat alasan skip
+  per file (`!tab` -> "missing-tab"; hasil skipped ->
+  `result.skipReason ?? "already-resolved"`); deskripsi toast
+  sukses sekarang ringkasan nyata, bukan hardcode "(sudah selesai
+  atau sudah ditolak - konfirmasi dari tab-nya)"; toast semua
+  dilewati memakai ringkasan nyata; toast parsial menambahkan
+  ringkasan ke deskripsi kegagalan pertama; (3) klik baris membuat
+  ulang tab review yang hilang: builder murni baru
+  `buildRecreatedAiDiffTab` (`recreateAiDiffTab.ts`, input
+  `{ approvalId, absPath, cwd, registry?, checkpoint? }`,
+  mengembalikan `DiffOpenInput | null` - import tipe saja dari
+  `AgentRunBridge`); registry dipakai HANYA bila
+  `registry.approvalId === approvalId` (registry dikunci oleh path,
+  bukan oleh proposal - tulisan yang lebih baru untuk file yang sama
+  tidak boleh tampil di bawah id baris lama; entry registry dengan
+  `approvalId: undefined` juga ditolak); bila tidak, checkpoint
+  (dikunci oleh approvalId, jadi identitas terjamin): edit ->
+  `contentBefore`/`contentAfter`, `isNewFile` lewat heuristik yang
+  sama dengan statistik card (`kind === "edit" && contentBefore
+  === ""`), delete -> proposed `""`, rename -> `targetPath`
+  diselesaikan lewat `resolveMutationPath(targetPath, cwd)`; selalu
+  `written: true`, `activate: true`; `handleOpenFileDiff` (App.tsx)
+  mencoba recreation bila tidak ada tab (memakai
+  `getPendingProposal(path)` + `getCheckpoint(approvalId)` +
+  `useChatStore.getState().live.getCwd()`), memanggil
+  `openAiDiffTab(recreated)`, lalu `activateAiDiffTab(approvalId)`
+  dengan toast error bila aktivasi gagal; sengaja TIDAK menyetel
+  status ke "reviewing" untuk tab yang dibuat ulang (tab baru itu
+  fresh/pending, tapi `openAiDiffTab` mendedup - bila tab muncul di
+  antara render dan klik, menyetel "reviewing" secara buta bisa
+  menimpa status resolved; pane me-render tab pending dengan baik,
+  dan klik baris berikutnya menyetel reviewing lewat jalur normal);
+  kata-kata toast fallback editor dinetralkan: "Tab review belum
+  terbentuk dan perubahannya tidak bisa dibangun ulang dari catatan
+  yang tersisa. File dibuka di editor." (tidak lagi mengklaim "agent
+  mungkin masih bekerja"); (4) jejak derive-fail: cabang
+  derive-fail di `AgentRunBridge.tsx` kini mencatat
+  `console.warn('[bridge] skipping review tab for ... (derive
+  failed)')` bukan gagal diam-diam. Keputusan desain: memaksa
+  update konten ke dalam tab yang sedang di-review sengaja TIDAK
+  dilakukan (keputusan hunk dikunci oleh indeks hunk dan akan
+  menunjuk ulang secara diam-diam); tidak ada toast baru (pill/toast
+  yang ada adalah permukaan tunggalnya); tidak ada auto-continue
+  untuk run yang berhenti prematur (itu perilaku model; mitigasi
+  tetap banner Fase 9 + Lanjutkan). Insiden saat implementasi:
+  import statis `buildRecreatedAiDiffTab` di App.tsx menarik
+  `fileMutations` -> barrel `tools/tools` -> `tools/agent.ts` (AI
+  SDK) ke dalam eager chunk `main.tsx`, memecahkan 3 test budget
+  (`dist-budget` 2, `eager-budget` 1, dengan bukti "ai <-
+  src/modules/ai/tools/agent.ts") - diperbaiki dengan dynamic import
+  di dalam `handleOpenFileDiff` (klik baris adalah gestur pengguna,
+  jadi memuat saat dibutuhkan tidak ada biayanya; pelajaran yang
+  sama seperti pemisahan bus Fase 18 dan dynamic import
+  `confirmAcceptedReview` Fase 20); dua import statis baru lainnya
+  (`acceptAllSkips`, `pendingProposals`) ringan karena tanpa import
+  sama sekali. Verifikasi: check-types 0 error; lint 0 error / 88
+  warning / 1 info (baseline); full test 2713/2713 hijau 2x (+16:
+  1 acceptAllApprovalIds + 3 buildEntries + 4 acceptAllSkips + 8
+  recreateAiDiffTab; 3 asersi skipReason ditambahkan ke test
+  `confirmAcceptedReview` yang sudah ada); TDD - test ditulis dulu
+  dan dikonfirmasi merah (4 test gagal + 3 file gagal di collection
+  karena modul belum ada + 1 file gagal di collection karena edit
+  yang menjatuhkan penutup `});` - langsung diperbaiki), lalu hijau
+  35/35 pada 5 file yang tersentuh; tanpa perubahan Rust. Batas
+  jujur: repo tidak punya DOM env, jadi badge/toast/recreation live
+  TIDAK teruji - yang teruji adalah logika murni di bawahnya;
+  pemicu runtime persis di laptop user (M1/M2/M3/M4 yang mana)
+  tidak bisa ditentukan dari VM; pembuktian end-to-end HARUS dicek
+  di laptop (cek persis: install build Fase 28, klik Accept all
+  pada card dengan baris tanpa tab - tombol tidak boleh
+  menawarkannya dan baris harus menampilkan "Tanpa tab"; klik baris
+  "Tanpa tab" - tab review harus terbuka kembali bila perubahan
+  masih bisa dibangun ulang; klik Accept all dengan campuran file
+  bertab dan file yang sudah resolved - toast harus menyebut alasan
+  skip yang sebenarnya). Di luar scope: model berhenti prematur
+  dengan todo terbuka (banner Fase 9 + Lanjutkan adalah
+  mitigasinya), sidebar auto-reveal (Fase 27), kode attach-failure
+  LSP (Fase 26), warna sintaks/minimap (Fase 23), review inline
+  (Fase 4), hunk bars (Fase 21), jalur ESLint, panel reference.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
