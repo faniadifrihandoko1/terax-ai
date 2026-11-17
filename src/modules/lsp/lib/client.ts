@@ -18,11 +18,19 @@ import {
   languageServerPlugin,
   renameSymbol,
 } from "codemirror-languageserver";
+import { readFileText } from "@/modules/editor/lib/externalFormat";
 import {
   type LocationItem,
   locationsPanel,
   openLocationsPanel,
+  openReferenceTreePanel,
+  referenceTreePanel,
 } from "./locationsPanel";
+import {
+  buildReferenceTree,
+  extractLinePreview,
+  type ReferenceLocationInput,
+} from "./referenceTree";
 import { fileUriToPath } from "./uri";
 
 export {
@@ -216,7 +224,7 @@ function updateLink(view: EditorView, event: MouseEvent | null): void {
 }
 
 // Cmd/Ctrl-hover underlines the symbol under the pointer, matching the
-// mod-click go-to-definition affordance.
+// mod-click references affordance (Fase 24: mod-click shows references).
 const linkHover: Extension = [
   linkField,
   EditorView.domEventHandlers({
@@ -339,11 +347,75 @@ export function lspInteractions(opts: {
     } catch {
       return;
     }
-    showResults(view, "References", result ?? []);
+    await showReferenceResults(view, result ?? []);
+  };
+
+  /**
+   * Fase 24: references open as a tree grouped by file (VS Code style),
+   * not the flat `file:line` list. Line previews come from the live
+   * document for the current file and from disk (`fs_read_file`, the
+   * same read the external formatter uses) for other files; a preview
+   * that cannot be read falls back to `file:line`. Disk text can be
+   * stale against unsaved edits elsewhere — previews are display-only,
+   * navigation always uses the server's line/character.
+   */
+  const showReferenceResults = async (
+    view: EditorView,
+    locs: LspLocation[],
+  ): Promise<void> => {
+    if (locs.length === 0) return;
+    const doc = view.state.doc;
+    const textByUri = new Map<string, string>();
+    const externalUris = [...new Set(locs.map((l) => l.uri))].filter(
+      (uri) => uri !== opts.documentUri,
+    );
+    const reads = await Promise.all(
+      externalUris.map(async (uri) => {
+        const path = fileUriToPath(uri);
+        if (!path) return [uri, null] as const;
+        const read = await readFileText(path);
+        return [uri, read?.text ?? null] as const;
+      }),
+    );
+    for (const [uri, text] of reads) {
+      if (text != null) textByUri.set(uri, text);
+    }
+    const items: ReferenceLocationInput[] = locs.map((loc) => {
+      let preview: string | null = null;
+      if (loc.uri === opts.documentUri) {
+        const lineNo = loc.range.start.line + 1;
+        preview =
+          lineNo >= 1 && lineNo <= doc.lines
+            ? extractLinePreview(doc.line(lineNo).text, 0)
+            : null;
+      } else {
+        preview = extractLinePreview(
+          textByUri.get(loc.uri),
+          loc.range.start.line,
+        );
+      }
+      return {
+        uri: loc.uri,
+        line: loc.range.start.line,
+        character: loc.range.start.character,
+        preview,
+      };
+    });
+    openReferenceTreePanel(view, {
+      title: "References",
+      tree: buildReferenceTree("References", items, opts.rootPath),
+      rootPath: opts.rootPath,
+      onPick: (item) =>
+        navigate(view, {
+          uri: item.uri,
+          range: { start: { line: item.line, character: item.character } },
+        }),
+    });
   };
 
   return [
     locationsPanel,
+    referenceTreePanel,
     hoverCodeHighlight,
     linkHover,
     keymap.of([
@@ -384,7 +456,9 @@ export function lspInteractions(opts: {
         }
         const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
         if (pos == null) return false;
-        void gotoDefinition(view, pos);
+        // Fase 24: mod-click shows the references tree (like VS Code's
+        // peek references); F12 above still jumps to the definition.
+        void findReferences(view, pos);
         return true;
       },
     }),
