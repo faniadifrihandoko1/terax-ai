@@ -465,6 +465,10 @@ export const FileExplorer = memo(
     );
 
     const lastSyncedActivePathRef = useRef<string | null>(null);
+    // Fase 27: remembers the last path a reveal was attempted for, so a
+    // file that genuinely is not in the tree cannot trigger an expand +
+    // fetch of its whole ancestor chain on every rows rebuild.
+    const lastRevealAttemptRef = useRef<string | null>(null);
     useEffect(() => {
       if (
         !activeFilePath ||
@@ -472,15 +476,27 @@ export const FileExplorer = memo(
       ) {
         return;
       }
-      if (!entryIndexByPath.has(activeFilePath)) return;
-      lastSyncedActivePathRef.current = activeFilePath;
-      collapseSelectionTo(activeFilePath);
-      requestAnimationFrame(() => scrollEntryIntoView(activeFilePath));
+      if (entryIndexByPath.has(activeFilePath)) {
+        lastSyncedActivePathRef.current = activeFilePath;
+        collapseSelectionTo(activeFilePath);
+        requestAnimationFrame(() => scrollEntryIntoView(activeFilePath));
+        return;
+      }
+      // Fase 27: the file is open but hidden inside collapsed folders —
+      // the old code returned here silently. Expand its ancestors once
+      // for this path; the effect re-runs when the rows rebuild and the
+      // branch above selects + scrolls once the file becomes visible.
+      // Reveal only, never focus: the editor keeps the keyboard focus.
+      if (lastRevealAttemptRef.current !== activeFilePath) {
+        lastRevealAttemptRef.current = activeFilePath;
+        tree.revealFile(activeFilePath);
+      }
     }, [
       activeFilePath,
       entryIndexByPath,
       scrollEntryIntoView,
       collapseSelectionTo,
+      tree.revealFile,
     ]);
 
     useImperativeHandle(

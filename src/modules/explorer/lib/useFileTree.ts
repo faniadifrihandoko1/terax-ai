@@ -20,6 +20,10 @@ import {
 } from "./batchMove";
 import { listenFsChanged, watchAdd, watchRemove } from "./watch";
 import { createWatchRegistry, planVisibilityEdge } from "./watchRegistry";
+import {
+  ancestorDirs,
+  relativeSegments,
+} from "./revealPath";
 
 export type DirEntry = {
   name: string;
@@ -399,6 +403,22 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     [fetchChildren, addWatch],
   );
 
+  // Fase 27 (auto-reveal): expand every ancestor of a file so the sidebar
+  // can show it. No sequential walk is needed: fetchChildren reads any
+  // directory straight from disk, it does not depend on its parent being
+  // loaded. Returns false when the file is not under this root (or there
+  // is no root) — the caller then knows a reveal was not applicable.
+  const revealFile = useCallback(
+    (filePath: string): boolean => {
+      if (!rootPath) return false;
+      const segments = relativeSegments(filePath, rootPath);
+      if (segments === null) return false;
+      for (const dir of ancestorDirs(filePath, rootPath)) expand(dir);
+      return true;
+    },
+    [rootPath, expand],
+  );
+
   const refresh = useCallback(
     (path: string, reveal = false) => {
       if (scopeKeyRef.current !== scopeKey) return Promise.resolve(false);
@@ -609,6 +629,7 @@ export function useFileTree(rootPath: string | null, options?: Options) {
     renaming,
     toggle,
     expand,
+    revealFile,
     refresh,
     beginCreate,
     cancelCreate,
