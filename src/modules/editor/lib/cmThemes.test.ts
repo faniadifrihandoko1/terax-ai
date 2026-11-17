@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { githubDarkPalette, githubLightPalette } from "./cmThemes";
+import {
+  githubDarkPalette,
+  githubLightPalette,
+  type Palette,
+} from "./cmThemes";
 
 // Fase 23: the default editor theme (github-dark / github-light, raw
 // @uiw) made code read as plain white. Its palette is pastel and
@@ -23,10 +27,7 @@ const KEY_GROUPS = [
   "type",
 ] as const;
 
-function assertDistinct(
-  palette: Record<string, string | undefined>,
-  label: string,
-) {
+function assertDistinct(palette: Palette, label: string) {
   const colors = KEY_GROUPS.map((g) => palette[g]);
   expect(new Set(colors).size, `${label}: key groups must differ`).toBe(
     KEY_GROUPS.length,

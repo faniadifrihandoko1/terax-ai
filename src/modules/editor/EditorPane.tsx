@@ -167,6 +167,9 @@ export const EditorPane = memo(
     const themeExt = useEditorThemeExt();
     const vimMode = usePreferencesStore((s) => s.vimMode);
     const editorMinimap = usePreferencesStore((s) => s.editorMinimap);
+    const editorMinimapColors = usePreferencesStore(
+      (s) => s.editorMinimapColors,
+    );
     const wordWrapColumn = usePreferencesStore((s) =>
       s.editorWordWrap ? s.editorWordWrapColumn : null,
     );
@@ -234,6 +237,7 @@ export const EditorPane = memo(
     // extension only reads it at event time.
     const minimapSnapshotRef = useRef<MinimapSnapshot>({
       enabled: true,
+      syntaxColors: true,
       hunks: [],
     });
 
@@ -538,6 +542,7 @@ export const EditorPane = memo(
     // React-side changes (setting toggle, new review, decisions).
     minimapSnapshotRef.current = buildMinimapSnapshot({
       enabled: editorMinimap,
+      syntaxColors: editorMinimapColors,
       reviewChangeSet,
       reviewDecisions,
       reviewable,
@@ -550,6 +555,7 @@ export const EditorPane = memo(
         view,
         buildMinimapSnapshot({
           enabled: editorMinimap,
+          syntaxColors: editorMinimapColors,
           reviewChangeSet,
           reviewDecisions,
           reviewable,
@@ -557,6 +563,7 @@ export const EditorPane = memo(
       );
     }, [
       editorMinimap,
+      editorMinimapColors,
       reviewChangeSet,
       reviewDecisions,
       reviewable,
