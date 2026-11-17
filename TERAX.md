@@ -1685,6 +1685,73 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   tanpa mengetik; matikan "Syntax colors in the minimap" - minimap
   jadi polos, editor tetap berwarna; matikan Minimap - minimap
   hilang, layout utuh). Tab ai-diff di luar scope fase ini.
+  Fase 24 (Ctrl+klik tampilkan daftar reference, tree per file,
+  DEL-121), DONE - user menginginkan Ctrl+klik pada nama komponen
+  (`export const AddPositionModuleModal`, di-import di 3 file)
+  menampilkan daftar reference seperti screenshot VS Code yang ia
+  kirim (tree per file, badge jumlah, potongan kode per baris, klik
+  baris langsung ke file itu), bukan lompat ke definisi. Diagnosis
+  (terbukti empiris, bukan tebakan): query `textDocument/references`
+  TIDAK rusak - dijalankan langsung terhadap mesin TS asli
+  (tsserver dari node_modules/typescript, mesin yang sama di balik
+  typescript-language-server) pada fixture replika bentuk persis
+  kasus user (const arrow component + interface props, di-import 3
+  file): mengembalikan 7 lokasi dari query di export site maupun di
+  usage site (1 definisi + 3 import statement + 3 pemakaian JSX).
+  Gap-nya murni UX: (a) Ctrl+klik meminta definition, bukan
+  references - di baris export, definisi = dirinya sendiri, jadi
+  tidak ada yang tampak berubah; (b) panel references adalah list
+  datar `file:line` tanpa grouping/preview. Temuan sampingan di
+  kode: `findReferences`/`gotoDefinition` menelan error/timeout
+  secara diam-diam (catch -> return) dan 0 hasil juga diam; panel
+  datar lama mendedup berdasarkan label `file:line`, sehingga dua
+  reference di baris yang sama pada file yang sama akan hilang satu
+  (diperbaiki di tree baru: dedup berdasarkan posisi penuh
+  uri+line+character). Perilaku baru: Ctrl+klik (Cmd+klik) meminta
+  `textDocument/references` (includeDeclaration: true) dan membuka
+  panel tree - grup per file (nama file tebal + direktori redup +
+  badge jumlah), semua grup default TERBUKA (seperti VS Code),
+  tiap baris menampilkan potongan kode barisnya, klik baris -> file
+  dan baris itu (file sama -> scroll; file lain -> buka tab via
+  `onExternal` yang sudah ada); keyboard atas/bawah, Enter
+  (grup = buka/tutup, baris = lompat), panah kanan/kiri
+  buka/tutup grup, Esc menutup. F12 TETAP go-to-definition
+  (panel datar lama dipertahankan untuk definisi). Shift+F12 memakai
+  panel tree baru yang sama. Potongan kode: file yang sedang terbuka
+  dari dokumen editor live; file lain dibaca dari disk via
+  `readFileText` (`fs_read_file`, jalur baca yang sama dipakai
+  external formatter) - gagal dibaca -> fallback `file:baris`;
+  teks disk bisa basi terhadap edit yang belum disimpan di file lain
+  (preview hanya tampilan; navigasi selalu memakai line/character
+  dari server). Implementasi: `referenceTree.ts` baru (model murni:
+  grouping/sorting/dedup/toggle/visible-rows/extract-preview, satu
+  sumber kebenaran untuk panel), panel DOM baru di `locationsPanel.ts`
+  (`openReferenceTreePanel`, StateField sendiri agar panel datar tak
+  tersentuh) + style `.cm-lsp-references` di `chromeTheme.ts` (token
+  yang sama dengan panel datar); `client.ts`: `findReferences` kini
+  async mengumpulkan preview lalu membuka tree, mousedown mod-click
+  memanggil `findReferences` (bukan `gotoDefinition`), komentar
+  linkHover diperbarui. Test (TDD, commit test dulu dan FAIL sebelum
+  implementasi ada): 13 test baru - `referenceTree.test.ts`
+  (grouping 7 lokasi fixture user jadi 4 grup 1/2/2/2, dedup posisi
+  penuh, fallback path luar root, toggle immutable, visible rows,
+  extract preview + truncasi, label fallback). Verifikasi:
+  check-types 0 error; lint 0 error / 88 warning / 1 info (baseline -
+  sempat 90 karena dua `preview!` di test baru, diperbaiki jadi
+  assertion eksak); full test 2665/2665 hijau 2x (run 2 dan run 3;
+  run 1: 1 file gagal, 2660 passed + 5 skipped, nama file tidak
+  tertangkap karena output di-tail - tidak ter-reproduksi di run 2
+  dan 3, diduga flaky di bawah beban VM). Tanpa perubahan Rust. Batas jujur:
+  repo tidak punya DOM env, jadi render panel tree, klik baris, dan
+  navigasi antar file live tidak teruji - hanya unit murni di bawahnya
+  (model tree, grouping, toggle, preview); pembuktian end-to-end
+  HARUS dicek di laptop (cek persis: install build Fase 24, buka
+  file `index.tsx` add-module, Ctrl+klik `AddPositionModuleModal` -
+  panel tree muncul dengan grup per file + badge jumlah + potongan
+  kode tiap baris; klik baris di file lain - file itu terbuka di
+  baris yang benar; buka/tutup grup dengan klik dan panah kiri/kanan;
+  Shift+F12 menampilkan tree yang sama; F12 tetap lompat ke
+  definisi). Tab ai-diff di luar scope fase ini.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
