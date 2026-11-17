@@ -167,4 +167,78 @@ describe("finishExplorerDrag", () => {
     );
     expect(onMove).toHaveBeenCalledWith(["/repo/a.ts", "/repo/b.ts"], "/repo/dest");
   });
+
+  it("reports whether the drag committed a move (Fase 25)", () => {
+    const onMove = vi.fn();
+    // Terminal-targeted drop: handled, counts as committed.
+    expect(
+      finishExplorerDrag(
+        true,
+        ["/repo/file.ts"],
+        100,
+        200,
+        null,
+        {
+          updateTarget: vi.fn(() => true),
+          dropPath: vi.fn(() => true),
+          clearTarget: vi.fn(),
+        },
+        onMove,
+      ),
+    ).toBe(true);
+    expect(onMove).not.toHaveBeenCalled();
+
+    // Plain explorer drop onto a real target: committed via onMove.
+    expect(
+      finishExplorerDrag(
+        true,
+        ["/repo/a.ts"],
+        100,
+        200,
+        "/repo/dest",
+        undefined,
+        onMove,
+      ),
+    ).toBe(true);
+
+    // Cancelled drag: nothing committed.
+    expect(
+      finishExplorerDrag(
+        false,
+        ["/repo/a.ts"],
+        100,
+        200,
+        "/repo/dest",
+        undefined,
+        onMove,
+      ),
+    ).toBe(false);
+
+    // No-op drop (same folder / empty space, no target): nothing moved,
+    // so the click that follows must NOT be suppressed.
+    const noMove = vi.fn();
+    expect(
+      finishExplorerDrag(true, ["/repo/a.ts"], 100, 200, null, undefined, noMove),
+    ).toBe(false);
+    expect(noMove).not.toHaveBeenCalled();
+
+    // Path target declines the drop and there is no move target: no-op.
+    const declined = vi.fn();
+    expect(
+      finishExplorerDrag(
+        true,
+        ["/repo/a.ts"],
+        100,
+        200,
+        null,
+        {
+          updateTarget: vi.fn(() => false),
+          dropPath: vi.fn(() => false),
+          clearTarget: vi.fn(),
+        },
+        declined,
+      ),
+    ).toBe(false);
+    expect(declined).not.toHaveBeenCalled();
+  });
 });
