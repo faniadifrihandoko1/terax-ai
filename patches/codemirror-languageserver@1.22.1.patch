@@ -1,0 +1,70 @@
+diff --git a/dist/index.js b/dist/index.js
+index 350715c4aec82a8bdeb8ce0259c2c15edb3bc2a1..45ac4d81a6d5b813d0139fd17959f3cbbff9bbcd 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -539,18 +539,49 @@ class LanguageServerPlugin {
+                 });
+             }
+         }
++        // Terax patch (Fase 29): the client for apply() below. apply()
++        // runs unbound (CodeMirror calls it as a plain function), so it
++        // cannot reach this.client itself.
++        const resolveClient = this.client;
++        const canResolveCompletion = !!(
++            resolveClient.capabilities &&
++            resolveClient.capabilities.completionProvider &&
++            resolveClient.capabilities.completionProvider.resolveProvider
++        );
+         const options = items.map((item) => {
+             const { detail, label, kind, textEdit, documentation, additionalTextEdits, } = item;
+             const completion = {
+                 label,
+                 detail,
+-                apply(view, completion, from, to) {
++                // Terax patch (Fase 29): resolve the item on accept.
++                // Servers like typescript-language-server only provide
++                // additionalTextEdits (the auto-import edit) on
++                // completionItem/resolve; the list items carry none, so
++                // accepting one inserted only the name. Resolving here
++                // merges the resolved textEdit/additionalTextEdits
++                // before dispatching. Falls back to the list item when
++                // the server offers no resolveProvider or resolve fails.
++                async apply(view, completion, from, to) {
++                    let mainEdit = textEdit;
++                    let extraEdits = additionalTextEdits;
++                    if (canResolveCompletion) {
++                        try {
++                            const resolved = await resolveClient.completionItemResolve(item);
++                            if (resolved) {
++                                if (resolved.textEdit !== undefined) mainEdit = resolved.textEdit;
++                                if (resolved.additionalTextEdits !== undefined) extraEdits = resolved.additionalTextEdits;
++                            }
++                        }
++                        catch (e) {
++                            // Fall back to the unresolved list item.
++                        }
++                    }
+                     const changes = [];
+-                    if (isLSPTextEdit(textEdit)) {
++                    if (isLSPTextEdit(mainEdit)) {
+                         changes.push({
+-                            from: posToOffset(view.state.doc, textEdit.range.start),
+-                            to: Math.max(posToOffset(view.state.doc, textEdit.range.end), to),
+-                            insert: textEdit.newText,
++                            from: posToOffset(view.state.doc, mainEdit.range.start),
++                            to: Math.max(posToOffset(view.state.doc, mainEdit.range.end), to),
++                            insert: mainEdit.newText,
+                         });
+                     }
+                     else {
+@@ -560,8 +591,8 @@ class LanguageServerPlugin {
+                             insert: label,
+                         });
+                     }
+-                    if (additionalTextEdits) {
+-                        for (const edit of additionalTextEdits) {
++                    if (extraEdits) {
++                        for (const edit of extraEdits) {
+                             changes.push({
+                                 from: posToOffset(view.state.doc, edit.range.start),
+                                 to: posToOffset(view.state.doc, edit.range.end),

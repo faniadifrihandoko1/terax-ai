@@ -4,6 +4,8 @@ import type { EditorView } from "@codemirror/view";
 import { languageServerPlugin } from "codemirror-languageserver";
 import { describe, expect, it } from "vitest";
 
+import { TeraxLspClient } from "./client";
+
 /**
  * Fase 29 (TDD): auto-import completion must write the import.
  *
@@ -162,5 +164,31 @@ describe("Fase 29: auto-import completion writes the import", () => {
     });
     const doc = await acceptCompletion(client);
     expect(doc).toBe(DOC);
+  });
+});
+
+describe("Fase 29: client advertises additionalTextEdits resolveSupport", () => {
+  it("includes additionalTextEdits alongside detail and documentation", () => {
+    // getInitializeParams is protected; call it on the prototype with
+    // a minimal fake this (the base only reads this.options).
+    const params = (
+      TeraxLspClient.prototype as unknown as {
+        getInitializeParams: () => {
+          capabilities: {
+            textDocument?: {
+              completion?: {
+                completionItem?: {
+                  resolveSupport?: { properties?: string[] };
+                };
+              };
+            };
+          };
+        };
+      }
+    ).getInitializeParams.call({ options: {} });
+    expect(
+      params.capabilities.textDocument?.completion?.completionItem
+        ?.resolveSupport?.properties,
+    ).toEqual(["detail", "documentation", "additionalTextEdits"]);
   });
 });

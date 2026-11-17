@@ -501,6 +501,20 @@ export class TeraxLspClient extends LanguageServerClient {
           },
         },
       },
+      // Fase 29: Terax resolves completion items on accept to apply
+      // additionalTextEdits (auto-import). Advertise the property so
+      // servers that gate resolve payloads on resolveSupport include
+      // it; typescript-language-server sends it regardless, but the
+      // declaration is what the client consumes.
+      completion: {
+        ...params.capabilities.textDocument?.completion,
+        completionItem: {
+          ...params.capabilities.textDocument?.completion?.completionItem,
+          resolveSupport: {
+            properties: ["detail", "documentation", "additionalTextEdits"],
+          },
+        },
+      },
     };
     return params;
   }

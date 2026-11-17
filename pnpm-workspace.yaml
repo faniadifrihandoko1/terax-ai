@@ -9,3 +9,4 @@ allowBuilds:
   msw: true
 patchedDependencies:
   '@replit/codemirror-minimap@0.5.2': patches/@replit__codemirror-minimap@0.5.2.patch
+  codemirror-languageserver@1.22.1: patches/codemirror-languageserver@1.22.1.patch
