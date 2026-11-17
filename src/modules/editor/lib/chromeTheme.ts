@@ -405,6 +405,86 @@ const chrome = EditorView.theme({
     },
   },
 
+  // Fase 24: references tree panel — same tokens as the flat list above.
+  ".cm-lsp-references": {
+    fontFamily: detectMonoFontFamily(),
+    fontSize: "12px",
+    backgroundColor: "var(--popover)",
+    color: "var(--popover-foreground)",
+    "& .cm-lsp-references-header": {
+      padding: "5px 10px",
+      fontSize: "10.5px",
+      fontWeight: "600",
+      textTransform: "uppercase",
+      letterSpacing: "0.04em",
+      color: "var(--muted-foreground)",
+      borderBottom: "1px solid var(--border)",
+    },
+    "& ul": {
+      listStyle: "none",
+      margin: "0",
+      padding: "4px",
+      maxHeight: "220px",
+      overflowY: "auto",
+      outline: "none",
+    },
+    "& li": {
+      padding: "3px 8px",
+      borderRadius: "5px",
+      cursor: "pointer",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      "&:hover": { backgroundColor: "var(--accent)" },
+    },
+    "& li.cm-lsp-references-active": {
+      backgroundColor: "var(--accent)",
+      color: "var(--accent-foreground)",
+    },
+    "& li.cm-lsp-references-group": {
+      fontWeight: "600",
+      display: "flex",
+      alignItems: "baseline",
+      gap: "6px",
+    },
+    "& .cm-lsp-references-chevron": {
+      color: "var(--muted-foreground)",
+      flexShrink: "0",
+    },
+    "& .cm-lsp-references-dir": {
+      color: "var(--muted-foreground)",
+      fontWeight: "400",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+    },
+    "& .cm-lsp-references-count": {
+      marginLeft: "auto",
+      flexShrink: "0",
+      fontSize: "10.5px",
+      fontWeight: "600",
+      color: "var(--muted-foreground)",
+      backgroundColor: "var(--muted)",
+      borderRadius: "999px",
+      padding: "0 6px",
+    },
+    "& li.cm-lsp-references-item": {
+      paddingLeft: "26px",
+      display: "flex",
+      alignItems: "baseline",
+      gap: "6px",
+      fontWeight: "400",
+    },
+    "& .cm-lsp-references-preview": {
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+    },
+    "& .cm-lsp-references-line": {
+      marginLeft: "auto",
+      flexShrink: "0",
+      color: "var(--muted-foreground)",
+    },
+  },
+
   ".cm-tooltip ::-webkit-scrollbar": { width: "8px", height: "8px" },
   ".cm-tooltip ::-webkit-scrollbar-thumb": {
     backgroundColor:
