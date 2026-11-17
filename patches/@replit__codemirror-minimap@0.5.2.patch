@@ -1,0 +1,40 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 393a113d1fae76b668a10a4a6277babd0658211d..a3e865574f8cb37baf391a30bfae56154f291285 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -12,6 +12,12 @@ type Options = {
+      * Determines how to render text. Defaults to `characters`.
+      */
+     displayText?: "blocks" | "characters";
++    /**
++     * Whether to color the miniature code with the editor's syntax
++     * highlighting. Defaults to `true`; when `false` the code is
++     * drawn in the default foreground (plain).
++     */
++    syntaxColors?: boolean;
+     /**
+      * Attach event handlers to the minimap container element.
+      */
+diff --git a/dist/index.js b/dist/index.js
+index c7c9a0406e1cfa2277ab6324fe47f70dd577e7c1..5fd4d788a57850892c993128717b5e0f956fb91b 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -710,7 +710,8 @@ class TextState extends LineBasedState {
+             style: (tags) => highlightingFor(state, tags),
+         };
+         let highlights = [];
+-        if (tree) {
++        const syntaxColors = state.facet(Config).syntaxColors !== false;
++        if (tree && syntaxColors) {
+             /**
+              * The viewport renders a few extra lines above and below the editor view. To approximate
+              * the lines visible in the minimap, we multiply the lines in the viewport by the scale multipliers.
+@@ -762,7 +763,7 @@ class TextState extends LineBasedState {
+         // Highlight the entire tree in an idle callback
+         highlights = [];
+         const highlightingCallback = () => {
+-            if (tree) {
++            if (tree && syntaxColors) {
+                 highlightTree(tree, highlighter, (from, to, tags) => {
+                     highlights.push({ from, to, tags });
+                 });

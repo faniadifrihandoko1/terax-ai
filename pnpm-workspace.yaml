@@ -7,3 +7,5 @@ allowBuilds:
   esbuild: true
   msgpackr-extract: false
   msw: true
+patchedDependencies:
+  '@replit/codemirror-minimap@0.5.2': patches/@replit__codemirror-minimap@0.5.2.patch
