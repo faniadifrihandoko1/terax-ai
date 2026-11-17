@@ -1,3 +1,4 @@
+import type { AcceptAllSkipReason } from "@/modules/ai/lib/acceptAllSkips";
 import {
   applyReviewedDelete,
   applyReviewedEdit,
@@ -42,6 +43,12 @@ export type ConfirmAcceptedResult = {
   outcome: ReviewApplyOutcome["outcome"] | "skipped";
   reason?: string;
   /**
+   * Machine-readable reason when the outcome is "skipped" (Fase 28):
+   * the caller reports it honestly instead of lumping every skip
+   * under "already done or rejected". Absent when not skipped.
+   */
+  skipReason?: AcceptAllSkipReason;
+  /**
    * Merged per-hunk decisions for edits (pre-existing decisions kept,
    * undecided accepted). Empty for file ops and skipped tabs.
    */
@@ -67,6 +74,7 @@ export async function confirmAcceptedReview(
     return {
       outcome: "skipped",
       reason: `review already ${tab.status}`,
+      skipReason: "already-resolved",
       hunkDecisions: empty,
       acceptFileOp: false,
     };
@@ -81,6 +89,7 @@ export async function confirmAcceptedReview(
       return {
         outcome: "skipped",
         reason: "no changes to confirm",
+        skipReason: "no-changes",
         hunkDecisions: empty,
         acceptFileOp: false,
       };
@@ -140,6 +149,7 @@ export async function confirmAcceptedReview(
     return {
       outcome: "skipped",
       reason: "file already rejected — confirm it in its diff tab",
+      skipReason: "file-rejected",
       hunkDecisions: empty,
       acceptFileOp: false,
     };

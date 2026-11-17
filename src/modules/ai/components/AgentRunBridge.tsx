@@ -453,6 +453,13 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
         if (!r.ok) {
           // Edit precondition failed (string not found / not unique).
           // Skip opening the tab; the tool result already told the model.
+          // Fase 28: this strands the proposal — the card still shows
+          // its row, now as "Tanpa tab", and the row click can only
+          // rebuild it when a registry entry or checkpoint survives,
+          // so leave a trace instead of failing silently.
+          console.warn(
+            `[bridge] skipping review tab for ${p.proposalId} (${abs}): derive failed`,
+          );
           tracker.markCompleted(flight, p.proposalId);
           continue;
         }

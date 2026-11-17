@@ -32,6 +32,12 @@ import {
 import { saveReviewState } from "@/modules/ai/lib/sessions";
 import { snapshotReviewState } from "@/modules/ai/lib/reviewPersistence";
 import {
+  describeAcceptAllSkips,
+  type AcceptAllSkipReason,
+} from "@/modules/ai/lib/acceptAllSkips";
+import { getPendingProposal } from "@/modules/ai/lib/pendingProposals";
+import { buildRecreatedAiDiffTab } from "@/modules/ai/lib/recreateAiDiffTab";
+import {
   getCheckpoint,
   listCheckpoints,
   restoreCheckpoint,
@@ -475,6 +481,32 @@ export default function App() {
         (t): t is AiDiffTab =>
           t.kind === "ai-diff" && t.approvalId === approvalId,
       );
+      // Fase 28: the tab can be missing while its card row stays on
+      // screen (the bridge never created it, or the user closed it).
+      // The change is still on disk and usually still recoverable
+      // from the written baseline or the checkpoint — rebuild the tab
+      // instead of giving up on the review. A rebuilt tab opens fresh
+      // (pending); its status is left alone so a tab that appeared
+      // between render and click is never clobbered.
+      if (tab === undefined) {
+        const recreated = buildRecreatedAiDiffTab({
+          approvalId,
+          absPath: path,
+          cwd: useChatStore.getState().live.getCwd(),
+          registry: getPendingProposal(path),
+          checkpoint: getCheckpoint(approvalId),
+        });
+        if (recreated !== null) {
+          openAiDiffTab(recreated);
+          if (!activateAiDiffTab(approvalId)) {
+            toast.error("Tidak bisa membuka tab review", {
+              description:
+                "Tab review sudah dibuat ulang tapi gagal diaktifkan. Coba lagi.",
+            });
+          }
+          return;
+        }
+      }
       const decision = decideOpenFileDiff({
         tabExists: tab !== undefined,
       });
@@ -482,7 +514,7 @@ export default function App() {
         openFileTab(path, true);
         toast.info("Review belum siap untuk file ini", {
           description:
-            "Tab review belum terbentuk (agent mungkin masih bekerja). File dibuka di editor; coba lagi setelah agent selesai.",
+            "Tab review belum terbentuk dan perubahannya tidak bisa dibangun ulang dari catatan yang tersisa. File dibuka di editor.",
         });
         return;
       }
@@ -505,7 +537,7 @@ export default function App() {
         setAiDiffStatus(approvalId, "reviewing");
       }
     },
-    [activateAiDiffTab, openFileTab, setAiDiffStatus, tabs],
+    [activateAiDiffTab, openAiDiffTab, openFileTab, setAiDiffStatus, tabs],
   );
 
   // Fase 5: Restore from the Changed Files card. The guarded restore
@@ -549,7 +581,10 @@ export default function App() {
         "@/modules/editor/lib/confirmAcceptedReview"
       );
       let confirmed = 0;
-      let skipped = 0;
+      // Fase 28: every skip carries its reason, so the toast reports
+      // what actually happened instead of claiming every skipped file
+      // was already done or rejected.
+      const skipped: { reason: AcceptAllSkipReason }[] = [];
       const failed: { path: string; reason: string }[] = [];
       for (const approvalId of approvalIds) {
         const tab = tabs.find(
@@ -557,7 +592,7 @@ export default function App() {
             t.kind === "ai-diff" && t.approvalId === approvalId,
         );
         if (!tab) {
-          skipped += 1;
+          skipped.push({ reason: "missing-tab" });
           continue;
         }
         const result = await confirmAcceptedReview(
@@ -565,7 +600,9 @@ export default function App() {
           activeSessionId ?? undefined,
         );
         if (result.outcome === "skipped") {
-          skipped += 1;
+          skipped.push({
+            reason: result.skipReason ?? "already-resolved",
+          });
           continue;
         }
         // Mirror the pane: decisions are recorded at decision time,
@@ -597,26 +634,25 @@ export default function App() {
           });
         }
       }
+      const skipSummary = describeAcceptAllSkips(skipped);
       const skippedNote =
-        skipped > 0 ? `, ${skipped} dilewati` : "";
+        skipped.length > 0 ? `, ${skipped.length} dilewati` : "";
       if (failed.length === 0 && confirmed > 0) {
         toast.success(`Accept all selesai: ${confirmed} file dikonfirmasi`, {
-          description:
-            skipped > 0
-              ? `${skipped} file dilewati (sudah selesai atau sudah ditolak — konfirmasi dari tab-nya).`
-              : undefined,
+          description: skipSummary,
         });
       } else if (failed.length > 0) {
         toast.warning(
           `Accept all selesai sebagian: ${confirmed} dikonfirmasi, ${failed.length} gagal${skippedNote}`,
           {
-            description: `${failed[0]?.path}: ${failed[0]?.reason}`,
+            description: skipSummary
+              ? `${failed[0]?.path}: ${failed[0]?.reason} — ${skipSummary}`
+              : `${failed[0]?.path}: ${failed[0]?.reason}`,
           },
         );
-      } else if (skipped > 0) {
+      } else if (skipped.length > 0) {
         toast.info("Tidak ada file yang dikonfirmasi", {
-          description:
-            "Semua file sudah selesai atau sudah ditolak — konfirmasi dari tab-nya.",
+          description: skipSummary,
         });
       }
     },

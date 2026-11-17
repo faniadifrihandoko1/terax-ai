@@ -46,6 +46,13 @@ export type ChangedFileEntry = {
    */
   mutations: FileMutation[];
   status: AiDiffStatus;
+  /**
+   * Fase 28: whether an ai-diff tab exists for this row. The status
+   * map is built from the tabs, so a missing entry means no tab — and
+   * such a row must not claim "Pending" as if it were reviewable, nor
+   * be offered to Accept all (there is nothing to confirm through).
+   */
+  hasTab: boolean;
 };
 
 type Props = {
@@ -80,6 +87,10 @@ export function acceptAllApprovalIds(
   const out: string[] = [];
   for (const e of entries) {
     if (e.approvalId === null) continue;
+    // Fase 28: a row without a review tab is not confirmable — the
+    // old code offered it anyway, and the handler skipped it with a
+    // toast claiming it was already done or rejected.
+    if (!e.hasTab) continue;
     if (
       e.status !== "pending" &&
       e.status !== "reviewing" &&
@@ -296,8 +307,13 @@ const ChangedFileRow = memo(function ChangedFileRow({
       <Badge
         variant={AI_DIFF_STATUS_BADGE[entry.status]}
         className="shrink-0 text-[10.5px]"
+        title={
+          entry.hasTab
+            ? undefined
+            : "Tab review belum terbentuk untuk file ini — klik baris untuk membukanya kembali bila bisa, atau buka file di editor."
+        }
       >
-        {statusShortLabel(entry.status)}
+        {entry.hasTab ? statusShortLabel(entry.status) : "Tanpa tab"}
       </Badge>
     </>
   );
@@ -518,9 +534,33 @@ export function buildEntries(
       status: mutation.approvalId
         ? (reviewStatusByApproval?.get(mutation.approvalId) ?? "pending")
         : "pending",
+      hasTab:
+        mutation.approvalId !== null &&
+        (reviewStatusByApproval?.has(mutation.approvalId) ?? false),
     };
     if (composable) composedByPath.set(mutation.path, entry);
     out.push(entry);
+  }
+  // Fase 28: a composed row acts on the latest proposal that actually
+  // has a review tab. The bridge opens a second tab when the first
+  // cannot absorb a newer proposal (it is already being reviewed), so
+  // the first id would point Accept all and the row click at stale
+  // content while the newest change hides in a tab the card never
+  // references. When no mutation has a tab, the row keeps the first
+  // id and reports hasTab false.
+  for (const e of out) {
+    const tabbed = [...e.mutations].reverse().find(
+      (m) =>
+        m.approvalId !== null &&
+        (reviewStatusByApproval?.has(m.approvalId) ?? false),
+    );
+    if (tabbed?.approvalId) {
+      e.approvalId = tabbed.approvalId;
+      e.status = reviewStatusByApproval?.get(tabbed.approvalId) ?? "pending";
+    }
+    e.hasTab =
+      e.approvalId !== null &&
+      (reviewStatusByApproval?.has(e.approvalId) ?? false);
   }
   return out;
 }
