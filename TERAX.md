@@ -1940,6 +1940,61 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   (Fase 25), warna sintaks/minimap (Fase 23), review inline
   (Fase 4), hunk bars (Fase 21), Changed Files/Accept all
   (Fase 20), jalur ESLint, tab ai-diff.
+  Fase 27 (sidebar mengikuti tab aktif / auto-reveal, DEL-126),
+  DONE - user: klik tab file di header tidak membuat sidebar membuka
+  folder dan menyorot file yang sedang dibuka itu (screenshot:
+  file `container.tsx`/`index.tsx` aktif di tab, sidebar tetap
+  tertutup semua, file tidak aktif - padahal file itu jauh di dalam
+  `src/app/[locale]/(global)/(online-test)/...`). Di VS Code/
+  Antigravity sidebar selalu mengikuti tab aktif. Diagnosis
+  (dari kode, bukan tebakan): sinkronisasi SEBAGIAN sudah ada -
+  `FileExplorer` punya effect yang memilih + meng-scroll baris file
+  aktif (`collapseSelectionTo` + `scrollEntryIntoView`) - TAPI hanya
+  bila file itu sudah ada di `entryIndexByPath`, yaitu bila folder
+  induknya SUDAH terbuka dan ter-load. Untuk file di dalam folder
+  yang tertutup, effect itu `return` diam-diam: tidak ada satu pun
+  kode yang membuka folder induknya. Flag `reveal` di
+  `refresh(path, reveal)` bukan untuk tab aktif. Perbaikan:
+  (1) modul murni baru `src/modules/explorer/lib/revealPath.ts` -
+  `normalizeExplorerPath` (backslash -> slash, strip trailing
+  separator), `relativeSegments` (segmen file di bawah root, atau
+  null bila di luar root; prefix root dicocokkan case-insensitive
+  supaya `C:` vs `c:` tidak menghalangi), `ancestorDirs`
+  (semua folder induk top-down, dibangun dari string rootPath
+  verbatim supaya kuncinya sama persis dengan kunci yang dibangun
+  tree lewat `joinPath`); (2) `useFileTree.revealFile(filePath)` -
+  expand semua ancestor lewat `expand` yang sudah ada (tidak perlu
+  walk berurutan: `fetchChildren` membaca direktori apa pun langsung
+  dari disk, tidak bergantung pada parent yang ter-load);
+  mengembalikan false bila file di luar root / tidak ada root;
+  (3) effect di `FileExplorer`: bila file aktif belum ada di index,
+  panggil `tree.revealFile` SEKALI per path yang berbeda
+  (`lastRevealAttemptRef`) - effect jalan lagi saat rows rebuild dan
+  cabang lama memilih + meng-scroll begitu file muncul di index.
+  Reveal saja, bukan focus: fokus keyboard tetap di editor. Tab
+  non-file (ai-diff, settings, dsb.) tidak memicu apa-apa karena
+  `activeFilePath` null untuk mereka. Ganti tab cepat berurutan aman:
+  reveal adalah update state sinkron + fetch fire-and-forget, tidak
+  ada pekerjaan async yang saling berebut; folder yang sudah terbuka
+  dari reveal sebelumnya dibiarkan terbuka (seperti VS Code). Tanpa
+  setting baru - perilaku default ON seperti VS Code. Verifikasi:
+  check-types 0 error; lint 0 error / 88 warning / 1 info (baseline);
+  full test 2697/2697 hijau 2x (+17, semua di `revealPath.test.ts`,
+  TDD); tanpa perubahan Rust. Batas jujur: repo tidak punya DOM env,
+  jadi expand + sorot + scroll live TIDAK teruji - yang teruji adalah
+  helper murni di bawahnya; pembuktian end-to-end HARUS dicek di
+  laptop (cek persis: install build Fase 27, klik tab file yang
+  jauh di dalam folder - sidebar membuka semua folder induk, file
+  tersorot, dan barisnya terlihat; klik tab lain - sidebar mengikuti
+  lagi; klik tab file di root - tidak ada yang berubah). Batasan:
+  kunci ancestor dibangun dari casing segmen di path tab; bila
+  casing itu berbeda dari casing di disk, reveal diam-diam tidak
+  jalan (perilaku exact-match yang sama seperti `isUnder` di tree).
+  Di luar scope: panel reference + tombol X (Fase 24/24.1), klik
+  sidebar/DnD (Fase 25), warna sintaks/minimap (Fase 23), review
+  inline (Fase 4), hunk bars (Fase 21), Changed Files/Accept all
+  (Fase 20), jalur ESLint, tab ai-diff, kode attach-failure LSP
+  (Fase 26).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
