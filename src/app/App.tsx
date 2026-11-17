@@ -31,12 +31,8 @@ import {
 } from "@/modules/ai";
 import { saveReviewState } from "@/modules/ai/lib/sessions";
 import { snapshotReviewState } from "@/modules/ai/lib/reviewPersistence";
-import {
-  describeAcceptAllSkips,
-  type AcceptAllSkipReason,
-} from "@/modules/ai/lib/acceptAllSkips";
+import { describeAcceptAllSkips, type AcceptAllSkipReason } from "@/modules/ai/lib/acceptAllSkips";
 import { getPendingProposal } from "@/modules/ai/lib/pendingProposals";
-import { buildRecreatedAiDiffTab } from "@/modules/ai/lib/recreateAiDiffTab";
 import {
   getCheckpoint,
   listCheckpoints,
@@ -476,7 +472,7 @@ export default function App() {
   const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
   const eslintEnabled = usePreferencesStore((s) => s.eslintEnabled);
   const handleOpenFileDiff = useCallback(
-    (approvalId: string, path: string) => {
+    async (approvalId: string, path: string) => {
       const tab = tabs.find(
         (t): t is AiDiffTab =>
           t.kind === "ai-diff" && t.approvalId === approvalId,
@@ -489,6 +485,14 @@ export default function App() {
       // (pending); its status is left alone so a tab that appeared
       // between render and click is never clobbered.
       if (tab === undefined) {
+        // Dynamic import, not a static one: the recreation helper
+        // reads resolveMutationPath from fileMutations, which pulls
+        // the tools barrel (incl. the AI agent tool) into the eager
+        // chunk (same lesson as the Fase 18 bus split). A row click
+        // is a user gesture, so loading it on demand is free.
+        const { buildRecreatedAiDiffTab } = await import(
+          "@/modules/ai/lib/recreateAiDiffTab"
+        );
         const recreated = buildRecreatedAiDiffTab({
           approvalId,
           absPath: path,
