@@ -2193,6 +2193,85 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   inline (Fase 4), hunk bars (Fase 21), Changed Files/Accept all /
   tab recreation (Fase 20/28), jalur ESLint, kode attach-failure LSP
   (Fase 26), auto-reveal sidebar (Fase 27).
+  Fase 30 (plan review ala Antigravity, DEL-129), DONE - user:
+  fitur Antigravity yang paling worth ditambahkan adalah Plan
+  review; gas diberikan untuk membangunnya sebagai Fase 30. Kontrak:
+  mode selector Agent / Plan di composer (Agent tetap default);
+  Plan mode READ-ONLY - agent hanya memakai tool baca dan menyusun
+  rencana terstruktur (tujuan, file + alasan, langkah berurutan,
+  risiko, cara verifikasi); tombol "Setujui & jalankan" (+ Tolak);
+  edit rencana lewat balasan chat; setelah disetujui langkah rencana
+  menjadi todos dan eksekusi tetap lewat flow review yang ada;
+  rencana yang disetujui tersimpan di store. Desain (diverifikasi
+  dari kode, bukan tebakan): alur run adalah
+  `chatRuntime.makeChat` (Chat + ToolContext per sesi) ->
+  `createContextAwareTransport` (`getPlanMode`) ->
+  `runAgentStream` (`planMode` -> `PLAN_MODE_PROMPT`) ->
+  `buildTools(ctx)` -> `streamText`. Mode Plan disimpan per sesi di
+  store baru `planReviewStore` (`modeBySession`, record
+  `{mode, plan, status, updatedAt}`), persistensi Tauri LazyStore
+  `terax-ai-plan-review.json` pola yang sama seperti todos
+  (`planReviewPersistence.ts`, dipisah agar store test bisa mock
+  boundary persistensi). Penegakan read-only DI LEVEL TOOL, bukan
+  prompt: `buildTools` membaca `ctx.isPlanReviewMode()` SEKALI saat
+  run dimulai (snapshot per run - ganti selector di tengah run tidak
+  mengubah run yang sedang jalan) - bila Plan, semua tool mutasi
+  di-wrap `applyPlanReviewGuard` (`lib/planReview.ts`) sehingga
+  `execute`-nya menolak sebelum jalan (`{error: PLAN_REVIEW_REFUSAL}`)
+  dan `needsApproval` di-nol-kan supaya tidak ada approval card
+  untuk panggilan yang pasti ditolak; `submit_plan` ditambahkan
+  sebagai satu-satunya jalan rencana sampai ke user. Blocklist
+  eksplisit: write_file, edit, multi_edit, delete_file, rename_file,
+  create_directory, bash_run, bash_background, bash_kill,
+  spawn_coding_agent, send_to_agent, run_subagent, todo_write,
+  suggest_command, open_preview. Yang lolos: read_file,
+  list_directory, grep, glob, bash_logs, bash_list,
+  get_terminal_output, read_agent_output. Bash diblokir SELURUHNYA
+  (tidak ada classifier read-only yang bersih untuk command
+  free-form - bahkan `git status`/`ls` ditolak di Plan mode).
+  `todo_write` diblokir di Plan mode - langkah rencana baru menjadi
+  todos saat disetujui. Rencana masuk sebagai data terstruktur lewat
+  tool baru `submit_plan` (`tools/planReview.ts`, zod schema,
+  divalidasi `validatePlan`); prompt `PLAN_REVIEW_PROMPT`
+  (`lib/agent.ts`, menang atas `PLAN_MODE_PROMPT` upstream bila
+  keduanya aktif - keduanya kontradiktif) memerintahkan model
+  memanggilnya sekali lalu berhenti. `submit_plan` kedua menimpa
+  draft (revisi). UI: `ModeSelector` di `AiComposerInput` di samping
+  `AgentSwitcher` (dropdown pola yang sama; Plan ditandai amber +
+  placeholder berubah supaya mode selalu terlihat);
+  `PlanReviewCard` di `AiChatView` setelah daftar pesan (render dari
+  store, bukan dari message parts - tahan scroll/re-render; hydrate
+  per sesi seperti todos). "Setujui & jalankan": `approvePlan`
+  (status approved, mode kembali "agent"), langkah -> todos
+  (di-append, tidak mengganti todos sesi yang ada), lalu
+  `sendMessage(planToExecutionMessage(plan))` - run eksekusi adalah
+  run agent normal, jadi review per-hunk / Confirm / checkpoint
+  tetap berlaku. "Tolak": draft dihapus. Mode Plan upstream (`/plan`,
+  `usePlanStore`, antre edit) TIDAK dipakai ulang dan TIDAK diubah -
+  semantiknya berbeda (antre edit vs dokumen rencana read-only);
+  bedakan keduanya di sini. Verifikasi: check-types 0 error; lint 0
+  error / 88 warning / 1 info (baseline - satu warning baru
+  `noArrayIndexKey` di key langkah kartu sempat muncul, diperbaiki
+  dengan key dari konten langkah); full test 2746/2746 hijau 2x (+29,
+  semua di `planReview.test.ts`, `planReviewStore.test.ts`,
+  `planReview.test.ts`, TDD); tanpa perubahan Rust. Insiden saat
+  verifikasi: full test pertama gagal total (283 suite, 0 test)
+  karena /tmp penuh (ENOSPC) - penyebabnya worktree sementara
+  `/tmp/terax-base` (455M) + stray `/tmp/.pnpm-store` (485M, bukan
+  store aktif pnpm yang ada di `~/.local/share/pnpm/store/v11`);
+  keduanya dihapus, /tmp kembali 508M tersedia, lalu full test hijau
+  2x. Jangan membuat git worktree di /tmp (tmpfs 512M). Batas jujur:
+  repo tidak punya DOM env, jadi klik mode Plan, kartu rencana,
+  tombol Setujui, dan eksekusi live TIDAK teruji - yang teruji adalah
+  logika murni di bawahnya (guard, validasi rencana, transisi store,
+  tool submit_plan, inklusi tool di buildTools); pembuktian end-to-end
+  HARUS dicek di laptop (cek persis: pilih mode Plan di composer,
+  minta rencana, kartu rencana muncul dengan tombol Setujui &
+  jalankan; tekan Setujui - mode kembali Agent, langkah menjadi
+  todos, agent mengeksekusi; di Plan mode agent tidak boleh menulis
+  file apa pun). Di luar scope: Ask mode, auto-verifikasi setelah
+  Confirm (kandidat Fase 31), live preview/browser, perubahan flow
+  review/Confirm/checkpoint, auto-import completion (Fase 29).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
