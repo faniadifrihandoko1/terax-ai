@@ -102,7 +102,9 @@ export const PLAN_REVIEW_REFUSAL =
 
 type ToolLike = {
   execute?: (...args: never[]) => unknown;
-  needsApproval?: boolean;
+  // AI SDK tools may carry needsApproval as a boolean or a function;
+  // the guard only ever writes `false` here, so the type stays loose.
+  needsApproval?: unknown;
 };
 
 /**

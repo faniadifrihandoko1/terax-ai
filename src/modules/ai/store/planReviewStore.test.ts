@@ -3,7 +3,7 @@ import { usePlanReviewStore } from "./planReviewStore";
 import type { PlanReviewPlan } from "../lib/planReview";
 
 const persistence = vi.hoisted(() => ({
-  loadPlanReview: vi.fn(async (_sessionId: string) => null),
+  loadPlanReview: vi.fn(async (_sessionId: string): Promise<unknown> => null),
   savePlanReview: vi.fn(async (_sessionId: string, _record: unknown) => {}),
   deletePlanReview: vi.fn(async (_sessionId: string) => {}),
 }));
