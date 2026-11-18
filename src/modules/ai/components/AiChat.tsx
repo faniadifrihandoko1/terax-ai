@@ -49,9 +49,11 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import type { AiDiffStatus } from "@/modules/tabs";
 import { AiToolApproval } from "./AiToolApproval";
 import { ChangedFilesCard } from "./ChangedFilesCard";
+import { PlanReviewCard } from "./PlanReviewCard";
 import { shouldShowChangesCard } from "../lib/changesCardVisibility";
 import { buildPartGroups, partType, type AnyPart } from "../lib/partGroups";
 import { estimateMessageHeight } from "./messageHeightEstimate";
+import { usePlanReviewStore } from "../store/planReviewStore";
 import { useTodosStore } from "../store/todoStore";
 import { isAbnormalOutcome, runOutcomeLabel } from "../lib/runOutcome";
 
@@ -230,6 +232,12 @@ export function AiChatView({
   useEffect(() => {
     if (sessionId) void useTodosStore.getState().hydrate(sessionId);
   }, [sessionId]);
+  // Fase 30: same for the plan-review record, so a draft plan (and the
+  // composer's Plan mode) survives an app restart and the card below
+  // can render it.
+  useEffect(() => {
+    if (sessionId) void usePlanReviewStore.getState().hydrate(sessionId);
+  }, [sessionId]);
   // Dismissal is keyed on the outcome + open count, so a new run (or a
   // changed todo list) shows the notice again.
   const [dismissedNoticeKey, setDismissedNoticeKey] = useState<string | null>(
@@ -285,6 +293,10 @@ export function AiChatView({
             onDismiss={() => patchAgentMeta({ compactionNotice: null })}
           />
         )}
+        {/* Fase 30: the draft plan card — rendered from the store, not
+            from message parts, so it survives scrolling and re-renders
+            and stays visible until the user approves or rejects it. */}
+        <PlanReviewCard />
         {showRunNotice && lastRunOutcome !== null && (
           <InterruptedRunNotice
             outcome={lastRunOutcome}

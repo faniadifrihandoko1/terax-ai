@@ -7,9 +7,11 @@ import { useWorkspaceFiles } from "../hooks/useWorkspaceFiles";
 import { useComposer } from "../lib/composer";
 import { SLASH_COMMANDS } from "../lib/slashCommands";
 import { useChatStore } from "../store/chatStore";
+import { usePlanReviewStore } from "../store/planReviewStore";
 import { useSnippetsStore } from "../store/snippetsStore";
 import { AgentSwitcher } from "./AgentSwitcher";
 import { FilePickerContent } from "./FilePicker";
+import { ModeSelector } from "./ModeSelector";
 import { SnippetPickerContent, type PickerItem } from "./SnippetPicker";
 
 type SnippetTrigger = {
@@ -62,6 +64,12 @@ export function AiComposerInput() {
   const c = useComposer();
   const snippets = useSnippetsStore((s) => s.snippets);
   const workspaceRoot = useChatStore((s) => s.live.getWorkspaceRoot());
+  const sessionId = useChatStore((s) => s.activeSessionId);
+  // Fase 30: the composer shows the session's mode; in Plan mode the
+  // placeholder says so, so the mode is never a surprise.
+  const composerMode = usePlanReviewStore((s) =>
+    sessionId ? (s.bySession[sessionId]?.mode ?? "agent") : "agent",
+  );
 
   const [trigger, setTrigger] = useState<SnippetTrigger | null>(null);
   const [fileTrigger, setFileTrigger] = useState<FileTrigger | null>(null);
@@ -257,14 +265,21 @@ export function AiComposerInput() {
                   c.submit();
                 }
               }}
-              placeholder="Ask Terax anything   -   # for snippets and commands, @ for files"
+              placeholder={
+                composerMode === "plan"
+                  ? "Describe what to plan — the agent drafts a plan for your approval, no files changed"
+                  : "Ask Terax anything   -   # for snippets and commands, @ for files"
+              }
               rows={1}
               className={cn(
                 "max-h-40 flex-1 resize-none bg-transparent text-[13px] leading-relaxed outline-none",
                 "placeholder:text-muted-foreground/60",
               )}
             />
-            <AgentSwitcher />
+            <div className="flex shrink-0 items-start gap-1.5">
+              <ModeSelector />
+              <AgentSwitcher />
+            </div>
           </div>
         </PopoverAnchor>
         {fileTrigger ? (
