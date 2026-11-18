@@ -20,6 +20,13 @@ export type ToolContext = {
   readCache: Map<string, { size: number; hash: number }>;
   /** Active chat session id — used by tools that persist per-session state (todos). */
   getSessionId: () => string | null;
+  /**
+   * Fase 30: true while the session's composer is in Plan mode.
+   * Read live at run start (buildTools snapshots it per run); the
+   * plan-review guard refuses mutating tools while it is true.
+   * Absent in contexts that predate plan review (treated as agent mode).
+   */
+  isPlanReviewMode?: () => boolean;
 };
 
 export function resolvePath(rawPath: string, cwd: string | null): string {

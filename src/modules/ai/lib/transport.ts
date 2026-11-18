@@ -66,6 +66,8 @@ type Deps = {
   onCompact?: (info: { droppedCount: number }) => void;
   onFinishMeta?: (info: { hitStepCap: boolean; finishReason: string }) => void;
   getPlanMode?: () => boolean;
+  /** Fase 30: true while the session's composer is in Plan mode. */
+  getPlanReviewMode?: () => boolean;
   /** Fase 9: outcome of the previous run in this session, if any. */
   getLastRunOutcome?: () => LastRunOutcome | null;
   /** Fase 9: titles of the session's open (not completed) todos. */
@@ -118,7 +120,11 @@ export function createContextAwareTransport(deps: Deps) {
       openrouterModelId: deps.getOpenrouterModelId?.(),
       customEndpoints: deps.getCustomEndpoints?.(),
       customEndpointKeys: deps.getCustomEndpointKeys?.(),
-      planMode: deps.getPlanMode?.(),
+      // Fase 30: plan-review mode suppresses the upstream queue-mode
+      // prompt (the two contradict) and carries its own prompt.
+      planMode:
+        deps.getPlanMode?.() && !deps.getPlanReviewMode?.() ? true : undefined,
+      planReviewMode: deps.getPlanReviewMode?.(),
       projectMemory,
       uiMessages: messagesForRun,
       abortSignal: options.abortSignal,

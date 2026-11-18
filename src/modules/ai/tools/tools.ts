@@ -1,11 +1,13 @@
 import { buildManagedAgentTools } from "./agent";
 import { buildEditTools } from "./edit";
 import { buildFsTools } from "./fs";
+import { buildPlanReviewTools } from "./planReview";
 import { buildSearchTools } from "./search";
 import { buildShellTools } from "./shell";
 import { buildSubagentTools } from "./subagent";
 import { buildTerminalTools } from "./terminal";
 import { buildTodoTools } from "./todo";
+import { applyPlanReviewGuard } from "../lib/planReview";
 
 export { resolvePath, type ToolContext } from "./context";
 
@@ -33,12 +35,17 @@ export { resolvePath, type ToolContext } from "./context";
  *    (the model must have called read_file on the path earlier in the
  *    session).
  *
- * The model sees absolute paths only after they are resolved against the
- * active terminal's cwd (provided via `getCwd`); it should not invent paths
- * outside that.
+ * Plan-review mode (Fase 30, Antigravity-style): when the run starts
+ * with the session's composer in Plan mode, the toolset is snapshotted
+ * as read-only — every mutating tool's `execute` is wrapped to refuse
+ * before running (see applyPlanReviewGuard in lib/planReview.ts) and
+ * `submit_plan` is added as the only way to hand the user a plan.
+ * The mode is read once, at build time, so flipping the selector
+ * mid-run does not change the in-flight run; the next run picks the
+ * new mode up. The upstream `/plan` queue mode is untouched.
  */
 export function buildTools(ctx: import("./context").ToolContext) {
-  return {
+  const tools = {
     ...buildFsTools(ctx),
     ...buildEditTools(ctx),
     ...buildSearchTools(ctx),
@@ -48,4 +55,12 @@ export function buildTools(ctx: import("./context").ToolContext) {
     ...buildTodoTools(ctx),
     ...buildManagedAgentTools(ctx),
   } as const;
+  // Fase 30: snapshot the composer mode for this run.
+  if (ctx.isPlanReviewMode?.()) {
+    return {
+      ...applyPlanReviewGuard(tools),
+      ...buildPlanReviewTools(ctx),
+    } as const;
+  }
+  return tools;
 }

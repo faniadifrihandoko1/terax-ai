@@ -8,6 +8,7 @@ import { usePreferencesStore } from "@/modules/settings/preferences";
 import { BUILTIN_AGENTS } from "../lib/agents";
 import { useAgentsStore } from "./agentsStore";
 import { usePlanStore } from "./planStore";
+import { usePlanReviewStore } from "./planReviewStore";
 import { createContextAwareTransport } from "../lib/transport";
 import type { ToolContext } from "../tools/tools";
 import { useTodosStore } from "./todoStore";
@@ -41,6 +42,10 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       useChatStore.getState().live.readLeafBuffer(leafId),
     readCache,
     getSessionId: () => sessionId,
+    // Fase 30: the run's toolset is snapshotted from the session's
+    // composer mode at build time (see buildTools).
+    isPlanReviewMode: () =>
+      usePlanReviewStore.getState().modeOf(sessionId) === "plan",
   };
 
   const transport = createContextAwareTransport({
@@ -65,6 +70,10 @@ function makeChat(sessionId: string): Chat<UIMessage> {
       };
     },
     getPlanMode: () => usePlanStore.getState().active,
+    // Fase 30: read live at run start; transport suppresses the
+    // upstream queue-mode prompt while this is on.
+    getPlanReviewMode: () =>
+      usePlanReviewStore.getState().modeOf(sessionId) === "plan",
     getLastRunOutcome: () =>
       useChatStore.getState().agentMeta.lastRunOutcome,
     getOpenTodoTitles: () =>

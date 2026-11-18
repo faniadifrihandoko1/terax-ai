@@ -25,6 +25,7 @@ import {
 import { buildTools, type ToolContext } from "../tools/tools";
 import { compactModelMessagesDetailed } from "./compact";
 import type { ProviderKeys, CustomEndpointKeys } from "./keyring";
+import { PLAN_REVIEW_PROMPT } from "./planReview";
 import { prepareAgentPrompt } from "./prompt";
 import { createProxyFetch } from "./proxyFetch";
 
@@ -358,6 +359,8 @@ export type RunAgentOptions = {
   customEndpoints?: readonly CustomEndpoint[];
   customEndpointKeys?: CustomEndpointKeys;
   planMode?: boolean;
+  /** Fase 30: composer in Plan mode — read-only run, submit a plan. */
+  planReviewMode?: boolean;
   projectMemory?: string | null;
   uiMessages: UIMessage[];
   abortSignal?: AbortSignal;
@@ -415,9 +418,17 @@ export async function runAgentStream(opts: RunAgentOptions) {
     opts.onCompact?.({ droppedCount: compact.droppedCount });
   }
 
+  // Fase 30: plan-review mode wins over the upstream queue mode —
+  // the two prompts contradict each other (queue mutations vs never
+  // mutate), and the read-only plan instruction is the one that must
+  // reach the model. The tool-level guard enforces it either way.
   const prompt = prepareAgentPrompt(
     stableSystem,
-    opts.planMode ? PLAN_MODE_PROMPT : null,
+    opts.planReviewMode
+      ? PLAN_REVIEW_PROMPT
+      : opts.planMode
+        ? PLAN_MODE_PROMPT
+        : null,
     compactedHistory,
     provider,
   );
