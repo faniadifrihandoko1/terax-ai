@@ -54,6 +54,49 @@ export type PendingProposal = {
 
 const pending = new Map<string, PendingProposal>();
 
+/**
+ * Change notifications for the registry (Fase 34). The registry is
+ * module-level mutable state outside React, so a component that
+ * renders from it (the explorer's pending-review badges) needs a
+ * subscription to know when to re-read it. The version only moves
+ * when the set actually changes: a compose always moves the written
+ * content forward, a clear only notifies when it removed an entry.
+ */
+let pendingVersion = 0;
+const pendingListeners = new Set<() => void>();
+
+function notifyPendingProposalsChanged(): void {
+  pendingVersion += 1;
+  for (const listener of pendingListeners) listener();
+}
+
+/** Snapshot of every live pending proposal, with its path. */
+export function listPendingProposals(): Array<{
+  path: string;
+  proposal: PendingProposal;
+}> {
+  return [...pending.entries()].map(([path, proposal]) => ({
+    path,
+    proposal,
+  }));
+}
+
+/**
+ * Subscribes to registry changes; returns an unsubscribe function.
+ * Pair with `getPendingProposalsVersion` in `useSyncExternalStore`.
+ */
+export function subscribePendingProposals(listener: () => void): () => void {
+  pendingListeners.add(listener);
+  return () => {
+    pendingListeners.delete(listener);
+  };
+}
+
+/** Monotonic version of the registry contents (see above). */
+export function getPendingProposalsVersion(): number {
+  return pendingVersion;
+}
+
 export function getPendingProposal(
   path: string,
 ): PendingProposal | undefined {
@@ -87,13 +130,16 @@ export function composePendingProposal(
         ...(approvalId !== undefined ? { approvalId } : {}),
       };
   pending.set(path, next);
+  notifyPendingProposalsChanged();
   return next;
 }
 
 export function clearPendingProposal(path: string): void {
-  pending.delete(path);
+  if (pending.delete(path)) notifyPendingProposalsChanged();
 }
 
 export function clearAllPendingProposals(): void {
+  if (pending.size === 0) return;
   pending.clear();
+  notifyPendingProposalsChanged();
 }
