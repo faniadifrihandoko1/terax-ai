@@ -6,6 +6,11 @@ type Params<T> = {
   minLength: number;
   debounceMs: number;
   run: (term: string) => Promise<T[]>;
+  /**
+   * Extra key that re-triggers the query when it changes, for inputs the
+   * effect cannot see (e.g. search options held outside `run`).
+   */
+  refreshKey?: string;
 };
 
 export type AsyncQueryState<T> = {
@@ -21,6 +26,7 @@ export function useAsyncQuery<T>({
   minLength,
   debounceMs,
   run,
+  refreshKey,
 }: Params<T>): AsyncQueryState<T> {
   const [results, setResults] = useState<T[]>([]);
   const [loading, setLoading] = useState(false);
@@ -62,7 +68,7 @@ export function useAsyncQuery<T>({
     setError(null);
     const handle = window.setTimeout(() => execute(term), debounceMs);
     return () => window.clearTimeout(handle);
-  }, [enabled, term, minLength, debounceMs, execute]);
+  }, [enabled, term, minLength, debounceMs, execute, refreshKey]);
 
   const retry = useCallback(() => {
     if (enabled && term.length >= minLength) execute(term);
