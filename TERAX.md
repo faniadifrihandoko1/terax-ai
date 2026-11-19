@@ -2270,8 +2270,83 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   jalankan; tekan Setujui - mode kembali Agent, langkah menjadi
   todos, agent mengeksekusi; di Plan mode agent tidak boleh menulis
   file apa pun). Di luar scope: Ask mode, auto-verifikasi setelah
-  Confirm (kandidat Fase 31), live preview/browser, perubahan flow
+  Confirm (kandidat fase berikutnya), live preview/browser, perubahan flow
   review/Confirm/checkpoint, auto-import completion (Fase 29).
+  Fase 31 (search UI ala VS Code, DEL-131), DONE - user: perbaiki
+  fitur search + UI-nya agar tampil seperti panel Search VS Code di
+  screenshot (input dengan toggle Aa/ab/*, "N results in M files -
+  Open in editor", grup file collapsible dengan badge jumlah, baris
+  hasil dengan teks cocok di-highlight oranye). Titik awal
+  (diverifikasi dari kode): global content search hidup di command
+  palette mode `#` (`useContentSearch` -> Tauri
+  `fs_grep_interactive`, pola polos smart-case, LIMIT 80, debounce
+  140ms, hasil flat `ContentHit {path, rel, line, text}` dirender
+  sebagai daftar datar); `ExplorerSearch` adalah pencarian NAMA file
+  (`fs_search`), bukan isi file; `SearchInline` di header hanya find
+  di editor/terminal - ketiganya JANGAN disentuh kecuali content
+  search palette. Tidak ada dukungan matchCase/wholeWord/regex di
+  mana pun. Rust (diperlukan - backend BUKAN binary ripgrep, melainkan
+  crate `grep` (`grep_regex`/`grep_searcher`/`ignore`)):
+  `fs_grep_interactive` + `run_grep_interactive` mendapat opsi
+  `case_sensitive` / `whole_word` / `regex` (`InteractiveGrepOptions`,
+  semua `Option<bool>` jadi pemanggil lama tetap jalan) -
+  `case_smart(!case_sensitive)` sehingga default tetap smart-case
+  seperti sebelumnya, `.word()` native untuk whole-word, dan pola
+  regex dipakai mentah sedangkan literal tetap di-`escape_literal`;
+  regex tidak valid -> `Err("bad regex")` -> palette menampilkan
+  "Search failed" + Retry (jalur error yang sudah ada). Satu-satunya
+  pemanggil adalah `useContentSearch`. Verifikasi Rust: full-crate
+  `cargo test --lib` TIDAK bisa jalan di VM ini (tidak ada header dev
+  gdk-3.0); sebagai gantinya konstruksi matcher diekstrak verbatim ke
+  proyek scratch `/tmp/grep-opts-test` (grep-regex 0.1.14 asli,
+  offline) dan diuji langsung - 5/5 hijau (smart-case default,
+  case-sensitive, whole-word, regex, invalid regex) - plus
+  `rustfmt --check` bersih; kompilasi penuh dibuktikan build Windows
+  CI. TS: modul murni baru
+  `src/modules/command-palette/lib/contentSearchView.ts` -
+  `groupContentHits` (per file, urutan kemunculan pertama; walk Rust
+  paralel jadi hit satu file tidak dijamin berdekatan),
+  `summarizeContentSearch` ("1 result in 1 file" / "N results in M
+  files" + " (partial results)" bila truncated),
+  `findMatchRanges` (cerminan semantik Rust untuk highlight: literal
+  di-escape, regex dipakai mentah, case = matchCase ATAU ada huruf
+  besar di query (smart-case), whole-word dibungkus `\b...\b` ala VS
+  Code, regex tidak valid -> [], zero-length aman, cap 100 range per
+  baris). `useContentSearch` meneruskan flag ke invoke dan
+  mengembalikan `truncated` (dikunci per term supaya run lama yang
+  tersusul tidak menempelkan flag-nya ke hasil baru);
+  `useAsyncQuery` mendapat `refreshKey` opsional agar toggle
+  me-re-run pencarian tanpa mengubah term (dengan komentar
+  biome-ignore mengikuti preseden `useGitBranch` /
+  `AgentRunBridge`). UI di `CommandPalette` (mode content saja):
+  baris toolbar Aa/ab/* di bawah input (`aria-pressed`, fokus
+  kembali ke input setelah toggle, opsi bertahan antar buka palette
+  seperti VS Code - hanya grup collapse yang di-reset saat tutup);
+  baris ringkasan + link "Open in editor" (membuka hit pertama);
+  grup file collapsible (chevron, FileIcon, nama + parent dir redup,
+  badge jumlah) dan baris hit dengan `HighlightedLine` (span
+  `bg-amber-500/45`). Klik baris tetap membuka file di baris yang
+  cocok lewat `onOpenContentHit` yang sudah ada. Verifikasi:
+  check-types 0 error; lint 0 error / 88 warning / 1 info (baseline -
+  sempat 1 error + 5 warning baru: `useExhaustiveDependencies` untuk
+  refreshKey, `noArrayIndexKey` di key span highlight,
+  `noAssignInExpressions` di loop regex, `useSemanticElements` di
+  role=group, `useImportType` - semuanya diperbaiki); full test
+  2763/2763 hijau 2x (+17 test TS baru di
+  `contentSearchView.test.ts`, TDD; +4 test Rust baru di `grep.rs`
+  untuk opsi case/word/regex). Batas jujur: repo tidak punya DOM env,
+  jadi klik toggle, collapse grup, render highlight, dan pengelompokan
+  live TIDAK teruji - yang teruji logika murni di bawahnya; highlight
+  TS bisa menyimpang dari Rust untuk pola regex tanpa literal
+  (smart-case) dan pola whole-word yang berawalan/berakhiran
+  tanda baca (Rust `.word()` vs TS `\b`); cek laptop: buka palette
+  `#`, ketik query, toggle Aa/ab/* benar-benar mengubah hasil,
+  grup file bisa di-collapse dengan badge jumlah, baris "N results in
+  M files - Open in editor" tampil, dan teks cocok berwarna oranye.
+  Di luar scope: replace (cari-ganti), ExplorerSearch, SearchInline,
+  flow review/Confirm/checkpoint, Plan mode (Fase 30), auto-import
+  (Fase 29), panel reference, sidebar, warna sintaks/minimap, jalur
+  ESLint.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
