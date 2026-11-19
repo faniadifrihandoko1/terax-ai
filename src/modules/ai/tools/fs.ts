@@ -1,6 +1,11 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { scheduleEslintProjectLintForFile } from "@/modules/eslint/lib/eslintAutoProjectLint";
+import {
+  detectEol,
+  normalizeToLf,
+  restoreEol,
+} from "@/modules/editor/lib/eol";
 import { native } from "../lib/native";
 import { djb2Hash } from "../lib/hash";
 import {
@@ -176,13 +181,19 @@ export function buildFsTools(ctx: ToolContext) {
           isNewFile = true;
         }
 
+        // Fase 36: keep the file's EOL — the model writes LF; writing
+        // it verbatim into a CRLF file would flip the whole file to
+        // LF (the "Hunk 1 · lines 1-100" bug). A missing file has no
+        // EOL to keep (detectEol("") is LF).
+        const toWrite = restoreEol(normalizeToLf(content), detectEol(original));
+
         if (usePlanStore.getState().active) {
           usePlanStore.getState().enqueue({
             id: newQueuedEditId(),
             kind: "write_file",
             path: abs,
             originalContent: original,
-            proposedContent: content,
+            proposedContent: toWrite,
             isNewFile,
           });
           return {
@@ -198,7 +209,7 @@ export function buildFsTools(ctx: ToolContext) {
         // run can retry it.
         const prior = getPendingProposal(abs);
         try {
-          await native.writeFile(abs, content);
+          await native.writeFile(abs, toWrite);
         } catch (error) {
           return {
             error: `failed to write ${abs}: ${
@@ -212,7 +223,7 @@ export function buildFsTools(ctx: ToolContext) {
         composePendingProposal(
           abs,
           original,
-          content,
+          toWrite,
           isNewFile,
           "edit",
           undefined,
@@ -227,19 +238,19 @@ export function buildFsTools(ctx: ToolContext) {
             sessionId: ctx.getSessionId() ?? undefined,
             path: abs,
             originalContent: original,
-            reconstructedContent: content,
+            reconstructedContent: toWrite,
             appliedHunks: [],
           }),
         );
         // The read cache must track the new content, so the delete
         // guard still passes for the agent's own write.
         ctx.readCache.set(abs, {
-          size: content.length,
-          hash: djb2Hash(content),
+          size: toWrite.length,
+          hash: djb2Hash(toWrite),
         });
         return {
           path: abs,
-          bytesWritten: content.length,
+          bytesWritten: toWrite.length,
           written: true,
           ok: true,
           note: WRITTEN_NOTE,

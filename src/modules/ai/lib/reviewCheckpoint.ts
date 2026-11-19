@@ -1,10 +1,23 @@
 import { native, type ReadResult } from "./native";
 import { djb2Hash } from "./hash";
+import { normalizeToLf } from "@/modules/editor/lib/eol";
 
 // djb2 hash lives in `./hash` (single copy); used for the checkpoint
 // guards. A hash is enough here because the comparison is against
 // content we read back a moment later, not against untrusted input.
 export { djb2Hash };
+
+/**
+ * EOL-insensitive content hash (Fase 36): a CRLF file and its LF
+ * spelling hash alike, so a file the editor re-saved with the other
+ * EOL does not false-conflict the guards. Stored hashes are computed
+ * with this too; the restore guard compares against the stored
+ * CONTENT (not the stored hash) so checkpoints recorded before Fase
+ * 36 — with raw hashes — keep working.
+ */
+function hashOf(content: string): number {
+  return djb2Hash(normalizeToLf(content));
+}
 
 /**
  * Checkpoint for one applied AI file operation (Fase 5, write-first
@@ -70,8 +83,8 @@ export function buildEditCheckpoint(input: {
     kind: "edit",
     contentBefore: input.originalContent,
     contentAfter: input.reconstructedContent,
-    hashBefore: djb2Hash(input.originalContent),
-    hashAfter: djb2Hash(input.reconstructedContent),
+    hashBefore: hashOf(input.originalContent),
+    hashAfter: hashOf(input.reconstructedContent),
     appliedAt: input.appliedAt ?? Date.now(),
     appliedHunks: [...input.appliedHunks],
   };
@@ -91,7 +104,7 @@ export function buildDeleteCheckpoint(input: {
     kind: "delete",
     contentBefore: input.content,
     contentAfter: null,
-    hashBefore: djb2Hash(input.content),
+    hashBefore: hashOf(input.content),
     hashAfter: null,
     appliedAt: input.appliedAt ?? Date.now(),
     appliedHunks: [],
@@ -113,8 +126,8 @@ export function buildRenameCheckpoint(input: {
     kind: "rename",
     contentBefore: input.content,
     contentAfter: input.content,
-    hashBefore: djb2Hash(input.content),
-    hashAfter: djb2Hash(input.content),
+    hashBefore: hashOf(input.content),
+    hashAfter: hashOf(input.content),
     targetPath: input.targetPath,
     appliedAt: input.appliedAt ?? Date.now(),
     appliedHunks: [],
@@ -168,7 +181,7 @@ export function updateCheckpointAfter(
   checkpoints.set(approvalId, {
     ...cp,
     contentAfter,
-    hashAfter: contentAfter === null ? null : djb2Hash(contentAfter),
+    hashAfter: contentAfter === null ? null : hashOf(contentAfter),
     ...(appliedHunks !== undefined ? { appliedHunks: [...appliedHunks] } : {}),
   });
   return true;
@@ -363,17 +376,14 @@ async function readExisting(
   }
 }
 
-function hashOf(content: string): number {
-  return djb2Hash(content);
-}
-
 /**
  * Restores one applied file operation from its checkpoint.
  *
  * Guard (skipped only with force, an explicit second user action):
  * the on-disk state must still be exactly what the apply produced,
  * otherwise the restore is refused instead of silently overwriting
- * the user's later changes.
+ * the user's later changes. The comparison is EOL-insensitive
+ * (Fase 36): only the text matters, not the CRLF/LF spelling.
  * - edit: the file must exist with hashAfter.
  * - delete: the file must still be gone.
  * - rename: the new path must exist with hashAfter and the old path
@@ -411,7 +421,10 @@ export async function restoreCheckpoint(
             reason: "file no longer exists on disk",
           };
         }
-        if (hashOf(current.content) !== cp.hashAfter) {
+        // Fase 36: compare against the stored content, not the stored
+        // hash — checkpoints recorded before Fase 36 carry raw hashes,
+        // and hashOf now normalizes EOL.
+        if (hashOf(current.content) !== hashOf(cp.contentAfter ?? "")) {
           return {
             outcome: "conflict",
             approvalId,
@@ -469,7 +482,7 @@ export async function restoreCheckpoint(
             reason: "renamed file no longer exists on disk",
           };
         }
-        if (hashOf(atTarget.content) !== cp.hashAfter) {
+        if (hashOf(atTarget.content) !== hashOf(cp.contentAfter ?? "")) {
           return {
             outcome: "conflict",
             approvalId,
@@ -497,7 +510,7 @@ export async function restoreCheckpoint(
             reason: back.error,
           };
         }
-        if (!back.exists || hashOf(back.content) !== cp.hashBefore) {
+        if (!back.exists || hashOf(back.content) !== hashOf(cp.contentBefore)) {
           await io.writeFile(cp.path, cp.contentBefore);
         }
       } else {

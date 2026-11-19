@@ -43,6 +43,11 @@ import { checkWritableCanonical } from "./security";
 import { native, type ReadResult } from "./native";
 import { useChatStore } from "../store/chatStore";
 import {
+  detectEol,
+  normalizeToLf,
+  restoreEol,
+} from "@/modules/editor/lib/eol";
+import {
   buildDeleteCheckpoint,
   buildEditCheckpoint,
   buildRenameCheckpoint,
@@ -165,7 +170,23 @@ export function allHunksDecided(
  * Re-exported so existing imports (`./reviewApply`) keep working.
  */
 export { djb2Hash } from "./hash";
-import { djb2Hash } from "./hash";
+
+/**
+ * EOL-insensitive content equality (Fase 36): a CRLF file the agent
+ * rewrote as LF is the same text as the CRLF original — only the
+ * spelling of the line endings differs.
+ */
+function contentEquals(a: string, b: string): boolean {
+  return normalizeToLf(a) === normalizeToLf(b);
+}
+
+/**
+ * Expresses LF-space content in a file's original EOL (Fase 36): the
+ * review diff lives in LF space, but the disk keeps the file's EOL.
+ */
+function toFileEol(content: string, originalContent: string): string {
+  return restoreEol(normalizeToLf(content), detectEol(originalContent));
+}
 
 // ---------------------------------------------------------------------------
 // Injectable IO (the real implementation talks to Tauri + the chat store)
@@ -235,7 +256,9 @@ export async function checkDiskConflict(
   if (current.kind !== "text") {
     return { status: "conflict", reason: "file is no longer readable as text" };
   }
-  if (djb2Hash(current.content) !== djb2Hash(input.originalContent)) {
+  // Fase 36: compare EOL-insensitively — a CRLF file re-saved as LF
+  // (or vice versa) by the editor is not a change.
+  if (!contentEquals(current.content, input.originalContent)) {
     return {
       status: "conflict",
       reason: "file changed on disk since the proposal was made",
@@ -264,7 +287,8 @@ export async function checkDiskAgainst(
   if (current.kind !== "text") {
     return { status: "conflict", reason: "file is no longer readable as text" };
   }
-  if (djb2Hash(current.content) !== djb2Hash(input.expectedContent)) {
+  // Fase 36: compare EOL-insensitively, like checkDiskConflict.
+  if (!contentEquals(current.content, input.expectedContent)) {
     return {
       status: "conflict",
       reason: "file changed on disk since the agent wrote it",
@@ -325,7 +349,7 @@ export async function applyReviewedEdit(
   io: ReviewApplyIo = defaultReviewApplyIo(),
 ): Promise<ReviewApplyOutcome> {
   const { approvalId, path } = input;
-  if (input.reconstructedContent === input.originalContent) {
+  if (contentEquals(input.reconstructedContent, input.originalContent)) {
     io.clearPendingProposal(path);
     return { outcome: "discarded", path };
   }
@@ -339,18 +363,24 @@ export async function applyReviewedEdit(
   }
   // Fase 5: checkpoint first, so the apply can be undone. Saved before
   // the write, with the pre-write content and the accepted hunks.
+  // Fase 36: the reconstruction is LF-space; the checkpoint records
+  // the content as written (file EOL), so its hash matches the disk.
+  const written = toFileEol(
+    input.reconstructedContent,
+    input.originalContent,
+  );
   io.saveCheckpoint(
     buildEditCheckpoint({
       approvalId,
       sessionId: input.sessionId,
       path,
       originalContent: input.originalContent,
-      reconstructedContent: input.reconstructedContent,
+      reconstructedContent: written,
       appliedHunks: input.appliedHunks ?? [],
     }),
   );
   try {
-    await io.writeFile(path, input.reconstructedContent);
+    await io.writeFile(path, written);
   } catch (error) {
     return {
       outcome: "write-failed",
@@ -509,14 +539,17 @@ export async function applyReviewedRename(
  * 2. When every hunk was accepted the reconstruction equals the
  *    written content: nothing is written, Accept is bookkeeping only.
  *    The checkpoint is refreshed with the accepted hunks so Restore
- *    still works after the confirm.
+ *    still works after the confirm. Exception (Fase 36): a pre-fix tab
+ *    may hold an LF rewrite of a CRLF file — then the file's EOL is
+ *    repaired on disk, so git diff stays clean.
  * 3. Otherwise the reconstruction (accepted hunks from the written
  *    content, rejected hunks from the baseline) is written atomically
  *    — this is the revert of the rejected hunks — and the checkpoint
  *    is updated to the confirmed state, so Restore still works.
  *    When the reconstruction equals the baseline (every hunk
  *    rejected) the file is back to its original content: outcome
- *    "discarded".
+ *    "discarded". The reconstruction is LF-space (Fase 36); it is
+ *    written in the file's original EOL.
  *
  * A failed write leaves the proposal pending — there is no approval
  * round-trip to confuse the agent, so the user can simply retry.
@@ -533,7 +566,27 @@ export async function confirmReviewedEdit(
   if (conflict.status === "conflict") {
     return { outcome: "conflict", path, reason: conflict.reason };
   }
-  if (input.reconstructedContent === input.proposedContent) {
+  if (contentEquals(input.reconstructedContent, input.proposedContent)) {
+    // All accepted: usually nothing to write. But a pre-fix tab may
+    // hold an LF rewrite of a CRLF file (Fase 36): Accept keeps the
+    // content, and the file's EOL is repaired on disk so git diff
+    // stays clean. The checkpoint records the content as written.
+    const restored = toFileEol(input.proposedContent, input.originalContent);
+    if (restored !== input.proposedContent) {
+      const writable = await io.checkWritable(path, io.canonicalize);
+      if (!writable.ok) {
+        return { outcome: "not-writable", path, reason: writable.reason };
+      }
+      try {
+        await io.writeFile(path, restored);
+      } catch (error) {
+        return {
+          outcome: "write-failed",
+          path,
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
     // All accepted: nothing to write. Refresh the checkpoint with the
     // accepted hunks so the post-confirm state stays restorable.
     io.saveCheckpoint(
@@ -542,7 +595,7 @@ export async function confirmReviewedEdit(
         sessionId: input.sessionId,
         path,
         originalContent: input.originalContent,
-        reconstructedContent: input.proposedContent,
+        reconstructedContent: restored,
         appliedHunks: input.appliedHunks ?? [],
       }),
     );
@@ -553,8 +606,13 @@ export async function confirmReviewedEdit(
   if (!writable.ok) {
     return { outcome: "not-writable", path, reason: writable.reason };
   }
+  // Fase 36: the reconstruction is LF-space; write it in the file's EOL.
+  const written = toFileEol(
+    input.reconstructedContent,
+    input.originalContent,
+  );
   try {
-    await io.writeFile(path, input.reconstructedContent);
+    await io.writeFile(path, written);
   } catch (error) {
     return {
       outcome: "write-failed",
@@ -570,16 +628,18 @@ export async function confirmReviewedEdit(
       sessionId: input.sessionId,
       path,
       originalContent: input.originalContent,
-      reconstructedContent: input.reconstructedContent,
+      reconstructedContent: written,
       appliedHunks: input.appliedHunks ?? [],
     }),
   );
   io.clearPendingProposal(path);
   return {
-    outcome:
-      input.reconstructedContent === input.originalContent
-        ? "discarded"
-        : "applied",
+    outcome: contentEquals(
+      input.reconstructedContent,
+      input.originalContent,
+    )
+      ? "discarded"
+      : "applied",
     path,
   };
 }

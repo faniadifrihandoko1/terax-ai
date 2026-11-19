@@ -1,6 +1,11 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { scheduleEslintProjectLintForFile } from "@/modules/eslint/lib/eslintAutoProjectLint";
+import {
+  detectEol,
+  normalizeToLf,
+  restoreEol,
+} from "@/modules/editor/lib/eol";
 import { djb2Hash } from "../lib/hash";
 import { native } from "../lib/native";
 import {
@@ -131,7 +136,13 @@ async function computeEdits(
     }
   }
 
-  return { ok: true, original, content, replacements: totalReplacements };
+  // Fase 36: keep the file's EOL — the model writes LF, so splicing
+  // its new_string into a CRLF file would flip the replaced lines
+  // (and, for a whole-file replacement, the whole file) to LF. The
+  // baseline keeps the raw disk bytes; only the written content is
+  // converted. A missing file has no EOL to keep (detectEol("") is LF).
+  const written = restoreEol(normalizeToLf(content), detectEol(original));
+  return { ok: true, original, content: written, replacements: totalReplacements };
 }
 
 async function proposeEdits(

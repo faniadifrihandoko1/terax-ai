@@ -5,6 +5,7 @@ import type {
   LineDecision,
   LineDecisions,
 } from "@/modules/ai/lib/reviewApply";
+import { normalizeToLf } from "./eol";
 
 /**
  * Line-level diff model for review (FR-03, Fase 2).
@@ -14,11 +15,18 @@ import type {
  * the file that results from the user's decisions. The model is
  * deliberately independent of React so it can be unit tested without UI.
  *
- * Line identity includes the terminator: a line that only gains or loses
- * its trailing newline is a changed line, not context. That keeps the
- * reconstruction exact (accept-all equals the proposal, reject-all
- * equals the original) even for edits at the end of a file without a
- * trailing newline.
+ * Fase 36: the diff lives in LF space. Line identity is the line TEXT
+ * only — a line that only differs in its terminator (CRLF vs LF) is
+ * context, not a change. Before this, identity included the
+ * terminator, so a CRLF file the agent rewrote as LF diffed as one
+ * hunk for the whole file (listening-section.tsx: a change at lines
+ * 23-36 showed as "Hunk 1 · lines 1-100"). Terminators are still
+ * stored per LineChange, but in LF space they are always "\n" (except
+ * a missing trailing newline); the caller restores the file's EOL
+ * with detectEol + restoreEol when writing the result to disk, so
+ * reconstruction stays exact (accept-all equals the proposal,
+ * reject-all equals the original) in LF space, and exact on disk
+ * after the EOL restore.
  *
  * Fase 4 (Antigravity-style): the hunk, not the line, is the unit of
  * decision. The per-line functions below stay as the reconstruction
@@ -209,9 +217,15 @@ export function computeLineChanges(
   original: string,
   proposed: string,
 ): LineChangeSet {
-  const origLines = splitLines(original);
-  const propLines = splitLines(proposed);
-  const sections = presentableDiff(original, proposed);
+  // Fase 36: compare in LF space — a CRLF file rewritten as LF must
+  // not diff as "everything changed". Both sides are normalized
+  // before the character diff, so its sections (and the LCS below)
+  // only cover real content changes.
+  const origText = normalizeToLf(original);
+  const propText = normalizeToLf(proposed);
+  const origLines = splitLines(origText);
+  const propLines = splitLines(propText);
+  const sections = presentableDiff(origText, propText);
   if (sections.length === 0) return { hunks: [], changes: [] };
 
   const windows: Window[] = [];
@@ -220,13 +234,13 @@ export function computeLineChanges(
       origLines,
       s.fromA,
       s.toA,
-      proposed.slice(s.fromB, s.toB),
+      propText.slice(s.fromB, s.toB),
     );
     const [rpf, rpt] = lineRange(
       propLines,
       s.fromB,
       s.toB,
-      original.slice(s.fromA, s.toA),
+      origText.slice(s.fromA, s.toA),
     );
     windows.push({ bf: 0, bt: 0, pf: 0, pt: 0, rbf, rbt, rpf, rpt });
   }
@@ -381,7 +395,11 @@ export function reconstructFile(
   changeSet: LineChangeSet,
   decisions: LineDecisions,
 ): { content: string; decidedLines: number[] } {
-  const origLines = splitLines(original);
+  // Fase 36: the change set was computed in LF space, so the
+  // reconstruction is LF too — the caller restores the file's EOL.
+  // Normalizing here keeps context lines from leaking the raw
+  // terminators of a CRLF original into the LF output.
+  const origLines = splitLines(normalizeToLf(original));
   const byHunk = new Map<
     number,
     { removed: LineChange[]; added: LineChange[] }
