@@ -84,4 +84,42 @@ describe("FileMutationBridgeTracker", () => {
     const fresh = tracker.beginFlight();
     expect(tracker.markOpened(fresh, "p-1")).toBe(true);
   });
+
+  it("a closed tab is excluded from bridge auto-reopen but can be reopened by hand", () => {
+    // Fase 33: closing the ai-diff tab must not be a dead end. The
+    // bridge must not pop the tab back on its own (the close was
+    // deliberate), so the closed id stays excluded from the bridge's
+    // collection — while a row click (which never consults the tracker)
+    // can still rebuild the tab, after which the id counts as open
+    // again.
+    const tracker = new FileMutationBridgeTracker();
+    const flight = tracker.beginFlight();
+    expect(tracker.markOpened(flight, "p-1")).toBe(true);
+    tracker.markCompleted(flight, "p-1");
+    expect(tracker.finishFlight(flight, "fp-1", false)).toBe(false);
+
+    tracker.noteTabClosed("p-1");
+    // The bridge collects proposals through `excluded`, so the closed
+    // id is skipped on later runs instead of popping its tab back.
+    expect(tracker.excluded.has("p-1")).toBe(true);
+    expect(tracker.opened.has("p-1")).toBe(false);
+    // The tracker itself no longer blocks the id: a deliberate reopen
+    // (row click rebuild) marks it open again.
+    const retry = tracker.beginFlight();
+    expect(tracker.markOpened(retry, "p-1")).toBe(true);
+
+    tracker.noteTabOpened("p-1");
+    expect(tracker.excluded.has("p-1")).toBe(false);
+    expect(tracker.opened.has("p-1")).toBe(true);
+  });
+
+  it("reset forgets closed ids too", () => {
+    const tracker = new FileMutationBridgeTracker();
+    const flight = tracker.beginFlight();
+    tracker.markOpened(flight, "p-1");
+    tracker.noteTabClosed("p-1");
+    tracker.reset();
+    expect(tracker.excluded.size).toBe(0);
+    expect(tracker.closed.size).toBe(0);
+  });
 });

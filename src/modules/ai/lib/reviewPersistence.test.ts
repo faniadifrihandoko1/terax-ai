@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseReviewState,
+  restoreHunkDecisions,
   restoreStatus,
   snapshotReviewState,
   serializeReviewState,
+  type PersistedReviewProposal,
   type PersistedReviewState,
   type ReviewTabSnapshot,
 } from "./reviewPersistence";
@@ -536,6 +538,46 @@ describe("restoreStatus (FR-10)", () => {
     expect(restoreStatus("reviewing")).toBe("reviewing");
     expect(restoreStatus("done")).toBe("done");
     expect(restoreStatus("applied")).toBe("applied");
+  });
+});
+
+describe("restoreHunkDecisions (Fase 33)", () => {
+  const saved = (
+    overrides: Partial<PersistedReviewProposal> = {},
+  ): PersistedReviewProposal => ({
+    approvalId: "a1",
+    path: "src/a.ts",
+    isNewFile: false,
+    status: "reviewing" as const,
+    hunkDecisions: {},
+    savedAt: 0,
+    ...overrides,
+  });
+
+  it("returns an empty map without saved state", () => {
+    expect(restoreHunkDecisions(undefined, "old\n", "new\n")).toEqual({});
+  });
+
+  it("copies decided hunks from v2 states", () => {
+    expect(
+      restoreHunkDecisions(
+        saved({ hunkDecisions: { "0": "accepted", "2": "rejected" } }),
+        "old\n",
+        "new\n",
+      ),
+    ).toEqual({ 0: "accepted", 2: "rejected" });
+  });
+
+  it("migrates v1 line decisions to hunks against the rebuilt change set", () => {
+    // One hunk: line 2 changed. A v1 decision on that line migrates
+    // to a decision on hunk 0.
+    expect(
+      restoreHunkDecisions(
+        saved({ lineDecisions: { "1": "accepted" } }),
+        "a\nb\nc\n",
+        "a\nB\nc\n",
+      ),
+    ).toEqual({ 0: "accepted" });
   });
 });
 
