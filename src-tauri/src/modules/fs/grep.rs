@@ -238,6 +238,9 @@ pub fn run_grep(
 /// literal (smart-case), and self-cancels when a newer query arrives. The
 /// generation is bumped when the command is dispatched, so the previous walk
 /// stops even though it is still occupying a blocking thread.
+///
+/// Options (Fase 31, VS Code-style toggles) — all default to the historical
+/// behaviour when omitted: literal query, smart-case, no word boundary.
 #[tauri::command]
 pub async fn fs_grep_interactive(
     supersede: State<'_, Supersede>,
@@ -245,14 +248,33 @@ pub async fn fs_grep_interactive(
     root: String,
     max_results: Option<usize>,
     workspace: Option<WorkspaceEnv>,
+    case_sensitive: Option<bool>,
+    whole_word: Option<bool>,
+    regex: Option<bool>,
 ) -> Result<GrepResponse, String> {
     let ticket = supersede.begin(INTERACTIVE_KEY);
+    let options = InteractiveGrepOptions {
+        case_sensitive: case_sensitive.unwrap_or(false),
+        whole_word: whole_word.unwrap_or(false),
+        regex: regex.unwrap_or(false),
+    };
     blocking(move || {
-        run_grep_interactive(pattern, root, max_results, workspace, &|| {
+        run_grep_interactive(pattern, root, max_results, workspace, options, &|| {
             ticket.is_superseded()
         })
     })
     .await
+}
+
+/// Search options for the interactive content search (Fase 31).
+#[derive(Default)]
+pub struct InteractiveGrepOptions {
+    /// Aa — match case. Off keeps the historical smart-case behaviour.
+    pub case_sensitive: bool,
+    /// ab — match whole words only (grep-regex `.word()`).
+    pub whole_word: bool,
+    /// * — treat the pattern as a regular expression instead of a literal.
+    pub regex: bool,
 }
 
 pub fn run_grep_interactive(
@@ -260,6 +282,7 @@ pub fn run_grep_interactive(
     root: String,
     max_results: Option<usize>,
     workspace: Option<WorkspaceEnv>,
+    options: InteractiveGrepOptions,
     cancel: &(dyn Fn() -> bool + Sync),
 ) -> Result<GrepResponse, String> {
     if pattern.trim().is_empty() {
@@ -274,11 +297,17 @@ pub fn run_grep_interactive(
         .unwrap_or(DEFAULT_MAX_RESULTS)
         .clamp(1, HARD_MAX_RESULTS);
 
+    let effective = if options.regex {
+        pattern
+    } else {
+        escape_literal(&pattern)
+    };
     let matcher = RegexMatcherBuilder::new()
-        .case_smart(true)
+        .case_smart(!options.case_sensitive)
+        .word(options.whole_word)
         .line_terminator(Some(b'\n'))
-        .build(&escape_literal(&pattern))
-        .map_err(|e| format!("bad pattern: {e}"))?;
+        .build(&effective)
+        .map_err(|e| format!("bad regex: {e}"))?;
 
     Ok(search_tree(
         &root_path, &root, &workspace, &matcher, &None, cap, cancel,
@@ -444,6 +473,7 @@ mod tests {
             dir.path().to_string_lossy().into_owned(),
             None,
             None,
+            InteractiveGrepOptions::default(),
             &|| false,
         )
         .unwrap();
@@ -453,5 +483,123 @@ mod tests {
             1,
             "smart-case: lowercase query matches any case"
         );
+    }
+
+    #[test]
+    fn interactive_case_sensitive_option() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "Find Me\nfind me\n").unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+
+        let insensitive = run_grep_interactive(
+            "find me".into(),
+            root.clone(),
+            None,
+            None,
+            InteractiveGrepOptions::default(),
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(
+            insensitive.hits.len(),
+            2,
+            "default smart-case matches both lines"
+        );
+
+        let sensitive = run_grep_interactive(
+            "find me".into(),
+            root,
+            None,
+            None,
+            InteractiveGrepOptions {
+                case_sensitive: true,
+                ..Default::default()
+            },
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(sensitive.hits.len(), 1, "match-case matches one line");
+        assert_eq!(sensitive.hits[0].line, 2);
+    }
+
+    #[test]
+    fn interactive_whole_word_option() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "finder\nfind\nfinding\n").unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+
+        let any = run_grep_interactive(
+            "find".into(),
+            root.clone(),
+            None,
+            None,
+            InteractiveGrepOptions::default(),
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(any.hits.len(), 3, "substring matches all three lines");
+
+        let word = run_grep_interactive(
+            "find".into(),
+            root,
+            None,
+            None,
+            InteractiveGrepOptions {
+                whole_word: true,
+                ..Default::default()
+            },
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(word.hits.len(), 1, "whole-word matches one line");
+        assert_eq!(word.hits[0].line, 2);
+    }
+
+    #[test]
+    fn interactive_regex_option() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "find\n").unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+
+        let literal = run_grep_interactive(
+            "f.nd".into(),
+            root.clone(),
+            None,
+            None,
+            InteractiveGrepOptions::default(),
+            &|| false,
+        )
+        .unwrap();
+        assert!(
+            literal.hits.is_empty(),
+            "literal mode does not treat . as a wildcard"
+        );
+
+        let regex = run_grep_interactive(
+            "f.nd".into(),
+            root.clone(),
+            None,
+            None,
+            InteractiveGrepOptions {
+                regex: true,
+                ..Default::default()
+            },
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(regex.hits.len(), 1, "regex mode matches via .");
+
+        let bad = run_grep_interactive(
+            "a(".into(),
+            root,
+            None,
+            None,
+            InteractiveGrepOptions {
+                regex: true,
+                ..Default::default()
+            },
+            &|| false,
+        );
+        assert!(bad.is_err(), "invalid regex is an error, not empty results");
     }
 }
