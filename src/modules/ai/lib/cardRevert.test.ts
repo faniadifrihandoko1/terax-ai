@@ -13,7 +13,9 @@ import {
   type FileCheckpoint,
 } from "./reviewCheckpoint";
 
-function editCheckpoint(over: Partial<FileCheckpoint> = {}): FileCheckpoint {
+function editCheckpoint(
+  over: Partial<Parameters<typeof buildEditCheckpoint>[0]> = {},
+): FileCheckpoint {
   return buildEditCheckpoint({
     approvalId: "appr-1",
     path: "/x/a.ts",
