@@ -2483,6 +2483,68 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   binary/oversized setelah write, rebuild memakai proposed tercatat
   (bukan isi disk) karena read kosong tidak bisa dibedakan dari file
   yang dikosongkan pengguna.
+  Fase 34 (sidebar jadi pintu review, DEL-134), DONE - user:
+  perubahan file tidak harus di-review dari chat AI saja; sidebar
+  harus bisa jadi pintu masuk kedua ke review yang sama (klik file
+  -> Accept/Reject seperti Antigravity). Titik awal (diverifikasi
+  dari kode): satu-satunya pintu masuk review adalah kartu Changed
+  Files di chat + tab ai-diff; `FileExplorer` hanya membuka file di
+  editor (`onOpenFile`), tidak tahu file mana yang pending review,
+  dan tidak ada aksi review di context menu. `reviewStatusByApproval`
+  di App keyed by approvalId dari tab yang SEDANG terbuka - begitu
+  tab ditutup, jejaknya hilang (pelajaran Fase 33). Perubahan: modul
+  murni baru `src/modules/explorer/lib/pendingReview.ts` -
+  `buildPendingReviewByPath` (registry + tab terbuka) dengan kunci
+  path kanonis (backslash->slash, lowercase di Windows, aturan yang
+  sama dengan `eslintPathKey`); registry hanya edit ber-approvalId
+  (delete/rename tidak punya file hidup di tree, entri tanpa id
+  pra-Fase-9 tidak bisa membuka tab); tab hanya edit berstatus
+  reviewable (pending/reviewing/done/conflict - "done" masih butuh
+  Confirm; applied/rejected/restored terminal, tidak pernah
+  membangkitkan badge); id tab jadi primary, id registry ikut
+  dipertahankan supaya rebuild Fase 33 bisa mencoba semuanya; folder
+  ikut bertanda bila ada descendant pending
+  (`hasPendingReviewDescendant`, aturan prefix yang sama dengan
+  agregat diagnostics). Registry dibaca lewat `listPendingProposals`
+  + langganan versi baru di `pendingProposals.ts`
+  (`subscribePendingProposals`/`getPendingProposalsVersion`, bump
+  hanya saat isi benar-benar berubah) yang dibaca App via
+  `useSyncExternalStore` - registry adalah state module-level di
+  luar React, jadi App tidak akan re-render tanpanya. App menghitung
+  `pendingReviewByPath` (memo atas `[tabs, pendingReviewVersion]`)
+  dan me-thread-nya App -> FileExplorer -> TreeRow seperti
+  `onOpenContentHit` Fase 32. `EntryRow`: dot `PendingReviewMark`
+  (warna primary - merah/amber tetap milik diagnostics) + klik polos
+  file pending routing ke `handleOpenFileDiff` (jalur rebuild Fase
+  33, dengan SEMUA mutation id) lewat helper murni
+  `shouldOpenReview`; klik shift/mod tetap seleksi, folder tetap
+  toggle, Enter di keyboard ikut routing yang sama. Context menu
+  file pending tambah "Review AI changes" (paling atas, hanya bila
+  pending). Tombol Accept/Reject per hunk TETAP di diff view, bukan
+  di tree. Verifikasi: check-types 0 error; lint 0 error / 88
+  warning / 1 info (baseline - 2 warning baru sempat muncul saat
+  implementasi, `aria-label` di span tanpa role dan
+  `useExhaustiveDependencies` untuk version trigger, keduanya
+  diperbaiki); full test hijau 2x (+21 test baru: 19
+  `pendingReview.test.ts`, 2 `pendingProposals.test.ts`, TDD).
+  Tanpa perubahan Rust. Batas jujur: repo tidak punya DOM env, jadi
+  klik/context menu/badge di sidebar TIDAK teruji live - yang teruji
+  logika murni di bawahnya (peta, routing, langganan); cek laptop:
+  file pending AI change ber-dot di sidebar (termasuk folder
+  leluhurnya); klik -> tab ai-diff terbuka dengan tombol
+  Accept/Reject per hunk; tutup tab lalu klik lagi dari sidebar ->
+  tab ter-rebuild (Fase 33); file biasa tetap buka editor. Sisa
+  batasan: badge mencerminkan registry + tab terbuka, BUKAN baris
+  kartu Changed Files secara harfiah - file yang di-Confirm lalu
+  tab-nya ditutup TIDAK berbadge lagi (registry sudah dibersihkan
+  saat Confirm), sementara baris kartunya bisa kembali menampilkan
+  "Pending" (gap lama: status Confirmed hanya hidup di tab yang
+  terbuka/persisted state, bukan di message parts); memperbaiki itu
+  adalah perbaikan kartu, bukan sidebar. Proposal delete/rename
+  tidak berbadge (path lamanya tidak ada di tree) - review-nya tetap
+  lewat kartu. Perubahan manual di luar AI tidak punya baseline
+  proposal, jadi tidak bisa dibuka review-nya dari sidebar (ranah
+  git).
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
