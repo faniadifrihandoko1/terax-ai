@@ -2545,6 +2545,74 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   lewat kartu. Perubahan manual di luar AI tidak punya baseline
   proposal, jadi tidak bisa dibuka review-nya dari sidebar (ranah
   git).
+  Fase 35 (tombol Revert di kartu Changed Files, DEL-136), DONE -
+  user: di dalam tab ai-diff yang masih terbuka revert sudah bisa
+  (Reject all / Reject remaining / Restore di toolbar tab), tapi di
+  kartu Changed Files tidak ada jalan revert - hanya Accept all
+  (Fase 20) dan tombol Restore per baris yang hanya muncul bila
+  `restorable`, dan `restorableApprovals` di App dihitung HANYA dari
+  tab terbuka berstatus "applied" + checkpoint. Jadi file pending,
+  atau file yang sudah di-Confirm tapi tab-nya ditutup, hanya bisa
+  di-revert dengan prompt ke agent. Perubahan: (1) tombol Revert per
+  baris di kartu, di samping Restore - satu klik tanpa prompt, lewat
+  jalur headless yang SAMA dengan Reject all / Restore di tab
+  (`restoreCheckpoint`): file pending berarti tolak semua hunk +
+  disk kembali ke baseline checkpoint; file Confirmed berarti Restore
+  dari checkpoint. Modul murni baru `src/modules/ai/lib/cardRevert.ts`
+  - `revertReviewedFile` (restore + bersihkan registry, supaya badge
+  sidebar Fase 34 tidak tertinggal; konflik tetap ditolak jujur dan
+  proposal dipertahankan supaya bisa retry), `deriveTabLessStatus`,
+  `pickRevertApprovalId` (id baris dulu, lalu mutation id lain yang
+  punya checkpoint - checkpoint baris composed hidup di bawah id
+  write pertama), `mergeCardStatuses` (tab terbuka selalu menang).
+  Tombol hanya muncul untuk status pending/reviewing/done YANG punya
+  checkpoint (proposal lama tanpa checkpoint tidak bisa di-revert);
+  baris applied tetap pakai Restore, baris resolved tidak punya
+  tombol. (2) `restorableApprovals` di App kini dihitung dari SEMUA
+  checkpoint yang ada (`listCheckpoints`), bukan hanya tab applied
+  yang terbuka - kartu tetap mengunci Restore di status "applied",
+  jadi checkpoint file pending tidak pernah memunculkan Restore.
+  (3) Status baris tanpa tab kini benar: `applyTabLessStatuses` di
+  kartu + `deriveTabLessStatus` - registry masih ada berarti pending,
+  checkpoint tanpa registry berarti applied (edit: written content
+  sama dengan baseline berarti full-reject di tab, jadi "rejected";
+  delete/rename berarti applied), tanpa keduanya berarti pending
+  (legacy). (4) Setelah Revert/Restore dari kartu, baris tidak lagi
+  "Pending": App menyimpan `cardResolvedByApproval` ("rejected" /
+  "restored") yang di-merge ke status map kartu, dan Accept all
+  tidak lagi menawarkannya (status resolved, atau tanpa tab).
+  (5) Dua pengaman supaya file yang sudah di-revert tidak bangkit
+  lagi: handler mem-flush persisted review state seketika
+  (`flushReviewStateNow`, id yang di-resolve dikeluarkan dari
+  snapshot - kalau tidak, checkpoint lama di disk membiarkan klik
+  baris me-rebuild tab yang sudah di-revert), dan App me-thread
+  id yang di-resolve ke bridge sebagai `resolvedApprovalIds` - bridge
+  menandainya closed di tracker bila tidak ada tab terbuka, supaya
+  run berikutnya tidak mengoleksi lagi proposal itu dari message
+  parts (tanpa ini bridge akan derive dari disk yang sudah kembali
+  ke baseline dan membuka tab review baru untuk perubahan yang sudah
+  dibatalkan). Verifikasi: check-types 0 error; lint 0 error / 88
+  warning / 1 info (baseline); full test hijau 2x, 2841/2841 (+22
+  test baru: 15 cardRevert, 7 ChangedFilesCard, TDD). Tanpa perubahan
+  Rust. Batas jujur: repo tidak punya DOM env, jadi klik tombol
+  Revert dan tampilan badge TIDAK teruji live - yang teruji logika
+  murni di bawahnya (headless revert, derivasi status, gating tombol,
+  merge status); cek laptop: klik Revert di baris pending -> file
+  kembali ke sebelum agent dan baris jadi "Ditolak"; Confirm sebuah
+  file, tutup tab-nya, lalu Restore dari kartu -> file kembali dan
+  baris jadi "Dipulihkan"; Revert setelah file diubah manual di disk
+  -> ditolak dengan jujur. Sisa batasan: status card-resolved tidak
+  di-persist (setelah restart baris yang di-revert dari kartu tanpa
+  tab kembali menampilkan "Pending" - gap lama yang sama dengan
+  status tab yang tertutup; checkpoint sudah habis jadi tidak ada
+  tombol yang salah muncul, dan Accept all tetap tidak menawarkannya
+  karena tidak ada tab); file-op yang di-reject dari tab-nya lalu
+  tab ditutup masih menampilkan "Pending" (jalur reject tab untuk
+  delete/rename tidak membersihkan registry - sudah ada sebelum fase
+  ini, sengaja tidak diubah di sini); no-op confirm (proposed sama
+  dengan original) yang tab-nya ditutup terbaca "rejected" oleh
+  derivasi, bukan "applied" - hanya tampilan, tidak ada aksi yang
+  salah.
   Fase 36 (hunk review lokal untuk file CRLF, EOL, DEL-135), DONE -
   user: yang berubah hanya baris 23-36 (logika audio play/pause di
   `listening-section.tsx`), tapi tab ai-diff menampilkan seluruh file
