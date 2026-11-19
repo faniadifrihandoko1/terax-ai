@@ -2545,6 +2545,65 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   lewat kartu. Perubahan manual di luar AI tidak punya baseline
   proposal, jadi tidak bisa dibuka review-nya dari sidebar (ranah
   git).
+  Fase 36 (hunk review lokal untuk file CRLF, EOL, DEL-135), DONE -
+  user: yang berubah hanya baris 23-36 (logika audio play/pause di
+  `listening-section.tsx`), tapi tab ai-diff menampilkan seluruh file
+  baris 1-100 sebagai SATU hunk ("Hunk 1 · lines 1-100 · Undecided",
+  semua baris merah). Penyebab (dibuktikan fixture): identitas baris
+  di `computeLineChanges` (`src/modules/editor/lib/lineDiff.ts`)
+  termasuk terminator (`fullLine` = teks + terminator, dipakai LCS),
+  jadi baris yang hanya beda terminator dianggap berubah; sisi
+  proposed adalah tulis-ulang LF penuh atas file CRLF - fixture
+  100-baris CRLF vs LF dengan perubahan lokal menghasilkan persis 1
+  hunk `{baseFrom: 0, baseTo: 100}`, sementara CRLF vs CRLF dengan
+  hanya baris berubah disisipkan menghasilkan hunk lokal. Akarnya
+  jalur tulis agent tidak menjaga EOL: `computeEdits` di
+  `src/modules/ai/tools/edit.ts` dan `write_file` di
+  `src/modules/ai/tools/fs.ts` menulis konten model (LF) apa adanya,
+  padahal editor sudah hidup di LF space (`src/modules/editor/lib/
+  eol.ts`: `normalizeToLf` saat load, `restoreEol` saat save).
+  Perubahan: (1) diff dihitung di LF space - `computeLineChanges`
+  menormalisasi kedua input sebelum `presentableDiff`/splitting dan
+  `reconstructFile` menormalisasi original, jadi output murni LF dan
+  hunk hanya muncul di perubahan nyata; test lama "keeps CRLF endings
+  through reconstruction" dipindah maksudnya ke lapisan restore-EOL
+  (bukan dihapus diam-diam). (2) Confirm mengembalikan EOL file asal
+  (`detectEol(original)` + `restoreEol`) di semua jalur tulis hasil
+  review - `reviewApply.ts` (`applyReviewedEdit`/`confirmReviewedEdit`,
+  termasuk cabang all-accepted yang memperbaiki EOL rewrite LF
+  pra-Fase-36 yang sudah terlanjur di disk, dengan cek writability
+  sebelum menulis) dan `confirmAcceptedReview.ts` (Accept all headless)
+  lewat helper yang sama; Reject tetap kembali ke checkpoint (sudah
+  ber-EOL asal). (3) Jalur tulis agent menjaga EOL file yang sudah
+  ada: `computeEdits` dan `write_file` mendeteksi EOL konten disk
+  asal dan menulis kembali dengan EOL itu, file baru default LF -
+  mematikan sumber masalahnya, bukan cuma gejalanya. (4) Guard konflik
+  Confirm/Restore membandingkan hash setelah normalisasi EOL (temuan
+  9 Nov yang belum diperbaiki): `hashOf` di `reviewCheckpoint.ts`
+  adalah `djb2Hash(normalizeToLf(...))`, dan `restoreCheckpoint`
+  membandingkan terhadap konten tersimpan via `hashOf` - bukan field
+  hash tersimpan - supaya checkpoint pra-Fase-36 (hash mentah) tetap
+  bekerja. Verifikasi: check-types 0 error; lint 0 error / 88 warning
+  / 1 info (baseline); full test hijau 2x, 2819/2819 (+13 test baru:
+  3 lineDiff - termasuk regression test screenshot 100-baris CRLF vs
+  LF -> persis 1 hunk `{baseFrom: 22, baseTo: 36}` dan beda EOL saja
+  -> tanpa hunk - 5 reviewApply, 2 reviewCheckpoint, 2 edit, 2 fs,
+  TDD). Tanpa perubahan Rust. Batas jujur: repo tidak punya DOM env,
+  jadi tampilan hunk di tab ai-diff TIDAK teruji live - yang teruji
+  logika murni di bawahnya; cek laptop: buka tab ai-diff
+  `listening-section.tsx` - hunk harus lokal di sekitar perubahan
+  audio, bukan 1-100; Confirm lalu cek git diff tetap bersih dari
+  perubahan EOL; ulangi untuk file CRLF lain. Sisa batasan:
+  `computeEdits` `indexOf(old_string)` masih rapuh LF-vs-CRLF -
+  `old_string` multi-baris ber-LF tidak cocok dengan file CRLF di
+  disk; sengaja TIDAK diubah di fase ini (catatan: ini penjelasan
+  yang masuk akal kenapa agent jatuh ke tulis-ulang `write_file`
+  penuh untuk `listening-section.tsx`). Perubahan murni EOL kini
+  tidak terlihat di review oleh desain, karena lapisan tulis menjaga
+  EOL. Catatan penomoran: issue Linear fase ini DEL-135 - bukan
+  DEL-136 seperti rencana awal - karena DEL-135 masih kosong (Fase 35
+  tombol Revert belum jalan dan belum membuat task-nya); Fase 35
+  butuh nomor baru saat gas.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
