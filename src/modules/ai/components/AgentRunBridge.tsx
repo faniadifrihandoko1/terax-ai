@@ -29,10 +29,10 @@ import {
 import type { HunkDecision } from "../lib/reviewApply";
 import { loadReviewState } from "../lib/sessions";
 import {
-  restoreHunkDecisions,
   restoreStatus,
   type PersistedReviewState,
 } from "../lib/reviewPersistence";
+import { restoreHunkDecisions } from "../lib/restoreHunkDecisions";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   flushPersist,

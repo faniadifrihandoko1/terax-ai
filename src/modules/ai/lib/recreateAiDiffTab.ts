@@ -3,10 +3,10 @@ import { resolveMutationPath } from "./fileMutations";
 import type { PendingProposal } from "./pendingProposals";
 import type { FileCheckpoint } from "./reviewCheckpoint";
 import {
-  restoreHunkDecisions,
   restoreStatus,
   type PersistedReviewProposal,
 } from "./reviewPersistence";
+import { restoreHunkDecisions } from "./restoreHunkDecisions";
 
 /**
  * Rebuilds a missing ai-diff tab from what is still on record

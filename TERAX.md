@@ -2437,8 +2437,12 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   lewat map `checkpoints`, dan sumber ketiga adalah proposal persisted
   (wajib punya checkpoint; status restorable + `hunkDecisions`
   dipertahankan, `restoreHunkDecisions` pindah dari `AgentRunBridge`
-  ke `reviewPersistence.ts` supaya rebuild tanpa bridge memakai
-  logika yang sama); tab selalu dibuka di bawah id yang termasuk
+  ke modul sendiri `restoreHunkDecisions.ts` (bukan ke
+  `reviewPersistence` - fungsi itu butuh `lineDiff` yang mengimpor
+  `@codemirror/merge`, dan App mengimpor `reviewPersistence` secara
+  statis sehingga eager-budget test gagal; satu-satunya pemanggil
+  adalah `AgentRunBridge` yang React.lazy dan `recreateAiDiffTab`
+  yang dynamic import, jadi impor berat tetap di luar eager graph); tab selalu dibuka di bawah id yang termasuk
   mutation baris, supaya loop Fase 28 di `buildEntries` mengenalinya
   (`hasTab`/Accept all). (2) Proposed side = isi disk SAAT INI
   (write-first; `readOriginal` + helper murni baru
@@ -2466,7 +2470,7 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   kecil Fase 28 yang ikut diperbaiki. Verifikasi: check-types 0 error;
   lint 0 error / 88 warning / 1 info (baseline); full test hijau 2x
   (+15 test baru: 10 `recreateAiDiffTab.test.ts`, 2
-  `fileMutationBridge.test.ts`, 3 `reviewPersistence.test.ts`, TDD).
+  `fileMutationBridge.test.ts`, 3 `restoreHunkDecisions.test.ts`, TDD).
   Tanpa perubahan Rust. Batas jujur: repo tidak punya DOM env, jadi
   klik baris -> tab terbuka lagi, tombol Accept/Reject per hunk di
   editor setelah rebuild, dan perilaku setelah restart TIDAK teruji
