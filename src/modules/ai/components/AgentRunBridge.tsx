@@ -104,6 +104,15 @@ export type AgentRunBridgeProps = {
    * reopen it.
    */
   aiDiffApprovalIds?: readonly string[];
+  /**
+   * Fase 35: approval ids the user resolved from the Changed Files
+   * card (reverted or restored), whose tab may never have existed.
+   * The bridge must never re-collect those proposals on a later run:
+   * a tab-less reverted proposal is still in the message parts, and
+   * without this the bridge would derive it from the (reverted) disk
+   * and pop a fresh review tab for a change the user already undid.
+   */
+  resolvedApprovalIds?: readonly string[];
 };
 
 export function AgentRunBridge(props: AgentRunBridgeProps) {
@@ -121,6 +130,7 @@ function Bridge({
   openAiDiffTab,
   updateAiDiffTab,
   aiDiffApprovalIds,
+  resolvedApprovalIds,
 }: BridgeProps) {
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
   const { status, messages, addToolApprovalResponse } = useChat<UIMessage>({
@@ -223,6 +233,19 @@ function Bridge({
     }
     prevAiDiffIdsRef.current = current;
   }, [aiDiffApprovalIds, tracker]);
+  // Fase 35: proposals resolved from the Changed Files card (reverted
+  // or restored) are closed in the tracker too, even when their tab
+  // never existed — otherwise a later run re-collects the proposal
+  // from the message parts and reopens a review for a change the user
+  // already undid. An id with an open tab is left alone: the tab
+  // still owns it through `opened`, and the watcher above re-marks it
+  // open if it ever closed and came back.
+  useEffect(() => {
+    const current = new Set(aiDiffApprovalIds ?? []);
+    for (const id of resolvedApprovalIds ?? []) {
+      if (!current.has(id)) tracker.noteTabClosed(id);
+    }
+  }, [resolvedApprovalIds, aiDiffApprovalIds, tracker]);
   // Fase 9 (slice 2): a cancelled bridge run bumps this tick so the
   // effect re-runs and retries the stranded proposals instead of
   // waiting for a new file mutation to change the fingerprint.
