@@ -4,6 +4,9 @@ import {
   clearPendingProposal,
   composePendingProposal,
   getPendingProposal,
+  getPendingProposalsVersion,
+  listPendingProposals,
+  subscribePendingProposals,
 } from "./pendingProposals";
 
 const FILE = "/workspace/a.txt";
@@ -125,5 +128,59 @@ describe("pendingProposals approvalId (Fase 9, slice 2)", () => {
   it("leaves approvalId unset when the caller does not pass one", () => {
     const p = composePendingProposal(FILE, "a", "b", false);
     expect(p.approvalId).toBeUndefined();
+  });
+});
+
+describe("pendingProposals listing + change subscription (Fase 34)", () => {
+  it("lists entries with their paths", () => {
+    composePendingProposal(FILE, "a", "b", false, "edit", undefined, "tool-call-1");
+    composePendingProposal("/workspace/c.txt", "x", "y", true);
+    expect(listPendingProposals()).toEqual([
+      {
+        path: FILE,
+        proposal: {
+          originalContent: "a",
+          proposedContent: "b",
+          isNewFile: false,
+          kind: "edit",
+          approvalId: "tool-call-1",
+        },
+      },
+      {
+        path: "/workspace/c.txt",
+        proposal: {
+          originalContent: "x",
+          proposedContent: "y",
+          isNewFile: true,
+          kind: "edit",
+        },
+      },
+    ]);
+  });
+
+  it("notifies subscribers when the set changes, and only then", () => {
+    let calls = 0;
+    const unsubscribe = subscribePendingProposals(() => {
+      calls += 1;
+    });
+    const before = getPendingProposalsVersion();
+    composePendingProposal(FILE, "a", "b", false);
+    expect(calls).toBe(1);
+    expect(getPendingProposalsVersion()).toBeGreaterThan(before);
+    // Clearing an absent path changes nothing: no notification.
+    clearPendingProposal("/workspace/absent.txt");
+    expect(calls).toBe(1);
+    clearPendingProposal(FILE);
+    expect(calls).toBe(2);
+    // Clearing an already-empty registry changes nothing.
+    clearAllPendingProposals();
+    expect(calls).toBe(2);
+    composePendingProposal(FILE, "a", "b", false);
+    expect(calls).toBe(3);
+    clearAllPendingProposals();
+    expect(calls).toBe(4);
+    unsubscribe();
+    composePendingProposal(FILE, "a", "b", false);
+    expect(calls).toBe(4);
   });
 });
