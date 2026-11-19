@@ -2347,6 +2347,70 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   flow review/Confirm/checkpoint, Plan mode (Fase 30), auto-import
   (Fase 29), panel reference, sidebar, warna sintaks/minimap, jalur
   ESLint.
+  Fase 32 (sidebar search ala Antigravity, DEL-132), DONE - user:
+  panel search di sidebar harus tampil seperti panel search
+  Antigravity di screenshot (toggle Aa/ab/*, "N results in M files -
+  Open in editor", grup file collapsible dengan badge, baris preview
+  dengan highlight oranye) dan kartu hasilnya responsif mengikuti
+  lebar panel yang sempit. Titik awal (diverifikasi dari kode): Fase
+  31 hanya mengubah content search di command palette mode `#`;
+  panel sidebar itu `ExplorerSearch` - pencarian NAMA file
+  (`fs_search`, fuzzy nucleo atas file index, limit 200, debounce
+  300ms) dengan daftar datar, tiap baris = FileIcon + nama
+  (`truncate`) + rel path di kanan (`ml-auto truncate`, 10px muted)
+  - dua span `truncate` tanpa `min-w-0` berebut lebar sehingga path
+  kepotong di tengah teks di tepi panel. Keputusan desain: panel
+  sidebar menjadi CONTENT search sepenuhnya (panel Antigravity adalah
+  content search; pencarian nama file tetap ada di command palette
+  mode file, jadi tidak ada yang hilang) - memakai ulang mesin Fase
+  31 (`fs_grep_interactive` + `contentSearchView.ts` + hook
+  `useContentSearch`, tanpa mesin grep kedua); `fs_search` tetap ada
+  di Rust tapi tidak lagi dipanggil siapa pun. Perubahan: `SearchToggle`,
+  `HighlightedLine`, `parentDir` diekstrak dari `CommandPalette.tsx`
+  ke `src/modules/command-palette/components/contentSearchBits.tsx`
+  (satu source of truth - palette dan sidebar harus tampil identik);
+  modul murni baru `src/modules/explorer/lib/sidebarSearchRows.ts`
+  (`buildSidebarSearchRows` - header grup + baris hit per file,
+  grup collapsed hanya menyumbang header; `toggleCollapsed` -
+  mengembalikan set baru) dengan 7 test TDD; `ExplorerSearch`
+  ditulis ulang: toggle Aa/ab/* di bawah input (opsi bertahan antar
+  buka/tutup, hanya collapse grup yang di-reset saat tutup), ringkasan
+  + link "Open in editor" (membuka hit pertama), grup file
+  collapsible dengan badge jumlah, baris hit dengan `HighlightedLine`
+  (`bg-amber-500/45`, sama seperti Fase 31), klik baris membuka file
+  DI BARIS yang cocok lewat prop baru `onOpenContentHit` (App
+  `openContentHit`, di-thread lewat `FileExplorer`; fallback ke
+  `onOpenFile` bila tidak ada). Kartu responsif: tiap baris flex
+  `min-w-0` - nama `min-w-0 shrink truncate`, parent dir `min-w-0
+  flex-1 truncate` redup, badge `ml-auto shrink-0`, baris preview
+  `min-w-0 flex-1 truncate` + nomor baris `shrink-0` - tidak ada
+  teks yang kepotong di tengah jalan di tepi panel. Navigasi keyboard
+  berjalan di atas daftar baris datar (↑↓, Enter di header =
+  toggle collapse, Enter di hit = buka di barisnya); context menu
+  dipertahankan di header grup (Open, Reveal in Finder, Copy Path,
+  Attach to Agent - item khusus folder gugur karena content search
+  tidak mengembalikan direktori). Perilaku lama yang dipertahankan:
+  focus handling, tutup dengan Esc, "Searching…", "No matches",
+  error "Search failed" + Retry (dari `useContentSearch`). Perubahan
+  perilaku yang dicatat: limit hasil 200 -> 80 dan debounce 300 ->
+  140ms (samakan dengan palette); pencarian hidden file: grep
+  content selalu melewati dotfile (`.hidden(true)` di `search_tree`),
+  sedangkan pencarian nama lama menghormati preferensi `showHidden`.
+  Verifikasi: check-types 0 error; lint 0 error / 88 warning / 1
+  info (baseline); full test 2763/2763 hijau 2x (baseline - +7 test
+  baru di `sidebarSearchRows.test.ts`, TDD). Tanpa perubahan Rust.
+  Batas jujur: repo tidak punya DOM env, jadi klik toggle, collapse
+  grup, render highlight, dan perilaku saat sidebar sempit TIDAK
+  teruji live - yang teruji logika murni di bawahnya (row model,
+  grouping/summary/highlight Fase 31); cek laptop: buka search
+  sidebar, ketik query, toggle Aa/ab/* mengubah hasil, grup
+  collapse dengan badge, baris "N results in M files - Open in
+  editor" tampil, teks cocok oranye, dan tidak ada teks yang
+  kepotong di tepi panel saat sidebar disempitkan. Di luar scope:
+  replace (cari-ganti), command palette (Fase 31), SearchInline,
+  flow review/Confirm/checkpoint, Plan mode (Fase 30), auto-import
+  (Fase 29), panel reference, sidebar DnD/auto-reveal, warna
+  sintaks/minimap, jalur ESLint.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
