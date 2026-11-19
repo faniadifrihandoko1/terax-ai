@@ -33,6 +33,7 @@ export function AiMiniWindow({
   reviewStatusByApproval,
   restorableApprovals,
   onRestoreFile,
+  onRevertFile,
   onAcceptAll,
 }: {
   state: PresenceState;
@@ -44,6 +45,7 @@ export function AiMiniWindow({
   reviewStatusByApproval?: Map<string, import("@/modules/tabs").AiDiffStatus>;
   restorableApprovals?: ReadonlySet<string>;
   onRestoreFile?: (approvalId: string) => void;
+  onRevertFile?: (approvalId: string) => void | Promise<void>;
   onAcceptAll?: (approvalIds: string[]) => void | Promise<void>;
 }) {
   return (
@@ -54,6 +56,7 @@ export function AiMiniWindow({
         reviewStatusByApproval={reviewStatusByApproval}
         restorableApprovals={restorableApprovals}
         onRestoreFile={onRestoreFile}
+        onRevertFile={onRevertFile}
         onAcceptAll={onAcceptAll}
       />
     </Suspense>

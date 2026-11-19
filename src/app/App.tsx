@@ -48,6 +48,10 @@ import {
   restoreCheckpoint,
   type FileCheckpoint,
 } from "@/modules/ai/lib/reviewCheckpoint";
+import {
+  mergeCardStatuses,
+  revertReviewedFile,
+} from "@/modules/ai/lib/cardRevert";
 import { clearReviewHistory } from "@/modules/ai/lib/reviewHistory";
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
 import { native } from "@/modules/ai/lib/native";
@@ -526,21 +530,44 @@ export default function App() {
     return ids;
   }, [tabs]);
 
+  // Fase 35: rows the user resolved from the Changed Files card
+  // (reverted or restored) while their tab was closed. The card's
+  // status map comes from the open tabs, so without this a tab-less
+  // row would fall back to "Pending" after its revert. The ids are
+  // tool-call ids, unique per session, so entries from another
+  // session can never match its rows — the map just carries dead
+  // entries. An open tab always wins over a card record
+  // (mergeCardStatuses).
+  const [cardResolvedByApproval, setCardResolvedByApproval] = useState(
+    new Map<string, AiDiffStatus>(),
+  );
+  const cardReviewStatusByApproval = useMemo(
+    () => mergeCardStatuses(reviewStatusByApproval, cardResolvedByApproval),
+    [reviewStatusByApproval, cardResolvedByApproval],
+  );
+  const cardResolvedIds = useMemo(
+    () => [...cardResolvedByApproval.keys()],
+    [cardResolvedByApproval],
+  );
+
   // Fase 5: approval ids whose applied file can be restored from its
-  // checkpoint, for the Restore button on the Changed Files card. The
-  // memo re-runs when tabs change, which is also when a checkpoint is
-  // saved (apply) or consumed (restore), so it never goes stale.
+  // checkpoint, for the Restore button on the Changed Files card.
+  // Fase 35: computed from the checkpoints that exist — not just the
+  // open applied tabs — so a confirmed file stays restorable after
+  // its tab is closed (the checkpoint survives the close; Fase 33
+  // persists it). The card still gates Restore on status ===
+  // "applied", so a pending file's checkpoint never shows a Restore
+  // button, and the same set gates the Revert button for rows that
+  // still need review. The memo re-runs when tabs change, which is
+  // also when a checkpoint is saved (a write opens or updates a tab)
+  // or refreshed (a confirm changes the tab); a checkpoint consumed
+  // by a card action leaves a stale id in the set, but the card's
+  // status gate hides both buttons for the resolved row, so the
+  // staleness is invisible.
+  // biome-ignore lint/correctness/useExhaustiveDependencies(tabs): tabs is the re-render trigger — the memo reads the module-level checkpoint map, which the linter cannot see (same pattern as the Fase 34 pendingReviewVersion memo).
   const restorableApprovals = useMemo(() => {
     const s = new Set<string>();
-    for (const t of tabs) {
-      if (
-        t.kind === "ai-diff" &&
-        t.status === "applied" &&
-        getCheckpoint(t.approvalId) !== undefined
-      ) {
-        s.add(t.approvalId);
-      }
-    }
+    for (const id of listCheckpoints().keys()) s.add(id);
     return s;
   }, [tabs]);
 
@@ -753,6 +780,37 @@ export default function App() {
     ],
   );
 
+  // Fase 35: write the persisted review state right now, instead of
+  // waiting for the debounced save or the tab-close flush. A card
+  // Revert/Restore consumes the checkpoint without changing the tabs
+  // (when the row has no tab), so neither of those would run — and
+  // the stale persisted checkpoint would let a later row click
+  // rebuild the reverted tab. The excluded id is dropped from the
+  // snapshot's tabs, so the flush is correct even before React
+  // applies the tab's new status.
+  const flushReviewStateNow = useCallback(
+    (excludeApprovalId?: string) => {
+      if (!activeSessionId) return;
+      const aiDiffTabs = tabs.filter(
+        (t): t is AiDiffTab =>
+          t.kind === "ai-diff" &&
+          (excludeApprovalId === undefined ||
+            t.approvalId !== excludeApprovalId),
+      );
+      if (aiDiffTabs.length === 0 && listCheckpoints().size === 0) return;
+      void saveReviewState(
+        activeSessionId,
+        snapshotReviewState(
+          activeSessionId,
+          aiDiffTabs,
+          Date.now(),
+          listCheckpoints(),
+        ),
+      ).catch(() => {});
+    },
+    [activeSessionId, tabs],
+  );
+
   // Fase 5: Restore from the Changed Files card. The guarded restore
   // refuses when the file changed since the apply; the user can still
   // force-restore from the ai-diff tab, where the choice is explicit.
@@ -761,6 +819,17 @@ export default function App() {
       const result = await restoreCheckpoint(approvalId, {});
       if (result.outcome === "restored") {
         setAiDiffStatus(approvalId, "restored");
+        // Fase 35: record the restore on the card side too, so the
+        // row keeps showing "Dipulihkan" after its tab closes (the
+        // card derives a tab-less row's status from the live sources,
+        // and a consumed checkpoint leaves it nothing to derive
+        // from). Flush the persisted state at once, like a revert.
+        setCardResolvedByApproval((prev) => {
+          const next = new Map(prev);
+          next.set(approvalId, "restored");
+          return next;
+        });
+        flushReviewStateNow(approvalId);
         toast.success("File restored to its state before the apply");
       } else if (result.outcome === "conflict") {
         toast.error("Restore refused: file changed since the apply", {
@@ -775,7 +844,43 @@ export default function App() {
         });
       }
     },
-    [setAiDiffStatus],
+    [flushReviewStateNow, setAiDiffStatus],
+  );
+
+  // Fase 35: Revert from the Changed Files card. One click undoes the
+  // agent's change for the file — pending or confirmed, tab open or
+  // closed — through the same checkpoint restore the ai-diff tab's
+  // Reject all / Restore use (revertReviewedFile). The tab, when it
+  // exists, is marked rejected so the card and the pane agree; the
+  // row is recorded as card-resolved either way, and the persisted
+  // state is flushed at once so a stale checkpoint cannot rebuild
+  // the reverted tab on a later row click.
+  const handleRevertFile = useCallback(
+    async (approvalId: string) => {
+      const result = await revertReviewedFile(approvalId);
+      if (result.outcome === "restored") {
+        clearReviewHistory(approvalId);
+        setAiDiffStatus(approvalId, "rejected");
+        setCardResolvedByApproval((prev) => {
+          const next = new Map(prev);
+          next.set(approvalId, "rejected");
+          return next;
+        });
+        flushReviewStateNow(approvalId);
+        toast.success("File reverted to its state before the agent change");
+      } else if (result.outcome === "conflict") {
+        toast.error("Revert refused: file changed since the apply", {
+          description: "Open the review tab to revert anyway.",
+        });
+      } else if (result.outcome === "restore-failed") {
+        toast.error("Revert failed", { description: result.reason });
+      } else {
+        toast.error("Revert failed", {
+          description: "No checkpoint for this file.",
+        });
+      }
+    },
+    [flushReviewStateNow, setAiDiffStatus],
   );
 
   // Fase 20: Accept all from the Changed Files card (Antigravity-style).
@@ -2171,6 +2276,7 @@ export default function App() {
                 openAiDiffTab={openAiDiffTab}
                 updateAiDiffTab={updateAiDiffTab}
                 aiDiffApprovalIds={aiDiffApprovalIds}
+                resolvedApprovalIds={cardResolvedIds}
               />
               <LocalAgentNotificationsBridge />
             </>
@@ -2180,9 +2286,10 @@ export default function App() {
             <AiMiniWindow
               state={miniPresence.state}
               onOpenFileDiff={handleOpenFileDiff}
-              reviewStatusByApproval={reviewStatusByApproval}
+              reviewStatusByApproval={cardReviewStatusByApproval}
               restorableApprovals={restorableApprovals}
               onRestoreFile={handleRestoreFile}
+              onRevertFile={handleRevertFile}
               onAcceptAll={handleAcceptAll}
             />
           ) : null}
