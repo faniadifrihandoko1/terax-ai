@@ -562,7 +562,7 @@ export default function App() {
         // is a user gesture, so loading it on demand is free.
         const { buildRecreatedAiDiffTab, resolveProposedContent } =
           await import("@/modules/ai/lib/recreateAiDiffTab");
-        const { readOriginal } = await import(
+        const { readOriginal, resolveMutationPath } = await import(
           "@/modules/ai/lib/fileMutations"
         );
         // The proposed side of a rebuilt tab is the current disk
@@ -638,9 +638,16 @@ export default function App() {
             saved?.proposals.find((p) => p.path === path);
           if (proposal?.checkpoint !== undefined) {
             const cp = proposal.checkpoint;
+            // A checkpoint-only rename stores its target relatively;
+            // resolve it against the cwd like the builder does, or
+            // the disk read below silently misses.
+            const persistedTarget =
+              proposal.targetPath ?? cp.targetPath;
             const diskProposed = await readDiskProposed(
               cp.kind,
-              proposal.targetPath ?? cp.targetPath,
+              persistedTarget !== undefined
+                ? resolveMutationPath(persistedTarget, cwd)
+                : undefined,
               cp.contentAfter ?? "",
             );
             const fromPersisted = buildRecreatedAiDiffTab({
