@@ -26,16 +26,10 @@ import {
   ensureWriteCheckpoint,
   saveCheckpoint,
 } from "../lib/reviewCheckpoint";
-import type {
-  HunkDecision,
-  LineDecision,
-} from "../lib/reviewApply";
-import {
-  computeLineChanges,
-  migrateLineDecisionsToHunks,
-} from "@/modules/editor/lib/lineDiff";
+import type { HunkDecision } from "../lib/reviewApply";
 import { loadReviewState } from "../lib/sessions";
 import {
+  restoreHunkDecisions,
   restoreStatus,
   type PersistedReviewProposal,
   type PersistedReviewState,
@@ -103,6 +97,14 @@ export type AgentRunBridgeProps = {
   openAiDiffTab: (input: DiffOpenInput) => number | null;
   /** Absorbs a newer composed proposal into an existing tab (Fase 6). */
   updateAiDiffTab: (approvalId: string, proposedContent: string) => boolean;
+  /**
+   * Fase 33: approval ids of the currently open ai-diff tabs (App
+   * owns the tabs). The bridge watches them so closing a tab marks
+   * its proposal closed in the tracker — the bridge never pops a
+   * deliberately closed tab back, while a row-click rebuild can still
+   * reopen it.
+   */
+  aiDiffApprovalIds?: readonly string[];
 };
 
 export function AgentRunBridge(props: AgentRunBridgeProps) {
@@ -115,37 +117,12 @@ type BridgeProps = { sessionId: string } & AgentRunBridgeProps;
 
 type AnyPart = UIMessagePart<Record<string, never>, Record<string, never>>;
 
-/**
- * Restores per-hunk decisions for a tab from the persisted review
- * state. v2 states carry hunk decisions directly; v1 states carry line
- * decisions, migrated to hunks against the given change set.
- */
-function restoreHunkDecisions(
-  saved: PersistedReviewProposal | undefined,
-  originalContent: string,
-  proposedContent: string,
-): Record<number, HunkDecision> {
-  const hunkDecisions: Record<number, HunkDecision> = {};
-  if (!saved) return hunkDecisions;
-  for (const [index, decision] of Object.entries(saved.hunkDecisions)) {
-    hunkDecisions[Number(index)] = decision;
-  }
-  if (saved.lineDecisions) {
-    const lineDecisions: Record<number, LineDecision> = {};
-    for (const [index, decision] of Object.entries(saved.lineDecisions)) {
-      lineDecisions[Number(index)] = decision;
-    }
-    const changeSet = computeLineChanges(originalContent, proposedContent);
-    for (const [hunkIndex, decision] of Object.entries(
-      migrateLineDecisionsToHunks(lineDecisions, changeSet),
-    )) {
-      hunkDecisions[Number(hunkIndex)] = decision;
-    }
-  }
-  return hunkDecisions;
-}
-
-function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
+function Bridge({
+  sessionId,
+  openAiDiffTab,
+  updateAiDiffTab,
+  aiDiffApprovalIds,
+}: BridgeProps) {
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
   const { status, messages, addToolApprovalResponse } = useChat<UIMessage>({
     chat,
@@ -225,6 +202,28 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
   }
   const tracker = trackerRef.current;
   const tabByPathRef = useRef<Map<string, string>>(new Map());
+  // Fase 33: ids of ai-diff tabs seen on the previous render, so the
+  // watcher below can tell a closed tab from a tab that never existed.
+  // Reset with the tracker on session change.
+  const prevAiDiffIdsRef = useRef<ReadonlySet<string>>(new Set());
+  // Fase 33: closing an ai-diff tab marks its proposal closed in the
+  // tracker, and a rebuilt tab marks it open again. Only ids the
+  // tracker already knows are touched: on mount (fresh tracker) the
+  // watcher must not pre-mark ids, or the bridge would skip restoring
+  // their tabs from the persisted state.
+  useEffect(() => {
+    const current = new Set(aiDiffApprovalIds ?? []);
+    const prev = prevAiDiffIdsRef.current;
+    for (const id of prev) {
+      if (!current.has(id) && tracker.opened.has(id)) {
+        tracker.noteTabClosed(id);
+      }
+    }
+    for (const id of current) {
+      if (tracker.closed.has(id)) tracker.noteTabOpened(id);
+    }
+    prevAiDiffIdsRef.current = current;
+  }, [aiDiffApprovalIds, tracker]);
   // Fase 9 (slice 2): a cancelled bridge run bumps this tick so the
   // effect re-runs and retries the stranded proposals instead of
   // waiting for a new file mutation to change the fingerprint.
@@ -243,6 +242,7 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
     tracker.reset();
     tabByPathRef.current = new Map();
     reviewStateCacheRef.current = null;
+    prevAiDiffIdsRef.current = new Set();
     clearAllPendingProposals();
   }, [sessionId, tracker]);
 
@@ -293,7 +293,9 @@ function Bridge({ sessionId, openAiDiffTab, updateAiDiffTab }: BridgeProps) {
     }
     const pending = collectPendingFileProposals(
       allParts as unknown as ToolPartLike[],
-      tracker.opened,
+      // Fase 33: skip closed proposals too — the bridge never pops a
+      // deliberately closed tab back on its own.
+      tracker.excluded,
     );
     if (pending.length === 0) {
       tracker.finishFlight(flight, fileMutationFingerprint, false);
