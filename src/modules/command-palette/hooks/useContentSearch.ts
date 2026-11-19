@@ -1,9 +1,9 @@
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useState } from "react";
-import {
-  type ContentHit,
-  type ContentSearchOptions,
+import type {
+  ContentHit,
+  ContentSearchOptions,
 } from "../lib/contentSearchView";
 import { type AsyncQueryState, useAsyncQuery } from "./useAsyncQuery";
 

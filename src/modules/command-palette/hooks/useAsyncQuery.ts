@@ -55,6 +55,7 @@ export function useAsyncQuery<T>({
       });
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies(refreshKey): refreshKey is a manual re-run trigger — the search re-runs when the options change, read only through the dependency array
   useEffect(() => {
     requestIdRef.current += 1;
     if (!enabled || term.length < minLength) {

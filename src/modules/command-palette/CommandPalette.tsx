@@ -285,11 +285,7 @@ export function CommandPalette({
           autoFocus
         />
         {parsed.mode === "content" && !inThemes ? (
-          <div
-            className="flex items-center gap-0.5 px-2 pt-1"
-            role="group"
-            aria-label="Search options"
-          >
+          <div className="flex items-center gap-0.5 px-2 pt-1">
             <SearchToggle
               label="Aa"
               title="Match Case"
@@ -620,12 +616,19 @@ function HighlightedLine({
   if (ranges.length === 0) return <>{text}</>;
   const parts: React.ReactNode[] = [];
   let pos = 0;
-  ranges.forEach((range, i) => {
+  ranges.forEach((range) => {
     if (range.start > pos) {
-      parts.push(<span key={`plain-${i}`}>{text.slice(pos, range.start)}</span>);
+      parts.push(
+        <span key={`plain-${range.start}`}>
+          {text.slice(pos, range.start)}
+        </span>,
+      );
     }
     parts.push(
-      <span key={`match-${i}`} className="rounded-[1px] bg-amber-500/45">
+      <span
+        key={`match-${range.start}-${range.end}`}
+        className="rounded-[1px] bg-amber-500/45"
+      >
         {text.slice(range.start, range.end)}
       </span>,
     );

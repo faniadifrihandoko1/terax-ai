@@ -132,13 +132,13 @@ export function findMatchRanges(
   }
   const ranges: MatchRange[] = [];
   let guard = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
+  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
     if (m[0].length > 0) {
       ranges.push({ start: m.index, end: m.index + m[0].length });
       if (ranges.length >= MAX_RANGES_PER_LINE) break;
     }
-    if (++guard > text.length + 2) break;
+    guard += 1;
+    if (guard > text.length + 2) break;
   }
   return ranges;
 }
