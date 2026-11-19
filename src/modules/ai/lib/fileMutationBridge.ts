@@ -36,6 +36,14 @@ export type BridgeFlight = {
 export class FileMutationBridgeTracker {
   private doneFingerprint = "";
   private openedIds = new Set<string>();
+  /**
+   * Fase 33: proposals whose ai-diff tab the user closed. The bridge
+   * must not pop such a tab back on its own — the close was deliberate
+   * — so the collection step skips these ids (see `excluded`). A row
+   * click rebuild never consults the tracker, so closing a tab is no
+   * longer a dead end: rebuilding the tab marks the id open again.
+   */
+  private closedIds = new Set<string>();
   private retryPending = false;
 
   /** Ids already handled — the double-open guard. */
@@ -43,11 +51,41 @@ export class FileMutationBridgeTracker {
     return this.openedIds;
   }
 
+  /** Ids whose tab was closed by the user. */
+  get closed(): ReadonlySet<string> {
+    return this.closedIds;
+  }
+
+  /**
+   * Every id the bridge's collection step must skip: already-opened
+   * proposals and proposals whose tab the user closed.
+   */
+  get excluded(): ReadonlySet<string> {
+    return new Set([...this.openedIds, ...this.closedIds]);
+  }
+
   /** Session change: forget everything. */
   reset(): void {
     this.doneFingerprint = "";
     this.openedIds.clear();
+    this.closedIds.clear();
     this.retryPending = false;
+  }
+
+  /**
+   * Records that the ai-diff tab for a proposal was closed. The id
+   * leaves `opened` — a deliberate rebuild may mark it again — but
+   * stays in `excluded` so no later bridge run reopens it by itself.
+   */
+  noteTabClosed(proposalId: string): void {
+    this.openedIds.delete(proposalId);
+    this.closedIds.add(proposalId);
+  }
+
+  /** Records that the tab for a proposal is open (again). */
+  noteTabOpened(proposalId: string): void {
+    this.closedIds.delete(proposalId);
+    this.openedIds.add(proposalId);
   }
 
   shouldProcess(fingerprint: string): boolean {

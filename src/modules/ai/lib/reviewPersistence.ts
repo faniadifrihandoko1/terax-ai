@@ -1,5 +1,9 @@
 import type { AiDiffStatus } from "@/modules/tabs";
 import {
+  computeLineChanges,
+  migrateLineDecisionsToHunks,
+} from "@/modules/editor/lib/lineDiff";
+import {
   isFileCheckpoint,
   type FileCheckpoint,
 } from "./reviewCheckpoint";
@@ -253,4 +257,38 @@ export function parseReviewState(value: unknown): PersistedReviewState | null {
  */
 export function restoreStatus(saved: RestorableReviewStatus): AiDiffStatus {
   return saved === "conflict" ? "done" : saved;
+}
+
+/**
+ * Restores per-hunk decisions for a tab from the persisted review
+ * state. v2 states carry hunk decisions directly; v1 states carry line
+ * decisions, migrated to hunks against the given change set.
+ *
+ * Moved here from AgentRunBridge (Fase 33) so a closed tab rebuilt
+ * from the persisted state — without the bridge ever running — restores
+ * the same decisions the bridge would have restored.
+ */
+export function restoreHunkDecisions(
+  saved: PersistedReviewProposal | undefined,
+  originalContent: string,
+  proposedContent: string,
+): Record<number, HunkDecision> {
+  const hunkDecisions: Record<number, HunkDecision> = {};
+  if (!saved) return hunkDecisions;
+  for (const [index, decision] of Object.entries(saved.hunkDecisions)) {
+    hunkDecisions[Number(index)] = decision;
+  }
+  if (saved.lineDecisions) {
+    const lineDecisions: Record<number, LineDecision> = {};
+    for (const [index, decision] of Object.entries(saved.lineDecisions)) {
+      lineDecisions[Number(index)] = decision;
+    }
+    const changeSet = computeLineChanges(originalContent, proposedContent);
+    for (const [hunkIndex, decision] of Object.entries(
+      migrateLineDecisionsToHunks(lineDecisions, changeSet),
+    )) {
+      hunkDecisions[Number(hunkIndex)] = decision;
+    }
+  }
+  return hunkDecisions;
 }
