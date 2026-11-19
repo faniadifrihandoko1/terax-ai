@@ -4,11 +4,16 @@ import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { memo } from "react";
 import { DiagnosticsMark } from "./DiagnosticsMark";
+import { PendingReviewMark } from "./PendingReviewMark";
 import { InlineInput } from "./InlineInput";
 import {
   diagnosticsSeverityClass,
   useDiagnosticsSeverity,
 } from "./lib/diagnosticsSeverity";
+import {
+  shouldOpenReview,
+  type PendingReviewRef,
+} from "./lib/pendingReview";
 import { explorerGitTextClass } from "./lib/gitStatusColor";
 import type { GitStatusCode } from "./lib/gitStatusUtils";
 import { FileIcon, FolderIcon } from "./FileIcon";
@@ -40,6 +45,21 @@ export type EntryRowProps = {
   onSelectPath: (path: string, modifiers: SelectModifiers) => void;
   gitStatusCode?: GitStatusCode | null;
   gitignored?: boolean;
+  /**
+   * Pending AI review for this exact file (Fase 34): a plain click
+   * opens the review tab instead of the file. Null/absent means the
+   * file opens normally.
+   */
+  pendingReview?: PendingReviewRef | null;
+  /** True when a descendant of this folder has a pending review. */
+  hasPendingReviewDescendant?: boolean;
+  /** Opens the review for a pending file (same handler as the Changed
+   * Files card). Absent means pending files open normally. */
+  onOpenReview?: (
+    approvalId: string,
+    path: string,
+    approvalIds?: string[],
+  ) => void;
 };
 
 function EntryRowImpl(props: EntryRowProps) {
@@ -59,6 +79,9 @@ function EntryRowImpl(props: EntryRowProps) {
     onSelectPath,
     gitStatusCode,
     gitignored = false,
+    pendingReview,
+    hasPendingReviewDescendant = false,
+    onOpenReview,
   } = props;
 
   const paddingLeft = 6 + depth * 12;
@@ -103,7 +126,17 @@ function EntryRowImpl(props: EntryRowProps) {
     }
     onSelectPath(path, { shift: false, mod: false });
     if (isDir) actions.toggle(path);
-    else onOpenFile(path);
+    else if (
+      onOpenReview !== undefined &&
+      pendingReview !== undefined &&
+      pendingReview !== null &&
+      shouldOpenReview({ isDir, shift, mod, pendingReview })
+    ) {
+      // Fase 34: a pending file opens its review tab (rebuilt from the
+      // registry/checkpoint/persisted state by the Fase 33 path),
+      // exactly like clicking its Changed Files card row.
+      onOpenReview(pendingReview.approvalId, path, pendingReview.approvalIds);
+    } else onOpenFile(path);
   };
 
   return (
@@ -164,6 +197,12 @@ function EntryRowImpl(props: EntryRowProps) {
         {name}
       </span>
       <DiagnosticsMark path={path} isDir={isDir} />
+      <PendingReviewMark
+        show={
+          (pendingReview !== undefined && pendingReview !== null) ||
+          (isDir && hasPendingReviewDescendant)
+        }
+      />
     </button>
   );
 }

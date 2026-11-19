@@ -51,6 +51,11 @@ import {
   parentDir as parentOf,
 } from "./lib/clipboardPaste";
 import { useWorkspaceEnvStore } from "@/modules/workspace";
+import {
+  hasPendingReviewDescendant,
+  pendingReviewForPath,
+  type PendingReviewRef,
+} from "./lib/pendingReview";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
 import { useExplorerDnd } from "./lib/useExplorerDnd";
 import { useExplorerFileDrop } from "./lib/useExplorerFileDrop";
@@ -83,6 +88,20 @@ type Props = {
   onAttachToAgent?: (path: string) => void;
   pathDropTarget?: TerminalPathDropTarget;
   gitStatus?: GitStatusSnapshot | null;
+  /**
+   * Files with a pending AI review, keyed by canonical path (Fase 34).
+   * The map comes from the live registry + open review tabs, so it
+   * survives a closed review tab; it is empty while nothing is
+   * pending. Absent means no review entry point (plain open only).
+   */
+  pendingReviewByPath?: ReadonlyMap<string, PendingReviewRef>;
+  /** Opens the review for a pending file (same handler as the Changed
+   * Files card). Absent means pending files open normally. */
+  onOpenReview?: (
+    approvalId: string,
+    path: string,
+    approvalIds?: string[],
+  ) => void;
   /**
    * The explorer is on screen (default true). It stays mounted when the sidebar
    * collapses to keep its tree and selection, but while hidden it holds no fs
@@ -125,6 +144,9 @@ type Row =
 const ROW_HEIGHT = 24;
 const PASTE_HINT = IS_MAC ? "⌘V" : "Ctrl+V";
 const OVERSCAN = 8;
+
+/** Shared empty map so lookups never allocate per render. */
+const EMPTY_PENDING_REVIEW: ReadonlyMap<string, PendingReviewRef> = new Map();
 
 function basename(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -227,6 +249,8 @@ export const FileExplorer = memo(
       onAttachToAgent,
       pathDropTarget,
       gitStatus,
+      pendingReviewByPath,
+      onOpenReview,
       visible = true,
     },
     ref,
@@ -316,6 +340,18 @@ export const FileExplorer = memo(
     // re-anchors to the new cursor (floating-ui won't reposition on an anchor
     // change alone, only on scroll/resize).
     const [menuNonce, setMenuNonce] = useState(0);
+    // Fase 34: pending review for the right-clicked file, if any — the
+    // menu offers "Review AI changes" only for pending files.
+    const menuPendingReview = useMemo(
+      () =>
+        menuTarget === null || menuTarget.isDir || onOpenReview === undefined
+          ? undefined
+          : pendingReviewForPath(
+              pendingReviewByPath ?? EMPTY_PENDING_REVIEW,
+              menuTarget.path,
+            ),
+      [menuTarget, onOpenReview, pendingReviewByPath],
+    );
 
     const entryPaths = useMemo<string[]>(() => {
       const out: string[] = [];
@@ -638,7 +674,21 @@ export const FileExplorer = memo(
           const row = rows[idx];
           if (row.kind !== "entry") break;
           if (row.isDir) tree.toggle(row.path);
-          else onOpenFile(row.path);
+          else {
+            // Fase 34: Enter on a pending file opens its review, like
+            // a plain click does.
+            const pending =
+              pendingReviewByPath !== undefined
+                ? pendingReviewForPath(pendingReviewByPath, row.path)
+                : undefined;
+            if (pending !== undefined && onOpenReview !== undefined) {
+              void onOpenReview(
+                pending.approvalId,
+                row.path,
+                pending.approvalIds,
+              );
+            } else onOpenFile(row.path);
+          }
           break;
         }
       }
@@ -648,6 +698,16 @@ export const FileExplorer = memo(
       switch (row.kind) {
         case "entry":
         case "rename": {
+          // Fase 34: a pending file gets its review ref (badge + click
+          // routing); a folder gets the descendant flag for its dot.
+          const pending =
+            row.isDir || pendingReviewByPath === undefined
+              ? undefined
+              : pendingReviewForPath(pendingReviewByPath, row.path);
+          const pendingDescendant =
+            row.isDir && pendingReviewByPath !== undefined
+              ? hasPendingReviewDescendant(pendingReviewByPath, row.path)
+              : false;
           return (
             <EntryRow
               path={row.path}
@@ -665,6 +725,9 @@ export const FileExplorer = memo(
               onSelectPath={handleEntrySelect}
               gitStatusCode={row.gitStatusCode}
               gitignored={gitDecorations && row.gitignored}
+              pendingReview={pending}
+              hasPendingReviewDescendant={pendingDescendant}
+              onOpenReview={onOpenReview}
             />
           );
         }
@@ -900,6 +963,22 @@ export const FileExplorer = memo(
                 </ContextMenuItem>
               ) : menuTarget ? (
                 <>
+                  {menuPendingReview !== undefined && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => {
+                        if (menuTarget === null || onOpenReview === undefined)
+                          return;
+                        void onOpenReview(
+                          menuPendingReview.approvalId,
+                          menuTarget.path,
+                          menuPendingReview.approvalIds,
+                        );
+                      }}
+                    >
+                      Review AI changes
+                    </ContextMenuItem>
+                  )}
                   {!menuTarget.isDir && (
                     <ContextMenuItem
                       className={COMPACT_ITEM}

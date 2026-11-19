@@ -35,7 +35,13 @@ import {
   type PersistedReviewState,
 } from "@/modules/ai/lib/reviewPersistence";
 import { describeAcceptAllSkips, type AcceptAllSkipReason } from "@/modules/ai/lib/acceptAllSkips";
-import { getPendingProposal } from "@/modules/ai/lib/pendingProposals";
+import {
+  getPendingProposal,
+  getPendingProposalsVersion,
+  listPendingProposals,
+  subscribePendingProposals,
+} from "@/modules/ai/lib/pendingProposals";
+import { buildPendingReviewByPath } from "@/modules/explorer/lib/pendingReview";
 import {
   getCheckpoint,
   listCheckpoints,
@@ -153,6 +159,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { CloseDialogs } from "./components/CloseDialogs";
 import {
@@ -474,6 +481,38 @@ export default function App() {
     }
     return m;
   }, [tabs]);
+
+  // Fase 34: files with a pending AI review, for the sidebar (badge +
+  // click routing). The sources are the open ai-diff tabs (reviewable
+  // statuses only) and the live pending-proposal registry — the
+  // registry is cleared by Confirm/Revert, never by closing a tab, so
+  // the badge survives a closed tab, and it disappears once the file
+  // is confirmed. The registry lives outside React, so its version
+  // (bumped on every real change) is what re-reads it.
+  const pendingReviewVersion = useSyncExternalStore(
+    subscribePendingProposals,
+    getPendingProposalsVersion,
+  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies(pendingReviewVersion): pendingReviewVersion intentionally re-reads the module-level registry — the memo reads it via listPendingProposals(), which the linter cannot see (same pattern as AgentRunBridge's bridgeRetryTick).
+  const pendingReviewByPath = useMemo(
+    () =>
+      buildPendingReviewByPath({
+        tabs: tabs.flatMap((t) =>
+          t.kind === "ai-diff"
+            ? [
+                {
+                  approvalId: t.approvalId,
+                  path: t.path,
+                  status: t.status,
+                  mutationKind: t.mutationKind,
+                },
+              ]
+            : [],
+        ),
+        registry: listPendingProposals(),
+      }),
+    [tabs, pendingReviewVersion],
+  );
 
   // Fase 33: approval ids of the open ai-diff tabs, for the bridge's
   // closed-tab watcher (AgentRunBridge must not auto-reopen a tab the
@@ -2005,6 +2044,8 @@ export default function App() {
                           activeFilePath={explorerActiveFilePath}
                           onOpenFile={handleOpenFile}
                           onOpenContentHit={openContentHit}
+                          pendingReviewByPath={pendingReviewByPath}
+                          onOpenReview={handleOpenFileDiff}
                           onPathRenamed={handleExplorerPathRenamed}
                           onPathsDeleted={handlePathsDeleted}
                           canReplacePath={canReplaceExplorerPath}
