@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildEntries } from "./ChangedFilesCard";
+import {
+  applyTabLessStatuses,
+  buildEntries,
+  revertButtonFor,
+  type ChangedFileEntry,
+} from "./ChangedFilesCard";
 
 function part(over: Record<string, unknown>) {
   return {
@@ -130,5 +135,97 @@ describe("buildEntries (Fase 6 composition)", () => {
     expect(entries[0].approvalId).toBe("call-1");
     expect(entries[0].status).toBe("reviewing");
     expect(entries[0].hasTab).toBe(true);
+  });
+});
+
+function entry(overrides: Partial<ChangedFileEntry> = {}): ChangedFileEntry {
+  return {
+    key: "k",
+    path: "/x/a.ts",
+    approvalId: "appr-1",
+    kind: "edit",
+    editCount: 1,
+    mutations: [],
+    status: "pending",
+    hasTab: true,
+    ...overrides,
+  };
+}
+
+describe("applyTabLessStatuses (Fase 35)", () => {
+  it("overrides the status of tab-less rows from the resolver", () => {
+    const entries = applyTabLessStatuses(
+      [
+        entry({ key: "a", approvalId: "a1", hasTab: false }),
+        entry({ key: "b", approvalId: "a2", hasTab: false }),
+      ],
+      (e) => (e.approvalId === "a1" ? "applied" : undefined),
+    );
+    expect(entries[0].status).toBe("applied");
+    expect(entries[1].status).toBe("pending");
+  });
+
+  it("never overrides a row that has a tab", () => {
+    const entries = applyTabLessStatuses(
+      [entry({ key: "a", approvalId: "a1", hasTab: true, status: "pending" })],
+      () => "applied",
+    );
+    expect(entries[0].status).toBe("pending");
+  });
+
+  it("returns the same entries when nothing changes", () => {
+    const input = [entry({ key: "a", approvalId: "a1", hasTab: false })];
+    const entries = applyTabLessStatuses(input, () => undefined);
+    expect(entries[0]).toBe(input[0]);
+  });
+});
+
+describe("revertButtonFor (Fase 35)", () => {
+  const restorable = new Set(["appr-1", "call-1"]);
+
+  it("shows Revert for pending, reviewing, and done rows with a checkpoint", () => {
+    for (const status of ["pending", "reviewing", "done"] as const) {
+      expect(
+        revertButtonFor(entry({ status, approvalId: "appr-1" }), restorable),
+      ).toBe("appr-1");
+    }
+  });
+
+  it("never shows Revert for resolved rows", () => {
+    for (const status of [
+      "applied",
+      "rejected",
+      "conflict",
+      "restored",
+    ] as const) {
+      expect(
+        revertButtonFor(entry({ status, approvalId: "appr-1" }), restorable),
+      ).toBeUndefined();
+    }
+  });
+
+  it("never shows Revert without a checkpoint", () => {
+    expect(
+      revertButtonFor(entry({ status: "pending", approvalId: "no-cp" }), restorable),
+    ).toBeUndefined();
+    expect(
+      revertButtonFor(entry({ status: "pending", approvalId: null }), restorable),
+    ).toBeUndefined();
+  });
+
+  it("falls back to a mutation id with a checkpoint for composed rows", () => {
+    expect(
+      revertButtonFor(
+        entry({
+          status: "pending",
+          approvalId: "call-2",
+          mutations: [
+            { approvalId: "call-2" },
+            { approvalId: "call-1" },
+          ] as never,
+        }),
+        restorable,
+      ),
+    ).toBe("call-1");
   });
 });

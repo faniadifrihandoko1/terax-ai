@@ -27,6 +27,10 @@ import {
 } from "../lib/fileMutations";
 import { getCheckpoint } from "../lib/reviewCheckpoint";
 import { getPendingProposal } from "../lib/pendingProposals";
+import {
+  deriveTabLessStatus,
+  pickRevertApprovalId,
+} from "../lib/cardRevert";
 import { useChatStore } from "../store/chatStore";
 
 type AnyPart = UIMessagePart<Record<string, never>, Record<string, never>>;
@@ -74,6 +78,12 @@ type Props = {
   restorableApprovals?: ReadonlySet<string>;
   onRestoreFile?: (approvalId: string) => void;
   /**
+   * Fase 35: revert one file from its checkpoint, in one click
+   * (Antigravity-style "undo this change"). Receives the approval id
+   * from `revertButtonFor`; the handler reports the result with toasts.
+   */
+  onRevertFile?: (approvalId: string) => void | Promise<void>;
+  /**
    * Fase 20: confirm every file that still needs review, in one click
    * (Antigravity-style Accept all). Receives the approval ids from
    * `acceptAllApprovalIds`; the handler reports the result with toasts.
@@ -110,6 +120,53 @@ export function acceptAllApprovalIds(
 }
 
 /**
+ * True status for card rows without a review tab (Fase 35). The
+ * status map is built from the open tabs, so a tab-less row defaults
+ * to "pending" — which lies for a confirmed file whose tab was
+ * closed. The resolver reads the live sources (see
+ * `deriveTabLessStatus` in cardRevert) and returns the corrected
+ * status, or undefined to keep the row as-is. Rows with a tab are
+ * never touched: the tab is the live source of truth for them.
+ */
+export function applyTabLessStatuses(
+  entries: ChangedFileEntry[],
+  resolve: (entry: ChangedFileEntry) => AiDiffStatus | undefined,
+): ChangedFileEntry[] {
+  return entries.map((e) => {
+    if (e.hasTab) return e;
+    const status = resolve(e);
+    if (status === undefined || status === e.status) return e;
+    return { ...e, status };
+  });
+}
+
+/**
+ * Approval id the Revert button runs under for one row (Fase 35), or
+ * undefined when the row must not offer Revert. Only rows that still
+ * need review (pending, reviewing, done) revert: applied rows keep
+ * Restore, and resolved rows have nothing left to undo. The row id
+ * comes first, then any other mutation id behind the row — a composed
+ * row's checkpoint lives under the first write's id.
+ */
+export function revertButtonFor(
+  entry: ChangedFileEntry,
+  restorableApprovals: ReadonlySet<string> | undefined,
+): string | undefined {
+  if (
+    entry.status !== "pending" &&
+    entry.status !== "reviewing" &&
+    entry.status !== "done"
+  ) {
+    return undefined;
+  }
+  if (restorableApprovals === undefined) return undefined;
+  return pickRevertApprovalId(
+    [entry.approvalId, ...entry.mutations.map((m) => m.approvalId)],
+    restorableApprovals,
+  );
+}
+
+/**
  * Antigravity-style "Changed Files" summary (FR-01) for one assistant
  * message: every file the agent proposed to change, with +added/-removed
  * and its per-file review status (FR-06). Clicking a file opens its
@@ -125,11 +182,33 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
   onOpenFileDiff,
   restorableApprovals,
   onRestoreFile,
+  onRevertFile,
   onAcceptAll,
 }: Props) {
+  const live = useChatStore((s) => s.live);
+  // Fase 35: rows without a review tab get their true status from the
+  // live sources (registry = still pending, checkpoint without a
+  // registry entry = confirmed) instead of the "pending" default —
+  // otherwise a confirmed file whose tab was closed shows Pending
+  // and its Restore button never appears. The lookup runs when the
+  // props change, which is also when the registry or the checkpoints
+  // change (a write, a confirm, a card action all re-render the card
+  // through parts or the status map).
   const entries = useMemo(
-    () => buildEntries(parts, reviewStatusByApproval),
-    [parts, reviewStatusByApproval],
+    () =>
+      applyTabLessStatuses(
+        buildEntries(parts, reviewStatusByApproval),
+        (entry) => {
+          if (entry.approvalId === null) return undefined;
+          const abs = resolveMutationPath(entry.path, live.getCwd());
+          const status = deriveTabLessStatus({
+            hasRegistryProposal: getPendingProposal(abs) !== undefined,
+            checkpoint: getCheckpoint(entry.approvalId),
+          });
+          return status === entry.status ? undefined : status;
+        },
+      ),
+    [parts, reviewStatusByApproval, live],
   );
   // Fase 20: the ids Accept all will confirm. Memoized so the button
   // only appears while there is actually something left to confirm.
@@ -142,6 +221,24 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
   // only flip to applied once the confirms land, so a second click
   // before that would re-confirm the same files.
   const [accepting, setAccepting] = useState(false);
+  // Fase 35: the row being reverted, so its Revert button disables
+  // itself until the handler settles — a second click would find the
+  // checkpoint already consumed and report a confusing failure.
+  const [revertingId, setRevertingId] = useState<string | null>(null);
+  const handleRevert = (approvalId: string) => {
+    if (!onRevertFile || revertingId !== null) return;
+    setRevertingId(approvalId);
+    void (async () => {
+      try {
+        await onRevertFile(approvalId);
+      } catch {
+        // The handler reports failures with toasts; the card only
+        // needs to re-enable the button.
+      } finally {
+        setRevertingId(null);
+      }
+    })();
+  };
   if (entries.length === 0) return null;
 
   const allResolved = entries.every((e) =>
@@ -228,6 +325,12 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
                 restorableApprovals?.has(entry.approvalId)
               }
               onRestoreFile={onRestoreFile}
+              revertId={revertButtonFor(entry, restorableApprovals)}
+              onRevertFile={onRevertFile ? handleRevert : undefined}
+              reverting={
+                revertingId !== null &&
+                revertButtonFor(entry, restorableApprovals) === revertingId
+              }
             />
           ))}
         </ul>
@@ -241,6 +344,9 @@ const ChangedFileRow = memo(function ChangedFileRow({
   onOpenFileDiff,
   restorable,
   onRestoreFile,
+  revertId,
+  onRevertFile,
+  reverting,
 }: {
   entry: ChangedFileEntry;
   onOpenFileDiff?: (
@@ -250,6 +356,10 @@ const ChangedFileRow = memo(function ChangedFileRow({
   ) => void;
   restorable?: boolean;
   onRestoreFile?: (approvalId: string) => void;
+  /** Approval id the Revert button runs under, if the row is revertible. */
+  revertId?: string;
+  onRevertFile?: (approvalId: string) => void;
+  reverting?: boolean;
 }) {
   const { stats, failed } = useChangedFileStats(entry);
   const live = useChatStore((s) => s.live);
@@ -338,12 +448,30 @@ const ChangedFileRow = memo(function ChangedFileRow({
         Restore
       </button>
     ) : null;
+  // Fase 35: one-click revert for a file that still needs review —
+  // reject all hunks and write the file back to before the agent
+  // change, through the same checkpoint restore the tab uses. Only
+  // shown while a checkpoint exists for the row (no checkpoint, no
+  // button); resolved rows never show it, applied rows keep Restore.
+  const revertButton =
+    revertId !== undefined && onRevertFile ? (
+      <button
+        type="button"
+        disabled={reverting}
+        onClick={() => onRevertFile(revertId)}
+        title="Reject all hunks and restore the file to before the agent change"
+        className="shrink-0 rounded-md border border-border/60 px-1.5 py-0.5 font-mono text-[10.5px] text-muted-foreground transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+      >
+        {reverting ? "Reverting…" : "Revert"}
+      </button>
+    ) : null;
 
   if (!clickable) {
     return (
       <li className="flex items-center gap-1.5 rounded-md px-1 py-1 font-mono text-[11px] text-muted-foreground">
         {row}
         {restoreButton}
+        {revertButton}
       </li>
     );
   }
@@ -370,6 +498,7 @@ const ChangedFileRow = memo(function ChangedFileRow({
         {row}
       </button>
       {restoreButton}
+      {revertButton}
     </li>
   );
 });
