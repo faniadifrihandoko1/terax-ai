@@ -61,9 +61,15 @@ type Props = {
   /**
    * Opens the review for a file. The path is the resolved absolute path
    * of the file, so the handler can open the file in the editor as a
-   * fallback when the ai-diff tab does not exist yet.
+   * fallback when the ai-diff tab does not exist yet. The approval ids
+   * are every mutation id behind the row (Fase 33): a composed row
+   * chains several tool calls, and the rebuild must try them all.
    */
-  onOpenFileDiff?: (approvalId: string, path: string) => void;
+  onOpenFileDiff?: (
+    approvalId: string,
+    path: string,
+    approvalIds?: string[],
+  ) => void;
   /** Approval ids with a checkpoint, so their Restore button can show. */
   restorableApprovals?: ReadonlySet<string>;
   onRestoreFile?: (approvalId: string) => void;
@@ -237,7 +243,11 @@ const ChangedFileRow = memo(function ChangedFileRow({
   onRestoreFile,
 }: {
   entry: ChangedFileEntry;
-  onOpenFileDiff?: (approvalId: string, path: string) => void;
+  onOpenFileDiff?: (
+    approvalId: string,
+    path: string,
+    approvalIds?: string[],
+  ) => void;
   restorable?: boolean;
   onRestoreFile?: (approvalId: string) => void;
 }) {
@@ -341,7 +351,15 @@ const ChangedFileRow = memo(function ChangedFileRow({
     <li className="flex items-center gap-1">
       <button
         type="button"
-        onClick={() => onOpenFileDiff(entry.approvalId as string, absPath)}
+        onClick={() =>
+          onOpenFileDiff(
+            entry.approvalId as string,
+            absPath,
+            entry.mutations
+              .map((m) => m.approvalId)
+              .filter((id): id is string => id !== null),
+          )
+        }
         title={`Review ${entry.path}`}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left font-mono text-[11px] text-muted-foreground",

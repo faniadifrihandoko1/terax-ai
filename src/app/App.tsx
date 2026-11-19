@@ -29,14 +29,18 @@ import {
   useChatStore,
   useSelectionAskAi,
 } from "@/modules/ai";
-import { saveReviewState } from "@/modules/ai/lib/sessions";
-import { snapshotReviewState } from "@/modules/ai/lib/reviewPersistence";
+import { saveReviewState, loadReviewState } from "@/modules/ai/lib/sessions";
+import {
+  snapshotReviewState,
+  type PersistedReviewState,
+} from "@/modules/ai/lib/reviewPersistence";
 import { describeAcceptAllSkips, type AcceptAllSkipReason } from "@/modules/ai/lib/acceptAllSkips";
 import { getPendingProposal } from "@/modules/ai/lib/pendingProposals";
 import {
   getCheckpoint,
   listCheckpoints,
   restoreCheckpoint,
+  type FileCheckpoint,
 } from "@/modules/ai/lib/reviewCheckpoint";
 import { clearReviewHistory } from "@/modules/ai/lib/reviewHistory";
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
@@ -319,6 +323,43 @@ export default function App() {
     }, REVIEW_SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [tabs, activeSessionId]);
+  // Fase 33: flush the review state the moment an ai-diff tab closes,
+  // instead of waiting for the 500 ms debounce above — a restart in
+  // that window must still be able to rebuild the closed tab from the
+  // persisted checkpoint. Only a close in the same session flushes;
+  // a session switch is not a close.
+  const prevAiDiffIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const prevReviewSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const current = new Set<string>();
+    for (const t of tabs) {
+      if (t.kind === "ai-diff") current.add(t.approvalId);
+    }
+    const prev = prevAiDiffIdsRef.current;
+    const sessionChanged = prevReviewSessionRef.current !== activeSessionId;
+    prevAiDiffIdsRef.current = current;
+    prevReviewSessionRef.current = activeSessionId;
+    if (!activeSessionId || sessionChanged) return;
+    let closed = false;
+    for (const id of prev) {
+      if (!current.has(id)) {
+        closed = true;
+        break;
+      }
+    }
+    if (!closed) return;
+    const aiDiffTabs = tabs.filter((t) => t.kind === "ai-diff");
+    if (aiDiffTabs.length === 0 && listCheckpoints().size === 0) return;
+    void saveReviewState(
+      activeSessionId,
+      snapshotReviewState(
+        activeSessionId,
+        aiDiffTabs,
+        Date.now(),
+        listCheckpoints(),
+      ),
+    ).catch(() => {});
+  }, [tabs, activeSessionId]);
   const sourceControlSpaceId = activeSpaceId ?? DEFAULT_SPACE_ID;
 
   const handleWorkspaceChange = useCallback(
@@ -434,6 +475,18 @@ export default function App() {
     return m;
   }, [tabs]);
 
+  // Fase 33: approval ids of the open ai-diff tabs, for the bridge's
+  // closed-tab watcher (AgentRunBridge must not auto-reopen a tab the
+  // user closed). Memoized so the bridge effect only runs when the
+  // set of open review tabs actually changes.
+  const aiDiffApprovalIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const t of tabs) {
+      if (t.kind === "ai-diff") ids.push(t.approvalId);
+    }
+    return ids;
+  }, [tabs]);
+
   // Fase 5: approval ids whose applied file can be restored from its
   // checkpoint, for the Restore button on the Changed Files card. The
   // memo re-runs when tabs change, which is also when a checkpoint is
@@ -471,44 +524,147 @@ export default function App() {
   // so without a tab there is nothing to decorate yet).
   const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
   const eslintEnabled = usePreferencesStore((s) => s.eslintEnabled);
+  // Fase 33: in-flight loads of the persisted review state, keyed by
+  // session, so rapid row clicks share one load instead of racing.
+  const reviewStateLoadRef = useRef(
+    new Map<string, Promise<PersistedReviewState | null>>(),
+  );
   const handleOpenFileDiff = useCallback(
-    async (approvalId: string, path: string) => {
+    async (approvalId: string, path: string, approvalIds?: string[]) => {
       const tab = tabs.find(
         (t): t is AiDiffTab =>
           t.kind === "ai-diff" && t.approvalId === approvalId,
       );
-      // Fase 28: the tab can be missing while its card row stays on
-      // screen (the bridge never created it, or the user closed it).
-      // The change is still on disk and usually still recoverable
-      // from the written baseline or the checkpoint — rebuild the tab
-      // instead of giving up on the review. A rebuilt tab opens fresh
-      // (pending); its status is left alone so a tab that appeared
-      // between render and click is never clobbered.
+      // Fase 28, extended Fase 33: the tab can be missing while its
+      // card row stays on screen (the bridge never created it, or the
+      // user closed it). The change is still on disk and usually still
+      // recoverable — rebuild the tab instead of giving up on the
+      // review. Sources, in order: the live registry, the in-memory
+      // checkpoints (tried for every mutation id behind the composed
+      // row), and the persisted review state on disk (survives a
+      // restart, when both in-memory maps are gone). A rebuilt tab
+      // opens fresh (pending); its status is left alone so a tab that
+      // appeared between render and click is never clobbered.
       if (tab === undefined) {
+        // All mutation ids behind the row, row id first. A composed
+        // row chains several tool calls for one file (Fase 6) and the
+        // registry/checkpoint keep the first write's id, so the row
+        // id alone can miss them.
+        const allIds = [
+          approvalId,
+          ...(approvalIds ?? []).filter((id) => id !== approvalId),
+        ];
+        const cwd = useChatStore.getState().live.getCwd();
         // Dynamic import, not a static one: the recreation helper
         // reads resolveMutationPath from fileMutations, which pulls
         // the tools barrel (incl. the AI agent tool) into the eager
         // chunk (same lesson as the Fase 18 bus split). A row click
         // is a user gesture, so loading it on demand is free.
-        const { buildRecreatedAiDiffTab } = await import(
-          "@/modules/ai/lib/recreateAiDiffTab"
+        const { buildRecreatedAiDiffTab, resolveProposedContent } =
+          await import("@/modules/ai/lib/recreateAiDiffTab");
+        const { readOriginal } = await import(
+          "@/modules/ai/lib/fileMutations"
         );
-        const recreated = buildRecreatedAiDiffTab({
-          approvalId,
-          absPath: path,
-          cwd: useChatStore.getState().live.getCwd(),
-          registry: getPendingProposal(path),
-          checkpoint: getCheckpoint(approvalId),
-        });
-        if (recreated !== null) {
-          openAiDiffTab(recreated);
-          if (!activateAiDiffTab(approvalId)) {
+        // The proposed side of a rebuilt tab is the current disk
+        // content: write-first means the disk already holds the
+        // change, and it may have moved since the write was recorded.
+        // A delete has nothing on disk to read.
+        const readDiskProposed = async (
+          mutationKind: string | undefined,
+          targetPath: string | undefined,
+          recorded: string,
+        ): Promise<string> => {
+          if (mutationKind === "delete") return recorded;
+          const disk = await readOriginal(targetPath ?? path).catch(
+            () => null,
+          );
+          return resolveProposedContent(recorded, disk);
+        };
+        const openRebuilt = async (
+          rebuilt: Parameters<typeof openAiDiffTab>[0],
+        ): Promise<boolean> => {
+          const proposed = await readDiskProposed(
+            rebuilt.mutationKind,
+            rebuilt.targetPath,
+            rebuilt.proposedContent,
+          );
+          openAiDiffTab({ ...rebuilt, proposedContent: proposed });
+          if (!activateAiDiffTab(rebuilt.approvalId)) {
             toast.error("Tidak bisa membuka tab review", {
               description:
                 "Tab review sudah dibuat ulang tapi gagal diaktifkan. Coba lagi.",
             });
+            return false;
           }
+          return true;
+        };
+        const checkpoints = new Map<string, FileCheckpoint>();
+        for (const id of allIds) {
+          const cp = getCheckpoint(id);
+          if (cp !== undefined) checkpoints.set(id, cp);
+        }
+        const recreated = buildRecreatedAiDiffTab({
+          approvalId,
+          approvalIds: allIds,
+          absPath: path,
+          cwd,
+          registry: getPendingProposal(path),
+          checkpoints,
+        });
+        if (recreated !== null) {
+          await openRebuilt(recreated);
           return;
+        }
+        // No live baseline: try the persisted review state on disk.
+        // This is the only source that survives a restart (the
+        // registry and checkpoint maps are in-memory) and a tab close
+        // followed by a restart (the close flushes the state, Fase 33).
+        if (activeSessionId) {
+          const inFlight = reviewStateLoadRef.current.get(activeSessionId);
+          let saved: PersistedReviewState | null;
+          if (inFlight !== undefined) {
+            saved = await inFlight;
+          } else {
+            const p = loadReviewState(activeSessionId).catch(() => null);
+            reviewStateLoadRef.current.set(activeSessionId, p);
+            try {
+              saved = await p;
+            } finally {
+              reviewStateLoadRef.current.delete(activeSessionId);
+            }
+          }
+          const proposal =
+            saved?.proposals.find((p) => allIds.includes(p.approvalId)) ??
+            saved?.proposals.find((p) => p.path === path);
+          if (proposal?.checkpoint !== undefined) {
+            const cp = proposal.checkpoint;
+            const diskProposed = await readDiskProposed(
+              cp.kind,
+              proposal.targetPath ?? cp.targetPath,
+              cp.contentAfter ?? "",
+            );
+            const fromPersisted = buildRecreatedAiDiffTab({
+              approvalId,
+              approvalIds: allIds,
+              absPath: path,
+              cwd,
+              persisted: proposal,
+              diskContent: diskProposed,
+            });
+            if (fromPersisted !== null) {
+              // Its proposed side is already the current disk content
+              // (read above, so the restored hunk decisions match it);
+              // opening it directly must not re-read the disk.
+              openAiDiffTab(fromPersisted);
+              if (!activateAiDiffTab(fromPersisted.approvalId)) {
+                toast.error("Tidak bisa membuka tab review", {
+                  description:
+                    "Tab review sudah dibuat ulang tapi gagal diaktifkan. Coba lagi.",
+                });
+              }
+              return;
+            }
+          }
         }
       }
       const decision = decideOpenFileDiff({
@@ -518,7 +674,7 @@ export default function App() {
         openFileTab(path, true);
         toast.info("Review belum siap untuk file ini", {
           description:
-            "Tab review belum terbentuk dan perubahannya tidak bisa dibangun ulang dari catatan yang tersisa. File dibuka di editor.",
+            "Tab review belum terbentuk dan perubahannya tidak bisa dibangun ulang dari registry, checkpoint, maupun review tersimpan. File dibuka di editor.",
         });
         return;
       }
@@ -541,7 +697,14 @@ export default function App() {
         setAiDiffStatus(approvalId, "reviewing");
       }
     },
-    [activateAiDiffTab, openAiDiffTab, openFileTab, setAiDiffStatus, tabs],
+    [
+      activateAiDiffTab,
+      activeSessionId,
+      openAiDiffTab,
+      openFileTab,
+      setAiDiffStatus,
+      tabs,
+    ],
   );
 
   // Fase 5: Restore from the Changed Files card. The guarded restore
@@ -1959,6 +2122,7 @@ export default function App() {
               <AgentRunBridge
                 openAiDiffTab={openAiDiffTab}
                 updateAiDiffTab={updateAiDiffTab}
+                aiDiffApprovalIds={aiDiffApprovalIds}
               />
               <LocalAgentNotificationsBridge />
             </>

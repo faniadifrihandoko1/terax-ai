@@ -31,7 +31,6 @@ import { loadReviewState } from "../lib/sessions";
 import {
   restoreHunkDecisions,
   restoreStatus,
-  type PersistedReviewProposal,
   type PersistedReviewState,
 } from "../lib/reviewPersistence";
 import { usePreferencesStore } from "@/modules/settings/preferences";

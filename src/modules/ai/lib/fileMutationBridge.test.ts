@@ -109,7 +109,9 @@ describe("FileMutationBridgeTracker", () => {
     expect(tracker.markOpened(retry, "p-1")).toBe(true);
 
     tracker.noteTabOpened("p-1");
-    expect(tracker.excluded.has("p-1")).toBe(false);
+    // Reopened: no longer closed, counted as open again (and therefore
+    // still in `excluded` — that is the double-open guard for open tabs).
+    expect(tracker.closed.has("p-1")).toBe(false);
     expect(tracker.opened.has("p-1")).toBe(true);
   });
 

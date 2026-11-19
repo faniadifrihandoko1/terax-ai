@@ -188,7 +188,11 @@ type Props = {
   clearError: () => void;
   addToolApprovalResponse: (arg: ApprovalArg) => void | PromiseLike<void>;
   stop: () => void | PromiseLike<void>;
-  onOpenFileDiff?: (approvalId: string, path: string) => void;
+  onOpenFileDiff?: (
+    approvalId: string,
+    path: string,
+    approvalIds?: string[],
+  ) => void;
   reviewStatusByApproval?: Map<string, AiDiffStatus>;
   restorableApprovals?: ReadonlySet<string>;
   onRestoreFile?: (approvalId: string) => void;
@@ -468,7 +472,11 @@ const RenderedMessage = memo(function RenderedMessage({
   onApproval: (id: string, approved: boolean) => void;
   streaming: boolean;
   deferOffscreen: boolean;
-  onOpenFileDiff?: (approvalId: string, path: string) => void;
+  onOpenFileDiff?: (
+    approvalId: string,
+    path: string,
+    approvalIds?: string[],
+  ) => void;
   reviewStatusByApproval?: Map<string, AiDiffStatus>;
   restorableApprovals?: ReadonlySet<string>;
   onRestoreFile?: (approvalId: string) => void;

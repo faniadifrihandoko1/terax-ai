@@ -569,15 +569,23 @@ describe("restoreHunkDecisions (Fase 33)", () => {
   });
 
   it("migrates v1 line decisions to hunks against the rebuilt change set", () => {
-    // One hunk: line 2 changed. A v1 decision on that line migrates
-    // to a decision on hunk 0.
+    // One hunk: line 2 changed. v1 decisions are keyed by change-list
+    // position (0 = removed "b", 1 = added "B"); deciding both migrates
+    // to a decision on hunk 0, deciding one leaves it undecided.
+    expect(
+      restoreHunkDecisions(
+        saved({ lineDecisions: { "0": "accepted", "1": "accepted" } }),
+        "a\nb\nc\n",
+        "a\nB\nc\n",
+      ),
+    ).toEqual({ 0: "accepted" });
     expect(
       restoreHunkDecisions(
         saved({ lineDecisions: { "1": "accepted" } }),
         "a\nb\nc\n",
         "a\nB\nc\n",
       ),
-    ).toEqual({ 0: "accepted" });
+    ).toEqual({});
   });
 });
 
