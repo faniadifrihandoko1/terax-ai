@@ -1834,6 +1834,7 @@ export default function App() {
                           }
                           activeFilePath={explorerActiveFilePath}
                           onOpenFile={handleOpenFile}
+                          onOpenContentHit={openContentHit}
                           onPathRenamed={handleExplorerPathRenamed}
                           onPathsDeleted={handlePathsDeleted}
                           canReplacePath={canReplaceExplorerPath}

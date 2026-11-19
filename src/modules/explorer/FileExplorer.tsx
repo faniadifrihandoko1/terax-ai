@@ -72,6 +72,8 @@ type Props = {
   rootPath: string | null;
   activeFilePath?: string | null;
   onOpenFile: (path: string, pin?: boolean) => void;
+  /** Open a content-search hit at its line; the tree keeps onOpenFile. */
+  onOpenContentHit?: (path: string, line: number) => void;
   onPathRenamed?: (from: string, to: string) => void;
   onPathsDeleted?: (paths: string[]) => void;
   canReplacePath?: (path: string) => boolean;
@@ -215,6 +217,7 @@ export const FileExplorer = memo(
       rootPath,
       activeFilePath,
       onOpenFile,
+      onOpenContentHit,
       onPathRenamed,
       onPathsDeleted,
       canReplacePath,
@@ -750,12 +753,10 @@ export const FileExplorer = memo(
           ref={searchRef}
           rootPath={rootPath}
           onOpenFile={onOpenFile}
+          onOpenContentHit={onOpenContentHit}
           open={isSearchOpen}
           onRequestClose={() => setIsSearchOpen(false)}
           onActiveChange={setIsSearchActive}
-          onRevealInTerminal={onRevealInTerminal}
-          onOpenInSourceControl={onOpenInSourceControl}
-          onOpenGitHistory={onOpenGitHistory}
           onAttachToAgent={onAttachToAgent}
         />
 
