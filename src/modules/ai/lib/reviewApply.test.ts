@@ -437,6 +437,83 @@ describe("checkDiskAgainst (Fase 8)", () => {
   });
 });
 
+describe("EOL handling (Fase 36)", () => {
+  it("checkDiskAgainst ignores an EOL-only difference", async () => {
+    const { io } = makeIo({ disk: { "/x/a.ts": "a\r\nb\r\n" } });
+    await expect(
+      checkDiskAgainst({ path: "/x/a.ts", expectedContent: "a\nb\n" }, io),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
+  it("checkDiskConflict ignores an EOL-only difference", async () => {
+    const { io } = makeIo({ disk: { "/x/a.ts": "a\r\nb\r\n" } });
+    await expect(
+      checkDiskConflict(
+        { path: "/x/a.ts", originalContent: "a\nb\n", isNewFile: false },
+        io,
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
+  it("confirmReviewedEdit repairs the EOL of a pre-fix LF rewrite on accept-all", async () => {
+    // Baseline CRLF, agent wrote LF (pre-fix tab), disk holds the LF write.
+    const { io, written, checkpoints } = makeIo({
+      disk: { "/x/a.ts": "a\nB\n" },
+    });
+    const result = await confirmReviewedEdit(
+      {
+        approvalId: "ap1",
+        sessionId: "s-1",
+        path: "/x/a.ts",
+        isNewFile: false,
+        originalContent: "a\r\nb\r\n",
+        proposedContent: "a\nB\n",
+        reconstructedContent: "a\nB\n",
+        appliedHunks: [0],
+      },
+      io,
+    );
+    expect(result).toEqual({ outcome: "applied", path: "/x/a.ts" });
+    // The file stays CRLF: git diff shows only the real change.
+    expect(written.get("/x/a.ts")).toBe("a\r\nB\r\n");
+    expect(checkpoints[0]).toMatchObject({ contentAfter: "a\r\nB\r\n" });
+  });
+
+  it("confirmReviewedEdit writes the reconstruction in the file EOL on partial reject", async () => {
+    const { io, written } = makeIo({ disk: { "/x/a.ts": "a\nB\n" } });
+    const result = await confirmReviewedEdit(
+      {
+        approvalId: "ap1",
+        path: "/x/a.ts",
+        isNewFile: false,
+        originalContent: "a\r\nb\r\n",
+        proposedContent: "a\nB\n",
+        // LF-space reconstruction: every hunk rejected.
+        reconstructedContent: "a\nb\n",
+      },
+      io,
+    );
+    expect(result).toEqual({ outcome: "discarded", path: "/x/a.ts" });
+    expect(written.get("/x/a.ts")).toBe("a\r\nb\r\n");
+  });
+
+  it("applyReviewedEdit (legacy) discards when the reconstruction only differs by EOL", async () => {
+    const { io, written } = makeIo({ disk: { "/x/a.ts": "a\r\nb\r\n" } });
+    const result = await applyReviewedEdit(
+      {
+        approvalId: "ap1",
+        path: "/x/a.ts",
+        isNewFile: false,
+        originalContent: "a\r\nb\r\n",
+        reconstructedContent: "a\nb\n",
+      },
+      io,
+    );
+    expect(result).toEqual({ outcome: "discarded", path: "/x/a.ts" });
+    expect(written.size).toBe(0);
+  });
+});
+
 describe("confirmReviewedEdit (Fase 8, write-first)", () => {
   // Baseline "a\nb\n", agent wrote "a\nB\n" (disk), review confirms.
   const input = {

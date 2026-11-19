@@ -274,6 +274,40 @@ describe("edit tool writes to disk first (Fase 8)", () => {
   });
 });
 
+describe("EOL preservation (Fase 36)", () => {
+  it("keeps a CRLF file CRLF when the replacement introduces LF newlines", async () => {
+    setFile("a\r\nb\r\nc\r\n");
+    const result = await runEdit(readContext(), {
+      path: FILE,
+      old_string: "b",
+      new_string: "B\nB2",
+    });
+    expect(result.written).toBe(true);
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(
+      FILE,
+      "a\r\nB\r\nB2\r\nc\r\n",
+    );
+    expect(getPendingProposal(FILE)?.proposedContent).toBe(
+      "a\r\nB\r\nB2\r\nc\r\n",
+    );
+    expect(getPendingProposal(FILE)?.originalContent).toBe("a\r\nb\r\nc\r\n");
+  });
+
+  it("leaves a CRLF file CRLF for a single-line replacement", async () => {
+    setFile("hello\r\nworld\r\n");
+    const result = await runEdit(readContext(), {
+      path: FILE,
+      old_string: "world",
+      new_string: "there",
+    });
+    expect(result.written).toBe(true);
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(
+      FILE,
+      "hello\r\nthere\r\n",
+    );
+  });
+});
+
 describe("multi_edit atomicity", () => {
   it("applies edits in order against the running buffer and writes once", async () => {
     setFile("one two");

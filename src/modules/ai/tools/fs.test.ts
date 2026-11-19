@@ -166,6 +166,35 @@ describe("write_file writes to disk first (Fase 8)", () => {
     expect(result.error).toContain("disk full");
     expect(getPendingProposal(FILE)).toBeUndefined();
   });
+
+  it("keeps a CRLF file CRLF when the model content is LF (Fase 36)", async () => {
+    nativeMock.readFile.mockResolvedValue(textFile("old\r\ncontent\r\n"));
+    const result = await runTool(makeContext(new Map()), "write_file", {
+      path: FILE,
+      content: "new\ncontent\n",
+    });
+    expect(result.written).toBe(true);
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(
+      FILE,
+      "new\r\ncontent\r\n",
+    );
+    expect(getPendingProposal(FILE)?.proposedContent).toBe(
+      "new\r\ncontent\r\n",
+    );
+  });
+
+  it("writes a new file as LF (Fase 36)", async () => {
+    nativeMock.readFile.mockRejectedValue(new Error("no such file"));
+    const result = await runTool(makeContext(new Map()), "write_file", {
+      path: FILE,
+      content: "fresh\ncontent\n",
+    });
+    expect(result.written).toBe(true);
+    expect(nativeMock.writeFile).toHaveBeenCalledWith(
+      FILE,
+      "fresh\ncontent\n",
+    );
+  });
 });
 
 describe("create_directory (Fase 6: runs immediately, no review)", () => {

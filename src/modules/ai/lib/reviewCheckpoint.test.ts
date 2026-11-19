@@ -336,6 +336,47 @@ describe("restore edit", () => {
     clearAllCheckpoints();
   });
 
+  it("restores when the disk only differs by EOL from the apply (Fase 36)", async () => {
+    // Checkpoint recorded from a CRLF baseline with an LF rewrite
+    // (pre-fix tab); the disk still holds the LF spelling.
+    clearAllCheckpoints();
+    const files: Files = new Map([["/x/f.ts", "b\n"]]);
+    const io = fakeIo(files);
+    saveCheckpoint(
+      buildEditCheckpoint({
+        approvalId: "a1",
+        path: "/x/f.ts",
+        originalContent: "a\r\n",
+        reconstructedContent: "b\r\n",
+        appliedHunks: [0],
+      }),
+    );
+    const result = await restoreCheckpoint("a1", {}, io);
+    expect(result.outcome).toBe("restored");
+    expect(files.get("/x/f.ts")).toBe("a\r\n");
+    clearAllCheckpoints();
+  });
+
+  it("restores when the disk was re-saved with the original EOL (Fase 36)", async () => {
+    // Same content as the apply, but the editor re-saved it CRLF.
+    clearAllCheckpoints();
+    const files: Files = new Map([["/x/f.ts", "b\r\n"]]);
+    const io = fakeIo(files);
+    saveCheckpoint(
+      buildEditCheckpoint({
+        approvalId: "a1",
+        path: "/x/f.ts",
+        originalContent: "a\r\n",
+        reconstructedContent: "b\n",
+        appliedHunks: [0],
+      }),
+    );
+    const result = await restoreCheckpoint("a1", {}, io);
+    expect(result.outcome).toBe("restored");
+    expect(files.get("/x/f.ts")).toBe("a\r\n");
+    clearAllCheckpoints();
+  });
+
   it("reports no-checkpoint when nothing was saved", async () => {
     clearAllCheckpoints();
     const result = await restoreCheckpoint("missing", {}, fakeIo(new Map()));

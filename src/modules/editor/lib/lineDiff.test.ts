@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { detectEol, restoreEol } from "./eol";
 import {
   computeLineChanges,
   countDecisions,
@@ -202,12 +203,31 @@ describe("computeLineChanges", () => {
     );
   });
 
-  it("keeps CRLF endings through reconstruction", () => {
+  // Fase 36: the diff lives in LF space (see the module header), so
+  // reconstruction returns LF; the caller restores the file's EOL
+  // with detectEol + restoreEol when writing to disk.
+  it("reconstructs in LF space; EOL is restored by the caller", () => {
     const original = "a\r\nb\r\n";
     const proposed = "a\r\nB\r\n";
     const cs = computeLineChanges(original, proposed);
-    expect(reconstructFile(original, cs, acceptAll(cs)).content).toBe(proposed);
-    expect(reconstructFile(original, cs, rejectAll(cs)).content).toBe(original);
+    expect(reconstructFile(original, cs, acceptAll(cs)).content).toBe(
+      "a\nB\n",
+    );
+    expect(reconstructFile(original, cs, rejectAll(cs)).content).toBe(
+      "a\nb\n",
+    );
+    expect(
+      restoreEol(
+        reconstructFile(original, cs, acceptAll(cs)).content,
+        detectEol(original),
+      ),
+    ).toBe(proposed);
+    expect(
+      restoreEol(
+        reconstructFile(original, cs, rejectAll(cs)).content,
+        detectEol(original),
+      ),
+    ).toBe(original);
   });
 
   it("handles a mid-line word change as one pair", () => {
@@ -231,6 +251,36 @@ describe("computeLineChanges", () => {
     const { content, decidedLines } = reconstructFile(original, cs, d);
     expect(content).toBe(proposed);
     expect(decidedLines).toEqual([2, 4]);
+  });
+});
+
+describe("CRLF vs LF (Fase 36)", () => {
+  function crlfFile(lines: number): string {
+    return (
+      Array.from({ length: lines }, (_, i) => `line ${i + 1}`).join("\r\n") +
+      "\r\n"
+    );
+  }
+
+  it("regression: a local change in a CRLF file rewritten as LF is one local hunk, not the whole file", () => {
+    // The reported bug: listening-section.tsx changed only at lines
+    // 23-36, but the tab showed one hunk for lines 1-100.
+    const original = crlfFile(100);
+    const proposedLines = Array.from(
+      { length: 100 },
+      (_, i) => `line ${i + 1}`,
+    );
+    for (let i = 22; i < 36; i++) proposedLines[i] = `changed ${i + 1}`;
+    const proposed = `${proposedLines.join("\n")}\n`;
+    const cs = computeLineChanges(original, proposed);
+    expect(cs.hunks).toHaveLength(1);
+    expect(cs.hunks[0]).toMatchObject({ baseFrom: 22, baseTo: 36 });
+  });
+
+  it("treats an EOL-only difference as no change", () => {
+    const cs = computeLineChanges("a\r\nb\r\nc\r\n", "a\nb\nc\n");
+    expect(cs.hunks).toEqual([]);
+    expect(cs.changes).toEqual([]);
   });
 });
 
