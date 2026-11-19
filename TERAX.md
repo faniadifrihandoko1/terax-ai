@@ -2411,6 +2411,74 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   flow review/Confirm/checkpoint, Plan mode (Fase 30), auto-import
   (Fase 29), panel reference, sidebar DnD/auto-reveal, warna
   sintaks/minimap, jalur ESLint.
+  Fase 33 (tab review yang ditutup bisa dibuka lagi, DEL-133), DONE -
+  user: tab ai-diff sempat dibuka lalu ditutup, baris Changed Files
+  menampilkan "Tanpa tab", klik baris gagal dengan toast "Review belum
+  siap untuk file ini" dan editor yang terbuka tidak punya tombol
+  Accept/Reject per hunk. Titik awal (diverifikasi dari kode): rebuild
+  Fase 28 (`buildRecreatedAiDiffTab`) hanya membaca 2 sumber
+  in-memory - registry `getPendingProposal(path)` (hanya bila
+  `registry.approvalId` sama dengan id baris) dan checkpoint
+  in-memory `getCheckpoint(approvalId)`; keduanya miss -> return null
+  -> fallback toast + editor. Kedua map itu hilang saat restart
+  (registry juga dihapus saat ganti session), sementara salinan yang
+  tahan restart ADA di persisted review state di disk
+  (`saveReviewState`/`loadReviewState`,
+  `snapshotReviewState` mensintesis proposal checkpoint-only untuk
+  checkpoint tanpa tab) - tapi `handleOpenFileDiff` tidak pernah
+  membacanya; yang membacanya hanya bridge, dan bridge tidak pernah
+  membuka ulang tab yang id-nya sudah ada di `tracker.opened`.
+  Inline Accept/Reject di editor ikut tab (sync dari ai-diff tab),
+  jadi tanpa tab editor = file biasa. Baris composed (7 edits = beberapa
+  tool call) menyimpan approvalId first write di registry/checkpoint,
+  jadi id baris bisa tidak cocok. Perubahan: (1) `buildRecreatedAiDiffTab`
+  mencoba SEMUA mutation id baris (`approvalIds`) - registry dipakai
+  bila id-nya salah satu mutation baris, checkpoint dicoba per id
+  lewat map `checkpoints`, dan sumber ketiga adalah proposal persisted
+  (wajib punya checkpoint; status restorable + `hunkDecisions`
+  dipertahankan, `restoreHunkDecisions` pindah dari `AgentRunBridge`
+  ke `reviewPersistence.ts` supaya rebuild tanpa bridge memakai
+  logika yang sama); tab selalu dibuka di bawah id yang termasuk
+  mutation baris, supaya loop Fase 28 di `buildEntries` mengenalinya
+  (`hasTab`/Accept all). (2) Proposed side = isi disk SAAT INI
+  (write-first; `readOriginal` + helper murni baru
+  `resolveProposedContent` - read kosong untuk file yang masih ada
+  tidak boleh menghapus proposal tercatat, hanya file yang benar-benar
+  hilang boleh jadi ""); untuk rebuild persisted, keputusan hunk
+  dihitung setelah isi disk dibaca supaya cocok dengan diff yang
+  tampil. (3) Tracker bridge (`FileMutationBridgeTracker`): `closedIds`
+  + `noteTabClosed`/`noteTabOpened` + `excluded` (union opened+closed
+  yang dipakai `collectPendingFileProposals`); `AgentRunBridge` menerima
+  prop baru `aiDiffApprovalIds` (memo di App) dan watcher effect
+  menandai tab yang ditutup (hanya id yang tracker kenal, supaya mount
+  tidak pre-mark dan merusak restore dari persisted state) - bridge
+  tidak pernah memunculkan lagi tab yang sengaja ditutup, sementara
+  rebuild lewat klik baris tidak berkonsultasi dengan tracker sama
+  sekali. (4) App men-flush persisted state SEGERA saat ai-diff tab
+  ditutup (effect membandingkan set id tab sebelumnya; bukan debounce
+  500ms), supaya restart tepat setelah tutup tab tetap bisa rebuild;
+  ganti session bukan close, jadi tidak flush. (5) `onOpenFileDiff`
+  di-thread dengan parameter ketiga opsional `approvalIds` (App,
+  AiChat, AiMiniWindow, lazy, ChangedFilesCard - baris mengirim semua
+  mutation id); toast fallback sekarang jujur menyebut sumber yang
+  sudah dicoba (registry, checkpoint, review tersimpan); aktivasi tab
+  hasil rebuild memakai approvalId EFEKTIF (bukan id baris) - bug
+  kecil Fase 28 yang ikut diperbaiki. Verifikasi: check-types 0 error;
+  lint 0 error / 88 warning / 1 info (baseline); full test hijau 2x
+  (+15 test baru: 10 `recreateAiDiffTab.test.ts`, 2
+  `fileMutationBridge.test.ts`, 3 `reviewPersistence.test.ts`, TDD).
+  Tanpa perubahan Rust. Batas jujur: repo tidak punya DOM env, jadi
+  klik baris -> tab terbuka lagi, tombol Accept/Reject per hunk di
+  editor setelah rebuild, dan perilaku setelah restart TIDAK teruji
+  live - yang teruji logika murni di bawahnya + watcher tracker;
+  cek laptop: tutup tab ai-diff -> klik baris Changed Files -> tab
+  harus terbuka lagi dengan tombol Accept/Reject per hunk; ulangi
+  setelah restart Terax. Sisa batasan: proposal persisted TANPA
+  checkpoint (legacy pra-Fase 8, derive dari pesan) tetap tidak bisa
+  di-rebuild - fallback jujur tetap tampil; bila disk berubah menjadi
+  binary/oversized setelah write, rebuild memakai proposed tercatat
+  (bukan isi disk) karena read kosong tidak bisa dibedakan dari file
+  yang dikosongkan pengguna.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
