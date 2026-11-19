@@ -200,6 +200,7 @@ describe("pendingReviewForPath / hasPendingReviewDescendant", () => {
     const winMap = buildPendingReviewByPath({
       tabs: [],
       registry: [registryEntry({ path: "C:\\workspace\\src\\a.tsx" })],
+      windows: true,
     });
     expect(pendingReviewForPath(winMap, "C:/workspace/src/a.tsx", true)).toEqual({
       approvalId: "tool-call-1",
