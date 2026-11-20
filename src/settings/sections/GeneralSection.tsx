@@ -40,6 +40,7 @@ import {
   setTerminalShell,
   setTerminalRenderer,
   setTerminalScreenReader,
+  setVerifyAfterConfirm,
   setZoomLevel,
   TERMINAL_FONT_SIZES,
   TERMINAL_SCROLLBACK_PRESETS,
@@ -124,6 +125,9 @@ export function GeneralSection() {
   );
   const zoomLevel = usePreferencesStore((s) => s.zoomLevel);
   const aiReviewInline = usePreferencesStore((s) => s.aiReviewInline);
+  const verifyAfterConfirm = usePreferencesStore(
+    (s) => s.verifyAfterConfirm,
+  );
   const editorMinimap = usePreferencesStore((s) => s.editorMinimap);
   const editorMinimapColors = usePreferencesStore(
     (s) => s.editorMinimapColors,
@@ -292,6 +296,15 @@ export function GeneralSection() {
           <Switch
             checked={aiReviewInline}
             onCheckedChange={(v) => void setAiReviewInline(v)}
+          />
+        </SettingRow>
+        <SettingRow
+          title="Verifikasi otomatis setelah Confirm"
+          description="Begitu sebuah review dikonfirmasi, Terax menjalankan typecheck, lint, dan test proyek lalu melaporkan hasilnya sebagai pesan di chat — seperti Antigravity. Mati berarti verifikasi hanya jalan saat kamu memintanya dari Command Palette."
+        >
+          <Switch
+            checked={verifyAfterConfirm}
+            onCheckedChange={(v) => void setVerifyAfterConfirm(v)}
           />
         </SettingRow>
       </div>

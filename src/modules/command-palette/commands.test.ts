@@ -35,6 +35,7 @@ function baseContext(
     runEslintOnEntireProject: noop,
     fixEslintAtCursor: noop,
     fixAllEslint: noop,
+    runVerifyManually: noop,
     openNewTab: noop,
     openNewBlock: noop,
     openNewPrivate: noop,
@@ -107,6 +108,13 @@ describe("createCommandItems", () => {
       "spaces.switch.sp1",
     );
     expect(reason).toBe("Current space");
+  });
+
+  it("Fase 37: verifikasi manual aktif bila ada project, mati bila tidak", () => {
+    expect(reasonById({}, "verify.run-manual")).toBeUndefined();
+    expect(
+      reasonById({ explorerRoot: null, home: null }, "verify.run-manual"),
+    ).toBe("No project open");
   });
 
   it("enables Run ESLint for a lintable active file", () => {

@@ -444,7 +444,7 @@ describe("runPostConfirmVerification", () => {
       root: "/proj",
       binary: "/proj/node_modules/.bin/eslint",
     });
-    let linted: string[] = [];
+    const linted: string[] = [];
     deps.runEslintFile = async (args) => {
       linted.push(args.file);
       return { kind: "ok", results: [] };

@@ -49,6 +49,8 @@ export type CommandPaletteActionContext = {
   runEslintOnEntireProject: () => void;
   fixEslintAtCursor: () => void;
   fixAllEslint: () => void;
+  /** Fase 37: verifikasi manual (melewati setting verifyAfterConfirm). */
+  runVerifyManually: () => void;
   openNewTab: () => void;
   openNewBlock: () => void;
   openNewPrivate: () => void;
@@ -384,6 +386,23 @@ export function createCommandItems(
       icon: SparklesIcon,
       shortcutId: "ai.askSelection",
       run: ctx.askAiSelection,
+    },
+    {
+      id: "verify.run-manual",
+      title: "Verifikasi perubahan",
+      group: "AI",
+      keywords: [
+        "verify",
+        "verification",
+        "check",
+        "typecheck",
+        "lint",
+        "test",
+        "confirm",
+      ],
+      icon: SparklesIcon,
+      disabledReason: noWorkspaceRoot ? "No project open" : undefined,
+      run: ctx.runVerifyManually,
     },
   ];
 }

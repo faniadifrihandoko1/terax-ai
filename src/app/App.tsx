@@ -298,6 +298,29 @@ export default function App() {
   const activeSpaceId = useSpaces((s) => s.activeId);
   const spacesHydrated = useSpaces((s) => s.hydrated);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
+
+  // Fase 37: satu-satunya tempat status ai-diff berubah di App —
+  // semua jalur Confirm (tab ai-diff + Accept all di kartu) mendarat
+  // di sini dengan status "applied", jadi auto-verifikasi dipicu
+  // dari sini dan tidak ada jalur yang terlewat. Dynamic import
+  // supaya modul verifikasi (yang menarik rantai eslintRunner)
+  // tidak masuk eager chunk (pelajaran yang sama dengan Fase 18/20).
+  const handleAiDiffStatusChange = useCallback(
+    (approvalId: string, status: AiDiffStatus) => {
+      setAiDiffStatus(approvalId, status);
+      if (status !== "applied" || !activeSessionId) return;
+      const tab = tabs.find(
+        (t): t is AiDiffTab =>
+          t.kind === "ai-diff" && t.approvalId === approvalId,
+      );
+      if (!tab) return;
+      const sessionId = activeSessionId;
+      void import("@/modules/ai/lib/verifyScheduler").then((m) =>
+        m.requestPostConfirmVerification({ sessionId, path: tab.path }),
+      );
+    },
+    [setAiDiffStatus, tabs, activeSessionId],
+  );
   const activeSpaceIdRef = useRef(activeSpaceId);
   useLayoutEffect(() => {
     tabsRef.current = tabs;
@@ -767,7 +790,7 @@ export default function App() {
         return;
       }
       if (tab.status === "pending") {
-        setAiDiffStatus(approvalId, "reviewing");
+        handleAiDiffStatusChange(approvalId, "reviewing");
       }
     },
     [
@@ -775,7 +798,7 @@ export default function App() {
       activeSessionId,
       openAiDiffTab,
       openFileTab,
-      setAiDiffStatus,
+      handleAiDiffStatusChange,
       tabs,
     ],
   );
@@ -818,7 +841,7 @@ export default function App() {
     async (approvalId: string) => {
       const result = await restoreCheckpoint(approvalId, {});
       if (result.outcome === "restored") {
-        setAiDiffStatus(approvalId, "restored");
+        handleAiDiffStatusChange(approvalId, "restored");
         // Fase 35: record the restore on the card side too, so the
         // row keeps showing "Dipulihkan" after its tab closes (the
         // card derives a tab-less row's status from the live sources,
@@ -844,7 +867,7 @@ export default function App() {
         });
       }
     },
-    [flushReviewStateNow, setAiDiffStatus],
+    [flushReviewStateNow, handleAiDiffStatusChange],
   );
 
   // Fase 35: Revert from the Changed Files card. One click undoes the
@@ -860,7 +883,7 @@ export default function App() {
       const result = await revertReviewedFile(approvalId);
       if (result.outcome === "restored") {
         clearReviewHistory(approvalId);
-        setAiDiffStatus(approvalId, "rejected");
+        handleAiDiffStatusChange(approvalId, "rejected");
         setCardResolvedByApproval((prev) => {
           const next = new Map(prev);
           next.set(approvalId, "rejected");
@@ -880,7 +903,7 @@ export default function App() {
         });
       }
     },
-    [flushReviewStateNow, setAiDiffStatus],
+    [flushReviewStateNow, handleAiDiffStatusChange],
   );
 
   // Fase 20: Accept all from the Changed Files card (Antigravity-style).
@@ -934,13 +957,13 @@ export default function App() {
         }
         if (result.outcome === "applied" || result.outcome === "discarded") {
           clearReviewHistory(approvalId);
-          setAiDiffStatus(
+          handleAiDiffStatusChange(
             approvalId,
             result.outcome === "applied" ? "applied" : "rejected",
           );
           confirmed += 1;
         } else if (result.outcome === "conflict") {
-          setAiDiffStatus(approvalId, "conflict");
+          handleAiDiffStatusChange(approvalId, "conflict");
           failed.push({
             path: tab.path,
             reason: result.reason ?? "conflict",
@@ -978,7 +1001,7 @@ export default function App() {
       activeSessionId,
       setAiDiffFileDecision,
       setAiDiffHunkDecision,
-      setAiDiffStatus,
+      handleAiDiffStatusChange,
       tabs,
     ],
   );
@@ -1897,6 +1920,17 @@ export default function App() {
     void requestEslintProjectLint(explorerRoot);
   }, [openSidebarView, explorerRoot]);
 
+  // Fase 37: verifikasi manual dari Command Palette — melewati
+  // setting verifyAfterConfirm, memakai root explorer sebagai proyek.
+  const runVerifyManually = useCallback(() => {
+    if (!activeSessionId || !explorerRoot) return;
+    const sessionId = activeSessionId;
+    const root = explorerRoot;
+    void import("@/modules/ai/lib/verifyScheduler").then((m) =>
+      m.requestManualVerification({ sessionId, root }),
+    );
+  }, [activeSessionId, explorerRoot]);
+
   const commandPaletteItems = useMemo(
     () =>
       commandPaletteOpen
@@ -1922,6 +1956,7 @@ export default function App() {
                 void requestEslintFixAll(activeFilePath);
               }
             },
+            runVerifyManually,
             openNewTab,
             openNewBlock: openNewBlockTab,
             openNewPrivate: openNewPrivateTab,
@@ -1971,6 +2006,7 @@ export default function App() {
       activeSpaceId,
       handleNewSpace,
       runEslintProjectLint,
+      runVerifyManually,
     ],
   );
 
@@ -2212,7 +2248,7 @@ export default function App() {
                         onEditorCloseTab={disposeTab}
                         registerPreviewHandle={registerPreviewHandle}
                         onPreviewUrlChange={handlePreviewUrl}
-                        onSetAiDiffStatus={setAiDiffStatus}
+                        onSetAiDiffStatus={handleAiDiffStatusChange}
                         onSetAiDiffHunkDecision={setAiDiffHunkDecision}
                         onSetAiDiffFileDecision={setAiDiffFileDecision}
                         aiDiffSessionId={activeSessionId ?? undefined}
