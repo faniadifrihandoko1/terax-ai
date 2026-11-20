@@ -201,6 +201,13 @@ export type Preferences = {
    * active for the file; without it the save proceeds unchanged.
    */
   eslintFixOnSave: boolean;
+  /**
+   * Fase 37: jalankan typecheck / lint / test proyek otomatis begitu
+   * sebuah review dikonfirmasi, dan laporkan hasilnya sebagai pesan
+   * di chat. Default on; mati berarti verifikasi hanya jalan saat
+   * diminta manual dari Command Palette.
+   */
+  verifyAfterConfirm: boolean;
   editorFormatter: EditorFormatter;
   /** languageResolver id -> formatter, overriding the global default. */
   editorFormatterByLang: Record<string, EditorFormatter>;
@@ -302,6 +309,7 @@ const KEY_EDITOR_MINIMAP_COLORS = "editorMinimapColors";
 const KEY_ESLINT_ENABLED = "eslintEnabled";
 const KEY_ESLINT_AUTO_PROJECT_LINT = "eslintAutoProjectLint";
 const KEY_ESLINT_FIX_ON_SAVE = "eslintFixOnSave";
+const KEY_VERIFY_AFTER_CONFIRM = "verifyAfterConfirm";
 /** Fase 3 key, kept so loadPreferences can migrate an explicit choice. */
 const KEY_AI_REVIEW_PER_LINE_LEGACY = "aiReviewPerLine";
 const KEY_EDITOR_FORMAT_ON_SAVE = "editorFormatOnSave";
@@ -405,6 +413,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   eslintEnabled: true,
   eslintAutoProjectLint: true,
   eslintFixOnSave: false,
+  verifyAfterConfirm: true,
   editorFormatOnSave: false,
   editorFormatter: "lsp",
   editorFormatterByLang: {},
@@ -611,6 +620,9 @@ export async function loadPreferences(): Promise<Preferences> {
     eslintFixOnSave:
       get<boolean>(KEY_ESLINT_FIX_ON_SAVE) ??
       DEFAULT_PREFERENCES.eslintFixOnSave,
+    verifyAfterConfirm:
+      get<boolean>(KEY_VERIFY_AFTER_CONFIRM) ??
+      DEFAULT_PREFERENCES.verifyAfterConfirm,
     editorAutoSaveDelay: clampAutoSaveDelay(
       get<number>(KEY_EDITOR_AUTO_SAVE_DELAY) ??
         DEFAULT_PREFERENCES.editorAutoSaveDelay,
@@ -873,6 +885,10 @@ export async function setEslintAutoProjectLint(
 
 export async function setEslintFixOnSave(value: boolean): Promise<void> {
   await writePref(KEY_ESLINT_FIX_ON_SAVE, value);
+}
+
+export async function setVerifyAfterConfirm(value: boolean): Promise<void> {
+  await writePref(KEY_VERIFY_AFTER_CONFIRM, value);
 }
 
 export async function setExplorerGitDecorations(value: boolean): Promise<void> {

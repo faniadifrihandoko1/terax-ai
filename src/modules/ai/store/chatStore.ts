@@ -179,6 +179,58 @@ const NOOP_LIVE: Live = {
 const CHATS_LRU_CAP = 8;
 export const chats = new Map<string, Chat<UIMessage>>();
 
+/**
+ * Fase 37: per-session message appenders, registered by
+ * AgentRunBridge from the `useChat` hook's `setMessages`. The Chat
+ * class itself has no public message mutation — only the hook does —
+ * so code outside the hook tree (the post-Confirm verification)
+ * posts through here. Keyed by session so a report lands in the
+ * session whose Confirm triggered it; a session whose bridge is not
+ * mounted has no appender, and posting to it is a silent no-op
+ * (the scheduler checks `hasMessageAppender` first and skips).
+ */
+export type ChatMessageUpdater = (
+  updater: (messages: UIMessage[]) => UIMessage[],
+) => void;
+
+const messageAppenders = new Map<string, ChatMessageUpdater>();
+
+export function registerMessageAppender(
+  sessionId: string,
+  fn: ChatMessageUpdater,
+): void {
+  messageAppenders.set(sessionId, fn);
+}
+
+export function unregisterMessageAppender(sessionId: string): void {
+  messageAppenders.delete(sessionId);
+}
+
+export function hasMessageAppender(sessionId: string): boolean {
+  return messageAppenders.has(sessionId);
+}
+
+export function appendChatMessage(
+  sessionId: string,
+  message: UIMessage,
+): boolean {
+  const fn = messageAppenders.get(sessionId);
+  if (!fn) return false;
+  fn((prev) => [...prev, message]);
+  return true;
+}
+
+export function replaceChatMessage(
+  sessionId: string,
+  id: string,
+  message: UIMessage,
+): boolean {
+  const fn = messageAppenders.get(sessionId);
+  if (!fn) return false;
+  fn((prev) => prev.map((m) => (m.id === id ? message : m)));
+  return true;
+}
+
 export function touchChat(id: string, c: Chat<UIMessage>) {
   if (chats.has(id)) chats.delete(id);
   chats.set(id, c);

@@ -36,6 +36,8 @@ import { restoreHunkDecisions } from "../lib/restoreHunkDecisions";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import {
   flushPersist,
+  registerMessageAppender,
+  unregisterMessageAppender,
   useChatStore,
   type AgentRunStatus,
 } from "../store/chatStore";
@@ -133,9 +135,10 @@ function Bridge({
   resolvedApprovalIds,
 }: BridgeProps) {
   const chat = useMemo(() => getOrCreateChat(sessionId), [sessionId]);
-  const { status, messages, addToolApprovalResponse } = useChat<UIMessage>({
-    chat,
-  });
+  const { status, messages, addToolApprovalResponse, setMessages } =
+    useChat<UIMessage>({
+      chat,
+    });
   const patch = useChatStore((s) => s.patchAgentMeta);
   const openMini = useChatStore((s) => s.openMini);
   const persistMessages = useChatStore((s) => s.persistMessages);
@@ -150,6 +153,14 @@ function Bridge({
     });
     return () => setApprovalResponder(null);
   }, [setApprovalResponder, addToolApprovalResponse]);
+
+  // Fase 37: expose the hook's setMessages so the post-Confirm
+  // verification can append its report as a real chat message in
+  // this session (the Chat class has no public message mutation).
+  useEffect(() => {
+    registerMessageAppender(sessionId, (updater) => setMessages(updater));
+    return () => unregisterMessageAppender(sessionId);
+  }, [sessionId, setMessages]);
 
   useEffect(() => {
     persistMessages(sessionId, messages);
