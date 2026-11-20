@@ -2672,6 +2672,83 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   DEL-136 seperti rencana awal - karena DEL-135 masih kosong (Fase 35
   tombol Revert belum jalan dan belum membuat task-nya); Fase 35
   butuh nomor baru saat gas.
+  Fase 37 (auto-verifikasi setelah Confirm, DEL-137), DONE -
+  user: setelah Confirm, Terax harus memeriksa sendiri apakah
+  perubahan agent itu aman dan melaporkannya di chat, tanpa user
+  pindah ke terminal. Diagnosis: tidak ada runner type-check di
+  codebase (`tsc --noEmit` / `typecheck` tidak ditemukan di
+  src/modules) dan tidak ada pembaca package.json di src/modules/ai
+  - keduanya baru; runner satu-shot sudah ada (Rust
+  `shell_run_command` + `runCommand`/`tauriRunCommand` dari sisi TS)
+  dan runner lint proyek Fase 15 (`runEslintProjectChunked`,
+  klasifikasi hasil berbasis teks ala Fase 15.1) bisa dipakai ulang.
+  Pemicu: hanya ada dua pemanggil `confirmReviewed*` -
+  `confirmAcceptedReview.ts` (Accept all headless) dan
+  `AiDiffPane.tsx` `handleConfirm` - dan keduanya mendarat di
+  `setAiDiffStatus` (funnel status tunggal dari `useTabs`), jadi
+  membungkus `setAiDiffStatus` di App pada transisi "applied"
+  menangkap SEMUA jalur Confirm tanpa menyentuh tiap pemanggil;
+  tidak ada jalur bridge/restore yang menyetel "applied" lewat
+  funnel ini, jadi pemicu tidak terpanggil di luar Confirm.
+  Perubahan: (1) `src/modules/ai/lib/verifyAfterConfirm.ts` -
+  `detectVerifyProject` (walk-up dari path probe termasuk path itu
+  sendiri bila direktori, batas 12+1 seperti ESLint; script
+  package.json dibaca defensif; package manager dari lockfile -
+  npm/pnpm/yarn), `buildVerifyPlan` (urutan typecheck -> lint ->
+  test; script proyek dulu, fallback `tsc --noEmit` via
+  `npx --no-install` bila ada tsconfig, ESLint pada file berubah
+  atau lint proyek chunked bila >20 file; tanpa script/tsconfig/
+  file -> "tidak ada yang bisa diverifikasi", BUKAN lolos),
+  `runPostConfirmVerification` (sequential fail-fast, budget total
+  bersama 300 detik, timeout dilaporkan sebagai timeout, file yang
+  dihapus disaring dari lint), `formatVerifyReport` (markdown
+  Bahasa Indonesia: lolos / gagal di <check> + ringkasan 8 baris
+  pertama, maks 1000 karakter / waktu habis / tidak ada yang bisa
+  diverifikasi; tanpa kata-kata auto-fix), injectable `VerifyDeps`
+  dengan `defaultVerifyDeps()` memakai ulang `statExists`/
+  `readDiskText`/`tauriRunCommand`/`resolveEslintBinary`/
+  `runEslintFile`/`runEslintProjectChunked`. (2)
+  `src/modules/ai/lib/verifyScheduler.ts` - satu flight global +
+  antrean per sesi (path digabung); `requestPostConfirmVerification`
+  menghormati setting ("off" bila mati, "no-chat" bila appender
+  belum terdaftar), `requestManualVerification` melewati setting;
+  pesan "sedang berjalan..." ditambahkan lalu diganti hasil dengan
+  id yang sama (`verify-<n>-<timestamp>`). (3) Setting
+  `verifyAfterConfirm` (default ON, pola `eslintAutoProjectLint`
+  Fase 15) + baris toggle di Settings -> General -> "AI review".
+  (4) Command palette "Verifikasi perubahan" (grup AI, "No project
+  open" bila tanpa proyek) + `runVerifyManually` di App.
+  (5) `src/modules/ai/store/chatStore.ts` - registry appender pesan
+  per sesi (`registerMessageAppender`/`appendChatMessage`/
+  `replaceChatMessage`); `AgentRunBridge` mendaftarkan appender dari
+  `setMessages` hook `useChat` - `Chat.setMessages` TIDAK ada di
+  kelas `Chat` (hanya di return `useChat`), mengikuti preseden
+  `setApprovalResponder`. (6) App.tsx -
+  `handleAiDiffStatusChange` membungkus `setAiDiffStatus` dan pada
+  "applied" mencari tab ai-diff berdasarkan approvalId lalu
+  memanggil scheduler via dynamic import (rantai eslintRunner
+  tidak masuk eager chunk, pelajaran Fase 18/20/35); semua
+  pemanggil `setAiDiffStatus` di App (reviewing/restored/rejected/
+  conflict/applied + prop `onSetAiDiffStatus`) diganti wrapper.
+  Verifikasi: check-types 0 error; lint 0 error / 88 warning /
+  1 info (baseline); full test hijau 2x, 2864/2864 (+23 test baru:
+  18 verifyAfterConfirm + 4 verifyScheduler, TDD - script proyek
+  didahulukan atas fallback, tanpa script+tsconfig -> bukan lolos,
+  gagal menyebut check + ringkasan, Confirm kedua diantre, timeout
+  dilaporkan, setting OFF mematikan pemicu, manual tetap jalan -
+  dan 1 commands untuk command palette). Tanpa perubahan Rust.
+  Batas jujur: repo tidak punya DOM env, jadi pesan chat, toggle
+  Settings, command palette, dan pemicu Confirm TIDAK teruji live -
+  yang teruji logika murni di bawahnya; cek laptop: Confirm sebuah
+  perubahan di proyek Next.js -> pesan verifikasi muncul di chat;
+  matikan setting -> Confirm tidak memicu verifikasi; jalankan
+  manual dari palette. Sisa batasan: bila user pindah sesi saat
+  verifikasi jalan, appender sesi itu hilang dan laporan akhir
+  dibuang diam-diam; pesan "sedang berjalan..." jadi basi bila app
+  restart di tengah run; script `npm test` yang butuh interaksi
+  akan kena timeout dan dilaporkan sebagai timeout; probe `tsc`
+  berjalan di setiap verifikasi bila ada tsconfig (satu spawn shell
+  ekstra); type-check bersifat project-wide.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
