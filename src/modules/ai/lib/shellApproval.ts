@@ -96,12 +96,13 @@ function operands(tokens: string[]): string[] {
 function redirectTargets(segment: string): string[] {
   const out: string[] = [];
   const re = /(?:^|[\s\d])(>>?)\s*(["']?)([^\s"'|;&]+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(segment)) !== null) {
+  let m: RegExpExecArray | null = re.exec(segment);
+  while (m !== null) {
     const target = m[3];
     if (target && target !== ">" && !target.startsWith(">")) {
       out.push(target.replace(/["']$/, ""));
     }
+    m = re.exec(segment);
   }
   return out;
 }

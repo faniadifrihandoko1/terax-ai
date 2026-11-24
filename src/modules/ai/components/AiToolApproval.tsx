@@ -196,8 +196,11 @@ function PreviewBlock({
         )}
         {info && info.segments.length > 1 && (
           <ol className="list-decimal space-y-0.5 pl-4 font-mono text-[11px] leading-relaxed text-muted-foreground">
-            {info.segments.map((segment, i) => (
-              <li key={i} className="break-all">
+            {info.segments.map((segment) => (
+              // Keyed by content: the step list is static (the card is
+              // memoized and never re-renders with different content),
+              // so identical steps render twice without reordering risk.
+              <li key={segment} className="break-all">
                 {segment}
               </li>
             ))}
