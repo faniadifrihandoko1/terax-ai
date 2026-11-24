@@ -343,7 +343,7 @@ const CATASTROPHIC_HOME_DIRS = [
  * (CR/LF are already refused by checkShellCommand, so commands here
  * are single-line.)
  */
-function splitShellSegments(cmd: string): string[] {
+export function splitShellSegments(cmd: string): string[] {
   const segments: string[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
@@ -387,8 +387,39 @@ function splitShellSegments(cmd: string): string[] {
   return segments.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
-/** Split one segment into tokens, stripping quotes (keeps the content). */
-function tokenizeSegment(segment: string): string[] {
+/** Characters a backslash can escape in a shell word. Anything else
+ * after a backslash keeps the backslash (Windows path separators). */
+const ESCAPABLE = new Set([
+  " ",
+  "\t",
+  '"',
+  "'",
+  "$",
+  "`",
+  "\\",
+  ";",
+  "|",
+  "&",
+  "<",
+  ">",
+  "(",
+  ")",
+  "#",
+  "*",
+  "?",
+  "[",
+  "]",
+  "{",
+  "}",
+  "!",
+  "\n",
+]);
+
+/** Split one segment into tokens, stripping quotes (keeps the content). A
+ * backslash only escapes a shell-special character; before an ordinary
+ * letter it is literal, so Windows separators survive tokenizing
+ * (`C:\Users` stays `C:\Users` instead of becoming `C:Users`). */
+export function tokenizeSegment(segment: string): string[] {
   const tokens: string[] = [];
   let current = "";
   let quote: "'" | '"' | null = null;
@@ -407,6 +438,11 @@ function tokenizeSegment(segment: string): string[] {
       continue;
     }
     if (ch === "\\") {
+      const next = segment[i + 1];
+      if (next !== undefined && !ESCAPABLE.has(next)) {
+        current += ch;
+        continue;
+      }
       escaped = true;
       continue;
     }
@@ -432,7 +468,7 @@ function tokenizeSegment(segment: string): string[] {
 }
 
 /** Strip leading wrappers (`sudo`, `command`, `env`, `VAR=x`, flags). */
-function stripWrappers(tokens: string[]): string[] {
+export function stripWrappers(tokens: string[]): string[] {
   let i = 0;
   while (i < tokens.length) {
     const t = tokens[i];
@@ -464,7 +500,7 @@ function stripWrappers(tokens: string[]): string[] {
 }
 
 /** Basename + `.exe` strip + lowercase, for command-word matching. */
-function commandWord(token: string): string {
+export function commandWord(token: string): string {
   const base = token.replace(/\\/g, "/").split("/").pop() ?? token;
   return base.replace(/\.(exe|cmd|bat)$/i, "").toLowerCase();
 }
