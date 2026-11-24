@@ -2,13 +2,20 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   Cancel01Icon,
+  CheckmarkCircle01Icon,
+  CopyIcon,
   TerminalIcon,
   Tick02Icon,
   ToolsIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ToolUIPart } from "ai";
-import { memo } from "react";
+import { memo, useEffect, useRef, useState } from "react";
+import {
+  describeShellCommand,
+  type ShellApprovalInfo,
+  type ShellRisk,
+} from "../lib/shellApproval";
 import {
   detectDestructiveShellCommand,
   type DestructiveShellCommand,
@@ -32,11 +39,36 @@ const TOOL_META: Record<string, { label: string; icon: typeof ToolsIcon }> =
     bash_background: { label: "Spawn background process", icon: TerminalIcon },
   };
 
+/** Risk badge on the approval header (Fase 38). Colors mirror the
+ * destructive warning below: green for read-only, amber for writes,
+ * rose for deletes. */
+const RISK_BADGE: Record<ShellRisk, { label: string; className: string }> = {
+  safe: {
+    label: "Aman",
+    className:
+      "border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  },
+  caution: {
+    label: "Hati-hati",
+    className:
+      "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  },
+  dangerous: {
+    label: "Berbahaya",
+    className:
+      "border-rose-500/50 bg-rose-500/10 text-rose-700 dark:text-rose-300",
+  },
+};
+
 function AiToolApprovalImpl({ part, toolName, onRespond }: Props) {
   const meta = TOOL_META[toolName];
   const label = meta?.label ?? toolName;
   const Icon = meta?.icon ?? ToolsIcon;
   const input = part.input as Record<string, unknown>;
+  const isShell = toolName === "bash_run" || toolName === "bash_background";
+  const info = isShell
+    ? describeShellCommand(String(input.command ?? ""))
+    : null;
 
   return (
     <div className="rounded-lg border border-border bg-card shadow-sm">
@@ -51,13 +83,23 @@ function AiToolApprovalImpl({ part, toolName, onRespond }: Props) {
         <span className="text-[12px] font-medium text-foreground">
           {label}
         </span>
+        {info && (
+          <span
+            className={cn(
+              "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+              RISK_BADGE[info.risk].className,
+            )}
+          >
+            {RISK_BADGE[info.risk].label}
+          </span>
+        )}
         <span className="ml-auto text-[10px] text-muted-foreground">
           needs approval
         </span>
       </div>
 
       <div className="px-3 py-2.5">
-        <PreviewBlock toolName={toolName} input={input} />
+        <PreviewBlock toolName={toolName} input={input} info={info} />
       </div>
 
       <div className="flex items-center justify-end gap-1.5 border-t border-border/60 px-3 py-2">
@@ -98,35 +140,75 @@ export const AiToolApproval = memo(AiToolApprovalImpl, (a, b) => {
 function PreviewBlock({
   toolName,
   input,
+  info,
 }: {
   toolName: string;
   input: Record<string, unknown>;
+  info: ShellApprovalInfo | null;
 }) {
   // The approval card shows the command so the user can judge it; the
   // file tools never reach this card (Fase 6), so there is no file
   // preview branch anymore.
+  const [expanded, setExpanded] = useState(false);
   if (toolName === "bash_run" || toolName === "bash_background") {
     const cwd = typeof input.cwd === "string" ? input.cwd : null;
-    const destructive = detectDestructiveShellCommand(
-      String(input.command ?? ""),
-    );
+    const command = String(input.command ?? "");
+    const destructive = detectDestructiveShellCommand(command);
+    // A command longer than the preview is never silently truncated:
+    // the block scrolls, expands, and copies in full.
+    const isLong = command.length > 240;
     return (
       <div className="space-y-1.5">
         {cwd && (
-          <div className="font-mono text-[10.5px] text-muted-foreground">
-            {cwd}
+          <div className="text-[10.5px] text-muted-foreground">
+            Dijalankan di: <span className="font-mono">{cwd}</span>
           </div>
         )}
         {destructive && (
           <DestructiveWarning destructive={destructive} />
         )}
-        <pre
-          className={cn(
-            "max-h-40 overflow-auto rounded-md bg-muted/60 p-2 font-mono text-[11px] leading-relaxed",
-          )}
-        >
-          {String(input.command ?? "")}
-        </pre>
+        <div className="relative">
+          <pre
+            className={cn(
+              "max-h-40 overflow-auto rounded-md bg-muted/60 p-2 pr-8 font-mono text-[11px] leading-relaxed",
+              expanded && "max-h-none",
+            )}
+          >
+            {command}
+          </pre>
+          <div className="absolute right-1.5 top-1.5">
+            <CopyButton text={command} />
+          </div>
+        </div>
+        {isLong && (
+          <button
+            type="button"
+            onClick={() => setExpanded(!expanded)}
+            className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          >
+            {expanded ? "Tutup" : "Lihat selengkapnya"}
+          </button>
+        )}
+        {info && (
+          <p className="text-[11px] leading-relaxed text-foreground">
+            {info.explanation}
+          </p>
+        )}
+        {info && info.segments.length > 1 && (
+          <ol className="list-decimal space-y-0.5 pl-4 font-mono text-[11px] leading-relaxed text-muted-foreground">
+            {info.segments.map((segment, i) => (
+              <li key={i} className="break-all">
+                {segment}
+              </li>
+            ))}
+          </ol>
+        )}
+        {info && !destructive && info.touchedPaths.length > 0 && (
+          <div className="text-[11px] text-muted-foreground">
+            Menyentuh:{" "}
+            <span className="font-mono">{info.touchedPaths.join(", ")}</span>
+          </div>
+        )}
       </div>
     );
   }
@@ -134,6 +216,44 @@ function PreviewBlock({
     <pre className="overflow-auto rounded-md bg-muted/60 p-2 font-mono text-[11px] leading-relaxed">
       {JSON.stringify(input, null, 2)}
     </pre>
+  );
+}
+
+/** Copy button for the full command (same idiom as the code-block copy
+ * button in chat-code.tsx). Copies the entire command, not the visible
+ * preview slice, so a truncated-looking command still copies in full. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const tRef = useRef<number>(0);
+
+  useEffect(() => () => window.clearTimeout(tRef.current), []);
+
+  const onCopy = async () => {
+    if (!navigator?.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      tRef.current = window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* swallow */
+    }
+  };
+
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant="ghost"
+      onClick={onCopy}
+      className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+      aria-label="Salin perintah"
+    >
+      <HugeiconsIcon
+        icon={copied ? CheckmarkCircle01Icon : CopyIcon}
+        size={11}
+        strokeWidth={1.75}
+      />
+    </Button>
   );
 }
 
