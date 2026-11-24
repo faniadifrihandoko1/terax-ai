@@ -2749,6 +2749,52 @@ BYOK. Cloud providers via `@ai-sdk/*`: **OpenAI, Anthropic, Google, xAI, Cerebra
   akan kena timeout dan dilaporkan sebagai timeout; probe `tsc`
   berjalan di setiap verifikasi bila ada tsconfig (satu spawn shell
   ekstra); type-check bersifat project-wide.
+  Fase 38 (approval kartu perintah shell, DEL-138), DONE -
+  user: kartu approval "Run shell command" hanya menampilkan
+  perintah mentah yang terpotong (contoh nyata: cd ke folder
+  OneDrive "2026-11-23 update" yang terpotong di "2026..."),
+  tanpa penjelasan apa yang dilakukan perintah itu dan tanpa
+  pembeda risiko, jadi Approve/Deny ditekan dalam keadaan buta.
+  Perubahan: (1) `src/modules/ai/lib/shellApproval.ts` -
+  `describeShellCommand` (murni, tanpa model AI): klasifikasi
+  risiko Aman/Hati-hati/Berbahaya; penjelasan 1-2 kalimat Bahasa
+  Indonesia berbasis pola; urai sub-perintah berantai (&&, ;, |);
+  daftar path yang disentuh (maks 5, dedup). Aturan: cd/dir/ls/git
+  status/cat = Aman; install (npm/pnpm/pip/cargo), git tulis, curl,
+  tulis file, jalankan kode = Hati-hati; delete/move (detektor
+  destruktif), format/mkfs/dd, reg delete, git clean -f /
+  reset --hard = Berbahaya; perintah tak dikenal default Hati-hati,
+  tidak pernah Aman. (2) `AiToolApproval.tsx` - label risiko di
+  header (hijau/kuning/merah); penjelasan di bawah perintah;
+  konteks (direktori kerja bila dibawa input tool, path disentuh
+  bila ada dan bukan perintah destruktif yang sudah diperingatkan);
+  blok perintah scroll + tombol Salin (menyalin perintah utuh) +
+  Lihat selengkapnya untuk perintah di atas 240 karakter +
+  sub-perintah sebagai daftar bernomor. DestructiveWarning tetap;
+  alur Approve/Deny tidak berubah, tanpa auto-approve. (3)
+  `security.ts` - helper parser (`splitShellSegments`,
+  `tokenizeSegment`, `stripWrappers`, `commandWord`) diekspor
+  untuk dipakai ulang; tokenizer kini mempertahankan backslash
+  sebelum huruf biasa supaya path Windows tampil utuh (juga
+  memperbaiki target yang ditampilkan DestructiveWarning).
+  Verifikasi: check-types 0 error; lint 0 error / 88 warning /
+  1 info (baseline); full test hijau 2879/2879 (+15 test baru:
+  label risiko, penjelasan, urai segmen, path disentuh);
+  build hijau. Screenshot kartu (render komponen asli +
+  CSS hasil build, bukan app live): 4 keadaan (Aman perintah
+  panjang + Lihat selengkapnya, Hati-hati install + cwd,
+  Berbahaya rm -rf + warning, berantai 3 langkah + daftar
+  bernomor).
+  Batas jujur: cwd `bash_run` tidak ada di input tool (hanya
+  `bash_background` yang membawa cwd), jadi kartu tidak
+  menampilkan direktori kerja untuk `bash_run` daripada menebak;
+  deteksi berbasis teks, indirection (variabel, pipe ke rm)
+  tetap lolos dan perintah lengkap di kartu jadi backstop; repo
+  tidak punya DOM env, jadi interaksi kartu (klik Salin,
+  expand) TIDAK teruji live - yang teruji logika murni di
+  bawahnya; cek laptop: minta agent menjalankan cd, npm
+  install, dan rm -rf dist lalu periksa label + penjelasan +
+  tombol Salin.
   Bug-fix batch (after Fase 6): three small hardening fixes, no behaviour
   change to the review flow itself. (1) Destructive shell commands:
   `detectDestructiveShellCommand` in `src/modules/ai/lib/security.ts`
